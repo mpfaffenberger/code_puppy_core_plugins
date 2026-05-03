@@ -20,24 +20,12 @@ from code_puppy.callbacks import (
     count_callbacks,
     get_callbacks,
 )
-from code_puppy.plugins.dbos_durable_exec import (
-    cancel as cancel_mod,
-)
-from code_puppy.plugins.dbos_durable_exec import (
-    commands as commands_mod,
-)
-from code_puppy.plugins.dbos_durable_exec import (
-    config as config_mod,
-)
-from code_puppy.plugins.dbos_durable_exec import (
-    runtime as runtime_mod,
-)
-from code_puppy.plugins.dbos_durable_exec import (
-    workflow_ids as workflow_ids_mod,
-)
-from code_puppy.plugins.dbos_durable_exec import (
-    wrapper as wrapper_mod,
-)
+from code_puppy.plugins.dbos_durable_exec import cancel as cancel_mod
+from code_puppy.plugins.dbos_durable_exec import commands as commands_mod
+from code_puppy.plugins.dbos_durable_exec import config as config_mod
+from code_puppy.plugins.dbos_durable_exec import runtime as runtime_mod
+from code_puppy.plugins.dbos_durable_exec import workflow_ids as workflow_ids_mod
+from code_puppy.plugins.dbos_durable_exec import wrapper as wrapper_mod
 
 # ─────────────────────── config.is_enabled ────────────────────────────
 
@@ -378,7 +366,7 @@ class TestHandleDbosCommand:
 
     def test_help_entries(self):
         entries = commands_mod.dbos_command_help()
-        assert any(name == "/dbos" for name, _ in entries)
+        assert any(name == "dbos" for name, _ in entries)
 
 
 # ─────────────────────── register_callbacks wiring ────────────────────

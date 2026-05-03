@@ -28,4 +28,4 @@ def handle_dbos_command(command: str, name: str):
 
 
 def dbos_command_help():
-    return [("/dbos", "Toggle DBOS durable execution: /dbos on|off|status")]
+    return [("dbos", "Toggle DBOS durable execution: /dbos on|off|status")]
