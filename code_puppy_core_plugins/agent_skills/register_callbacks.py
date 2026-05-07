@@ -58,7 +58,7 @@ def _get_skills_prompt_section() -> Optional[str]:
         if metadata:
             skills_metadata.append(metadata)
         else:
-            logger.warning(f"Failed to parse metadata for skill: {skill_info.name}")
+            logger.debug(f"Skipping skill with invalid metadata: {skill_info.name}")
 
     # 4. Build XML + guidance
     if not skills_metadata:
