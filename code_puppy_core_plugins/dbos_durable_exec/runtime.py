@@ -11,28 +11,12 @@ from .workflow_ids import generate_dbos_workflow_id
 def skip_fallback_render(_agent) -> bool:
     """DBOS renders its own output; tell core to skip the non-streaming fallback.
 
-    Only valid when DBOS is actually launched *and* streaming is active —
-    when streaming is disabled for a model (e.g. crof.ai kimi), the
-    event_stream_handler is None and DBOS doesn't render anything, so the
-    core fallback render must run or the user sees no output.
+    Only valid when DBOS is actually launched — otherwise we'd skip the
+    fallback render for plain pydantic agents, leaving users with no output.
     """
     from .lifecycle import is_launched
 
-    if not is_launched():
-        return False
-
-    # When streaming is disabled (streaming=false in models.json),
-    # the event_stream_handler is None and nobody renders the output.
-    # Let the core fallback render handle it.
-    from code_puppy.agents._runtime import _model_allows_streaming
-    from code_puppy.config import get_enable_streaming
-
-    model_name = getattr(_agent, "get_model_name", lambda: None)()
-    if not model_name:
-        model_name = getattr(_agent, "_last_model_name", None)
-
-    use_streaming = get_enable_streaming() and _model_allows_streaming(model_name)
-    return use_streaming
+    return is_launched()
 
 
 @asynccontextmanager
