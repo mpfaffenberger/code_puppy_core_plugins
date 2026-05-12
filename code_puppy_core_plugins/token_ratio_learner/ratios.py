@@ -5,10 +5,10 @@ chars-per-token ratio for that model and store it keyed by the bare
 model name (the part after ``:``).  Future ``count_tokens`` calls use the
 stored ratio for that model, falling back to a hardcoded default.
 
-The default (3.0) deliberately *overestimates* token count relative to
-most real tokenizers (GPT-4 ~3.5, Claude ~2.8) so that we don't get
-screwed when performing summarisation / compaction — it's safer to think
-we have fewer tokens of runway than we actually do.
+The default (2.5) matches the classic char/token heuristic used across
+most models.  Real tokenizers vary (GPT-4 ~3.5, Claude ~2.8), but 2.5
+provides a reasonable middle ground.  The max clamp (3.5) prevents
+absurdly high ratios from inflating token estimates.
 
 Storage lives at ``~/.code_puppy/token_ratios.json``, overridable via
 the env var ``CODE_PUPPY_TOKEN_RATIOS_PATH``.
@@ -28,19 +28,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Default chars-per-token ratio when nothing has been learned yet.
-# 3.0 is a deliberate overestimate (most models are 2.8–3.5) so we
-# err on the side of "fewer tokens available" for compaction safety.
-_DEFAULT_RATIO = 3.0
+# 2.5 is the classic heuristic — a reasonable baseline that leans slightly
+# toward overestimating tokens (safer for compaction decisions).
+_DEFAULT_RATIO = 2.5
 
 # Bounds for chars-per-token ratios.  Real tokenizers produce roughly
-# 2–5 chars/token.  Values below 1.5 imply absurdly many tokens per
-# character (a single character = multiple tokens).  Values above 6.0
-# imply absurdly few tokens per character (nearly one token per
-# character), which is impossible for real tokenizers.  We clamp to
-# [1.5, 6.0] so that a poison value (e.g. 95.0 from a corrupted file)
-# cannot silently collapse token estimates to near-zero.
+# 2–3.5 chars/token.  Values below 1.5 imply absurdly many tokens per
+# character (a single character = multiple tokens).  Values above 3.5
+# would produce dangerously low token estimates, risking context overflow.
+# We clamp to [1.5, 3.5] so that a poison value (e.g. 95.0 from a
+# corrupted file) cannot silently collapse token estimates to near-zero.
 _MIN_RATIO = 1.5
-_MAX_RATIO = 6.0
+_MAX_RATIO = 3.5
 
 # ---------------------------------------------------------------------------
 # In-memory cache — populated lazily by ``_ensure_ratios_loaded()``.
@@ -169,7 +168,7 @@ def count_tokens(text: str, model: str | None = None) -> int:
     """Estimate token count using a character-based heuristic.
 
     If we have a *learned* chars-per-token ratio for *model*, use it.
-    Otherwise fall back to ``_DEFAULT_RATIO`` (3.0).
+    Otherwise fall back to ``_DEFAULT_RATIO`` (2.5).
 
     Args:
         text: The text content whose token count we need.

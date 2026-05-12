@@ -4,7 +4,7 @@ On startup we monkeypatch four things:
 
 1. ``_history.estimate_tokens`` — replaces the hardcoded
    ``max(1, floor(len(text)/2.5))`` with a learned-ratio lookup, falling
-   back to ``_DEFAULT_RATIO`` (3.0) which deliberately overestimates.
+   back to ``_DEFAULT_RATIO`` (2.5) which matches the classic heuristic.
 
 2. ``_history.estimate_tokens_for_message`` — replaces per-part char/2.5
    summing + ``model_token_multiplier`` with direct
