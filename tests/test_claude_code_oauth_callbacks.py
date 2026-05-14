@@ -833,6 +833,12 @@ class TestCallbackRegistration:
     def test_callbacks_registered(self):
         from code_puppy.callbacks import get_callbacks
 
+        # Ensure the plugin module is imported so that the module-scope
+        # register_callback() calls execute.  Without this, the test fails
+        # when run in isolation because callbacks are only registered on
+        # first import of the plugin module.
+        import code_puppy.plugins.claude_code_oauth.register_callbacks  # noqa: F401
+
         assert len(get_callbacks("custom_command_help")) > 0
         assert len(get_callbacks("custom_command")) > 0
         assert len(get_callbacks("register_model_type")) > 0
