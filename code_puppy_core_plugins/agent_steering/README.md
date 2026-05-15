@@ -36,7 +36,13 @@ Change the pause key via the config file or `/set`:
 /set pause_agent_key ctrl+p
 ```
 
-Valid options: `ctrl+t` (default), `ctrl+p`, `ctrl+y`.
+Valid options: `ctrl+a`, `ctrl+b`, `ctrl+e`, `ctrl+f`, `ctrl+g`,
+`ctrl+k`, `ctrl+n`, `ctrl+o`, `ctrl+p`, `ctrl+r`, `ctrl+t` (default),
+`ctrl+u`, `ctrl+v`, `ctrl+w`, `ctrl+x`, `ctrl+y`.
+
+> **tmux users:** `ctrl+b` (default prefix) and `ctrl+a` (common remap)
+> may be swallowed by tmux before reaching Code Puppy. Pick a key your
+> tmux doesn't capture — e.g. `ctrl+o` or `ctrl+g`.
 
 Tune the safety auto-resume timeout (default 45s):
 
