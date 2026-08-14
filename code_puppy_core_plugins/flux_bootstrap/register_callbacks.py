@@ -26,7 +26,7 @@ def _reload_command_cache() -> None:
     load-order dependency between the two plugins.
     """
     try:
-        from code_puppy.plugins.customizable_commands.register_callbacks import (
+        from code_puppy_core_plugins.customizable_commands.register_callbacks import (
             reload_commands,
         )
 

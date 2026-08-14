@@ -9,6 +9,16 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_code_puppy_config(tmp_path, monkeypatch):
+    """Keep tests independent from the developer's real ``puppy.cfg``."""
+    from code_puppy import config
+
+    config_dir = tmp_path / ".code_puppy"
+    monkeypatch.setattr(config, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(config, "CONFIG_FILE", config_dir / "puppy.cfg")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_plugin_skills(request, monkeypatch):
     """Prevent built-in plugin skills (e.g. code-puppy-agent) from leaking
     into skill-discovery tests that assert exact filesystem-only counts.
@@ -19,7 +29,7 @@ def _isolate_plugin_skills(request, monkeypatch):
     if request.node.get_closest_marker("plugin_skills"):
         return
 
-    from code_puppy.plugins.agent_skills import discovery as discovery_module
+    from code_puppy_core_plugins.agent_skills import discovery as discovery_module
 
     monkeypatch.setattr(discovery_module, "_collect_plugin_skills", lambda: [])
 

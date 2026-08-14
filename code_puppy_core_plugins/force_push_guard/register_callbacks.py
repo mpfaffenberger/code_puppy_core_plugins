@@ -16,7 +16,7 @@ from code_puppy.config import (
     is_dangerous_command_allowlisted,
 )
 from code_puppy.messaging import emit_info, emit_warning
-from code_puppy.plugins.force_push_guard.detector import detect_force_push
+from code_puppy_core_plugins.force_push_guard.detector import detect_force_push
 
 
 def _is_interactive() -> bool:

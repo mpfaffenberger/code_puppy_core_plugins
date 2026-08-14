@@ -21,7 +21,7 @@ import asyncio
 import logging
 from typing import Any, List, Optional
 
-from code_puppy.plugins.acp import state
+from code_puppy_core_plugins.acp import state
 
 logger = logging.getLogger(__name__)
 

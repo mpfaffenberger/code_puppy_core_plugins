@@ -409,7 +409,7 @@ def _custom_help():
 
 
 def _completion_provider():
-    from code_puppy.plugins.ollama_setup.completer import OllamaSetupCompleter
+    from code_puppy_core_plugins.ollama_setup.completer import OllamaSetupCompleter
 
     return OllamaSetupCompleter()
 

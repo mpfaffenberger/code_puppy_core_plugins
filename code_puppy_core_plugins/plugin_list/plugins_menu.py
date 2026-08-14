@@ -23,7 +23,7 @@ from prompt_toolkit.layout import Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.widgets import TextArea
 
-from code_puppy.plugins.plugin_list.plugins_menu_layout import (
+from code_puppy_core_plugins.plugin_list.plugins_menu_layout import (
     build_key_bindings,
     build_layout,
 )
@@ -32,12 +32,12 @@ from code_puppy.command_line.pagination import (
     ensure_visible_page,
     get_total_pages,
 )
-from code_puppy.plugins.plugin_list.plugin_text_utils import (
+from code_puppy_core_plugins.plugin_list.plugin_text_utils import (
     Fragments,
     count_lines,
     drop_leading_lines,
 )
-from code_puppy.plugins.plugin_list.plugins_menu_render import (
+from code_puppy_core_plugins.plugin_list.plugins_menu_render import (
     fill_pane,
     render_detail,
     render_list,
@@ -198,7 +198,7 @@ class PluginsMenu:
             return
         if entry.status in ("disabled", "error"):
             # Already trusted; just (re)activate — no ceremony needed.
-            from code_puppy.plugins.plugin_list.project_trust_flow import (
+            from code_puppy_core_plugins.plugin_list.project_trust_flow import (
                 activate_project_plugin,
             )
 
@@ -246,7 +246,7 @@ class PluginsMenu:
         entry = self.trust_target
         if entry is None:
             return False
-        from code_puppy.plugins.plugin_list.project_trust_flow import (
+        from code_puppy_core_plugins.plugin_list.project_trust_flow import (
             ACCEPT_WORD,
             grant_trust_and_load,
         )

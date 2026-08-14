@@ -13,7 +13,7 @@ from code_puppy.config import (
     get_yolo_mode,
 )
 from code_puppy.messaging import emit_info
-from code_puppy.plugins.shell_safety.command_cache import (
+from code_puppy_core_plugins.shell_safety.command_cache import (
     cache_assessment,
     get_cached_assessment,
 )
@@ -137,7 +137,9 @@ async def shell_safety_callback(
 
         # Cache miss - need LLM assessment
         # Import here to avoid circular imports
-        from code_puppy.plugins.shell_safety.agent_shell_safety import ShellSafetyAgent
+        from code_puppy_core_plugins.shell_safety.agent_shell_safety import (
+            ShellSafetyAgent,
+        )
 
         # Create agent and assess command
         agent = ShellSafetyAgent()

@@ -12,7 +12,7 @@ from code_puppy.messaging import emit_error, emit_info, emit_shell_line, emit_wa
 
 # Reuse the skills plugin's lightweight (dependency-free) frontmatter parser
 # instead of rolling our own -- one source of truth for YAML frontmatter.
-from code_puppy.plugins.agent_skills.metadata import (
+from code_puppy_core_plugins.agent_skills.metadata import (
     FRONTMATTER_PATTERN,
     parse_yaml_frontmatter,
 )

@@ -7,13 +7,13 @@ Session channel
 ---------------
 None of the emit-sites below pass an explicit ``session_id`` to
 ``emit_event``.  Instead they rely on the implicit fallback to
-``code_puppy.plugins.frontend_emitter.session_context.current_emitter_session_id`` -- so any embedder (e.g. a
+``code_puppy_core_plugins.frontend_emitter.session_context.current_emitter_session_id`` -- so any embedder (e.g. a
 WebSocket backend handling multiple sessions concurrently) just needs
 to set the ContextVar at the start of an agent run and every event
 emitted by code-puppy during that run will be tagged with the
 correct session_id automatically.  No imports from
 ``code_puppy.api.*`` are added here; the contract is purely through
-the ContextVar primitive in ``code_puppy.plugins.frontend_emitter.session_context``.
+the ContextVar primitive in ``code_puppy_core_plugins.frontend_emitter.session_context``.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import time
 from typing import Any, Dict, Optional
 
 from code_puppy.callbacks import register_callback
-from code_puppy.plugins.frontend_emitter.emitter import emit_event
+from code_puppy_core_plugins.frontend_emitter.emitter import emit_event
 
 logger = logging.getLogger(__name__)
 

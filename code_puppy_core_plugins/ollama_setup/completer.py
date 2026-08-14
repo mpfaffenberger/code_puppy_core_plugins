@@ -7,7 +7,7 @@ from typing import Iterable
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 
-from code_puppy.plugins.ollama_setup.register_callbacks import CLOUD_MODELS
+from code_puppy_core_plugins.ollama_setup.register_callbacks import CLOUD_MODELS
 
 
 class OllamaSetupCompleter(Completer):

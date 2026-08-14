@@ -32,7 +32,7 @@ from acp.helpers import (
     update_user_message_text,
 )
 
-from code_puppy.plugins.acp import state
+from code_puppy_core_plugins.acp import state
 
 logger = logging.getLogger(__name__)
 

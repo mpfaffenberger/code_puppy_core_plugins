@@ -18,7 +18,7 @@ from code_puppy.config import (
     is_dangerous_command_allowlisted,
 )
 from code_puppy.messaging import emit_info, emit_warning
-from code_puppy.plugins.destructive_command_guard.detector import (
+from code_puppy_core_plugins.destructive_command_guard.detector import (
     detect_destructive_command,
 )
 

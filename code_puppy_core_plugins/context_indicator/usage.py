@@ -6,7 +6,7 @@ Token accounting moved from this plugin into the core module
 integration) can share it without cross-plugin imports.
 
 This module remains as a thin re-export so existing import sites and tests
-that reference ``code_puppy.plugins.context_indicator.usage`` keep working
+that reference ``code_puppy_core_plugins.context_indicator.usage`` keep working
 and observe the *same* objects as the core module (identity is preserved).
 New code should import from :mod:`code_puppy.token_usage` directly.
 """

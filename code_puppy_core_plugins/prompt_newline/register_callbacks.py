@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from code_puppy.callbacks import register_callback
-from code_puppy.plugins.prompt_newline.config import is_enabled, set_enabled
+from code_puppy_core_plugins.prompt_newline.config import is_enabled, set_enabled
 
 _COMMAND_NAME = "prompt_newline"
 _PATCH_ATTR = "_prompt_newline_original"

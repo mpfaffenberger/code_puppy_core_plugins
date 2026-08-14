@@ -24,7 +24,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.widgets import Frame
 
 if TYPE_CHECKING:  # pragma: no cover - import-cycle guard
-    from code_puppy.plugins.plugin_list.plugins_menu import PluginsMenu
+    from code_puppy_core_plugins.plugin_list.plugins_menu import PluginsMenu
 
 
 def build_key_bindings(menu: "PluginsMenu") -> KeyBindings:
@@ -160,7 +160,7 @@ def build_layout(menu: "PluginsMenu") -> Layout:
 
     # Render the centered popup only during the ceremony; its focused TextArea
     # owns printable keys while list shortcuts stay disabled.
-    from code_puppy.plugins.plugin_list.plugins_menu_render import (
+    from code_puppy_core_plugins.plugin_list.plugins_menu_render import (
         render_trust_modal,
     )
 

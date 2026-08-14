@@ -20,8 +20,8 @@ from typing import Optional
 
 import httpx
 
-from code_puppy.plugins.agent_skills.discovery import refresh_skill_cache
-from code_puppy.plugins.agent_skills.installer import InstallResult
+from code_puppy_core_plugins.agent_skills.discovery import refresh_skill_cache
+from code_puppy_core_plugins.agent_skills.installer import InstallResult
 
 logger = logging.getLogger(__name__)
 

@@ -158,7 +158,7 @@ an end-to-end check against a real herdr server, run the manual smoke test
 from inside a herdr pane:
 
 ```bash
-python -m code_puppy.plugins.herdr.smoke
+python -m code_puppy_core_plugins.herdr.smoke
 ```
 
 It creates its **own** disposable pane, drives the real client through

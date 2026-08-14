@@ -112,7 +112,7 @@ def try_enable_project_plugin(plugin_name: str) -> bool:
     if status != plugin_trust.TRUSTED:
         # Open the preselected TUI; use text fallback only when headless/non-TTY.
         try:
-            from code_puppy.plugins.plugin_list.plugins_menu import (
+            from code_puppy_core_plugins.plugin_list.plugins_menu import (
                 run_plugins_menu,
             )
 

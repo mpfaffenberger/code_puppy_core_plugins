@@ -48,7 +48,7 @@ def _patched_estimate_tokens(text: str) -> int:
     No model argument — uses the default ratio.  Callers that need
     model-specific calibration go through ``estimate_tokens_for_message``.
     """
-    from code_puppy.plugins.token_ratio_learner.ratios import count_tokens
+    from code_puppy_core_plugins.token_ratio_learner.ratios import count_tokens
 
     return count_tokens(text, model=None)
 
@@ -69,7 +69,7 @@ def _patched_estimate_tokens_for_message(
     """
     # Import stringify_part from the same module the original lives in
     from code_puppy.agents._history import stringify_part
-    from code_puppy.plugins.token_ratio_learner.ratios import count_tokens
+    from code_puppy_core_plugins.token_ratio_learner.ratios import count_tokens
 
     total = 0
     for part in getattr(message, "parts", []) or []:
@@ -147,7 +147,7 @@ async def _patched_run_with_mcp(
             usage, "request_tokens", 0
         )
         if input_tokens > 0 and input_char_count > 0:
-            from code_puppy.plugins.token_ratio_learner.ratios import (
+            from code_puppy_core_plugins.token_ratio_learner.ratios import (
                 _record_token_ratio,
             )
 
@@ -165,7 +165,7 @@ async def _patched_run_with_mcp(
 
 def _patched_subagent_estimate_tokens(content: str) -> int:
     """Drop-in replacement for subagent token estimation."""
-    from code_puppy.plugins.token_ratio_learner.ratios import count_tokens
+    from code_puppy_core_plugins.token_ratio_learner.ratios import count_tokens
 
     return count_tokens(content, model=None)
 

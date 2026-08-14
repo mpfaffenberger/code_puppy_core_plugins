@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List, Tuple
 
 from code_puppy.command_line.pagination import get_page_bounds, get_total_pages
-from code_puppy.plugins.plugin_list.plugin_text_utils import (
+from code_puppy_core_plugins.plugin_list.plugin_text_utils import (
     Fragments,
     count_lines,
     pad_lines_to_cells,
@@ -21,7 +21,10 @@ from code_puppy.plugins.plugin_list.plugin_text_utils import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import-cycle guard
-    from code_puppy.plugins.plugin_list.plugins_menu import PluginsMenu, _PluginEntry
+    from code_puppy_core_plugins.plugin_list.plugins_menu import (
+        PluginsMenu,
+        _PluginEntry,
+    )
 
 # Display order + labels for the "Contributes" section, keyed by the
 # ``CATEGORY_*`` constants from ``plugin_contributions``.
@@ -45,7 +48,7 @@ def _registers_command_handler(name: str) -> bool:
     Such a plugin has a command handler but may lack ``custom_command_help``,
     so we know one exists without its name (hence the placeholder we surface).
     """
-    from code_puppy.plugins.plugin_list import plugin_meta
+    from code_puppy_core_plugins.plugin_list import plugin_meta
 
     try:
         return "custom_command" in plugin_meta.get_hooks(name)
@@ -194,7 +197,7 @@ def render_trust_modal(menu: "PluginsMenu") -> Fragments:
     Kept deliberately stark: this is the security decision point, so it
     restates the risk and lists the files about to be executed.
     """
-    from code_puppy.plugins.plugin_list.project_trust_flow import (
+    from code_puppy_core_plugins.plugin_list.project_trust_flow import (
         ACCEPT_WORD,
         plugin_file_listing,
     )
@@ -265,7 +268,7 @@ def render_detail(menu: "PluginsMenu") -> Fragments:
         lines.append(("class:tui.warning", "  No plugin selected."))
         return lines
 
-    from code_puppy.plugins.plugin_list import plugin_meta
+    from code_puppy_core_plugins.plugin_list import plugin_meta
 
     is_disabled = entry.name in menu.disabled
 
@@ -362,7 +365,7 @@ def _render_contributions(
     skipped, and a command handler with no ``custom_command_help`` is
     surfaced as 'command handler (name unknown)'.
     """
-    from code_puppy.plugins.plugin_list import plugin_contributions
+    from code_puppy_core_plugins.plugin_list import plugin_contributions
 
     try:
         contributions = plugin_contributions.get_contributions(entry.name)

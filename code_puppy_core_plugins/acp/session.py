@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 from acp.schema import Usage
 
-from code_puppy.plugins.acp import commands, content, persistence, state
+from code_puppy_core_plugins.acp import commands, content, persistence, state
 
 if TYPE_CHECKING:
     from code_puppy.agents.base_agent import BaseAgent

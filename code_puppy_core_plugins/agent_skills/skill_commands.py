@@ -67,7 +67,7 @@ def handle_skill_command(command: str, name: str) -> Optional[Any]:
     # Lazy import to avoid a hard dependency on customizable_commands at
     # plugin load time (and to keep things tidy if it ever moves).
     try:
-        from code_puppy.plugins.customizable_commands.register_callbacks import (
+        from code_puppy_core_plugins.customizable_commands.register_callbacks import (
             MarkdownCommandResult,
         )
     except ImportError:

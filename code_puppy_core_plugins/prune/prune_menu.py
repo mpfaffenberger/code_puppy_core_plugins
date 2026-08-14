@@ -31,14 +31,14 @@ from prompt_toolkit.layout import Dimension, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.widgets import Frame
 
-from code_puppy.plugins.prune.prune_model import (
+from code_puppy_core_plugins.prune.prune_model import (
     SIDE_EFFECT_ICONS,
     ContextBudget,
     MessageEntry,
     PruneSelection,
     Row,
 )
-from code_puppy.plugins.prune.prune_render import render_detail, render_list
+from code_puppy_core_plugins.prune.prune_render import render_detail, render_list
 from code_puppy.callbacks import on_prompt_toolkit_style
 
 

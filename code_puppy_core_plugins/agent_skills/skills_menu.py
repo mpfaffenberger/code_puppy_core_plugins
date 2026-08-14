@@ -23,7 +23,7 @@ from code_puppy.command_line.pagination import (
 )
 from code_puppy.command_line.utils import safe_input
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
-from code_puppy.plugins.agent_skills.config import (
+from code_puppy_core_plugins.agent_skills.config import (
     add_skill_directory,
     get_disabled_skills,
     get_skill_directories,
@@ -32,12 +32,12 @@ from code_puppy.plugins.agent_skills.config import (
     set_skill_disabled,
     set_skills_enabled,
 )
-from code_puppy.plugins.agent_skills.discovery import (
+from code_puppy_core_plugins.agent_skills.discovery import (
     SkillInfo,
     discover_skills,
     refresh_skill_cache,
 )
-from code_puppy.plugins.agent_skills.metadata import (
+from code_puppy_core_plugins.agent_skills.metadata import (
     SkillMetadata,
     get_skill_resources,
     parse_skill_metadata,
@@ -591,7 +591,7 @@ def show_skills_menu() -> bool:
             continue
 
         elif result == "install":
-            from code_puppy.plugins.agent_skills.skills_install_menu import (
+            from code_puppy_core_plugins.agent_skills.skills_install_menu import (
                 run_skills_install_menu,
             )
 

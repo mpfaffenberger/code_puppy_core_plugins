@@ -26,7 +26,7 @@ import os
 import sys
 from typing import Any, List, Optional, Tuple
 
-from code_puppy.plugins.acp import capabilities, state
+from code_puppy_core_plugins.acp import capabilities, state
 from code_puppy.tools.io_backends import (
     DirEntry,
     ExecResult,

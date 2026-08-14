@@ -185,7 +185,7 @@ def _run_interactive_menu() -> None:
     from code_puppy.messaging import emit_info
 
     try:
-        from code_puppy.plugins.plugin_list.plugins_menu import run_plugins_menu
+        from code_puppy_core_plugins.plugin_list.plugins_menu import run_plugins_menu
 
         run_plugins_menu()
     except Exception as exc:
@@ -213,7 +213,7 @@ def _sub_enable(tokens: list[str]) -> bool:
 
     # Project plugins get the trust/risk-acceptance flow; anything else
     # falls through to the regular enable toggle.
-    from code_puppy.plugins.plugin_list.project_trust_flow import (
+    from code_puppy_core_plugins.plugin_list.project_trust_flow import (
         try_enable_project_plugin,
     )
 
@@ -229,7 +229,7 @@ def _sub_revoke(tokens: list[str]) -> bool:
         emit_error("Usage: /plugins revoke <plugin-name>")
         return True
 
-    from code_puppy.plugins.plugin_list.project_trust_flow import (
+    from code_puppy_core_plugins.plugin_list.project_trust_flow import (
         revoke_project_plugin,
     )
 

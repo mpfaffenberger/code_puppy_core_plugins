@@ -37,7 +37,7 @@ from acp.helpers import (
 from acp.schema import ToolCallLocation
 
 from code_puppy.callbacks import register_callback, unregister_callback
-from code_puppy.plugins.acp import state
+from code_puppy_core_plugins.acp import state
 from code_puppy.tools.common import resolve_path
 
 logger = logging.getLogger(__name__)

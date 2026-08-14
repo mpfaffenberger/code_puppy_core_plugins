@@ -65,7 +65,7 @@ Claude, GPT, Gemini, or any custom endpoint wired through
    (via a `startup` callback, not an import-time side effect — see
    "What we deliberately avoided" below), it calls
    `set_frontmatter_in_system_prompt(False)` via the public config API
-   (`code_puppy.plugins.agent_skills.config`) so the built-in per-skill
+   (`code_puppy_core_plugins.agent_skills.config`) so the built-in per-skill
    flat list doesn't also render alongside the namespace directory.
 
    **This is a real, persisted config write, not an in-memory toggle.**

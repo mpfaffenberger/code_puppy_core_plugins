@@ -18,7 +18,7 @@ def test_plugin_imports() -> bool:
     print("\n=== Testing Plugin Imports ===")
 
     try:
-        from code_puppy.plugins.claude_code_oauth.config import (
+        from code_puppy_core_plugins.claude_code_oauth.config import (
             CLAUDE_CODE_OAUTH_CONFIG,
             get_token_storage_path,
         )
@@ -31,7 +31,7 @@ def test_plugin_imports() -> bool:
         return False
 
     try:
-        from code_puppy.plugins.claude_code_oauth.utils import (
+        from code_puppy_core_plugins.claude_code_oauth.utils import (
             add_models_to_extra_config,
             build_authorization_url,
             exchange_code_for_tokens,
@@ -64,7 +64,7 @@ def test_plugin_imports() -> bool:
         return False
 
     try:
-        from code_puppy.plugins.claude_code_oauth.register_callbacks import (
+        from code_puppy_core_plugins.claude_code_oauth.register_callbacks import (
             _custom_help,
             _handle_custom_command,
         )
@@ -89,7 +89,7 @@ def test_oauth_helpers() -> bool:
     try:
         from urllib.parse import parse_qs, urlparse
 
-        from code_puppy.plugins.claude_code_oauth.utils import (
+        from code_puppy_core_plugins.claude_code_oauth.utils import (
             assign_redirect_uri,
             build_authorization_url,
             parse_authorization_code,
@@ -140,11 +140,11 @@ def test_file_operations() -> bool:
     print("\n=== Testing File Operations ===")
 
     try:
-        from code_puppy.plugins.claude_code_oauth.config import (
+        from code_puppy_core_plugins.claude_code_oauth.config import (
             get_claude_models_path,
             get_token_storage_path,
         )
-        from code_puppy.plugins.claude_code_oauth.utils import (
+        from code_puppy_core_plugins.claude_code_oauth.utils import (
             load_claude_models,
             load_stored_tokens,
         )
@@ -178,7 +178,7 @@ def test_command_handlers() -> bool:
     """Smoke-test command handler routing without simulating authentication."""
     print("\n=== Testing Command Handlers ===")
 
-    from code_puppy.plugins.claude_code_oauth.register_callbacks import (
+    from code_puppy_core_plugins.claude_code_oauth.register_callbacks import (
         _handle_custom_command,
     )
 
@@ -197,7 +197,9 @@ def test_configuration() -> bool:
     print("\n=== Testing Configuration ===")
 
     try:
-        from code_puppy.plugins.claude_code_oauth.config import CLAUDE_CODE_OAUTH_CONFIG
+        from code_puppy_core_plugins.claude_code_oauth.config import (
+            CLAUDE_CODE_OAUTH_CONFIG,
+        )
 
         required_keys = [
             "auth_url",

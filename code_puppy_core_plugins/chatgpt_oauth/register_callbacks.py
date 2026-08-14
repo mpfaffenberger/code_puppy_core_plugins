@@ -14,7 +14,7 @@ from code_puppy.callbacks import register_callback
 from code_puppy.i18n import t
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
 from code_puppy.model_switching import set_model_and_reload_agent
-from code_puppy.plugins.agent_skills.discovery import refresh_skill_cache
+from code_puppy_core_plugins.agent_skills.discovery import refresh_skill_cache
 
 from .config import CHATGPT_OAUTH_CONFIG, get_token_storage_path
 from .oauth_flow import run_oauth_flow

@@ -325,8 +325,8 @@ def _launch_menu() -> None:
     raw_history: List[Any] = list(agent.get_message_history())
 
     # Sibling modules within the same package.
-    from code_puppy.plugins.prune.prune_menu import PruneMenu
-    from code_puppy.plugins.prune.prune_model import (
+    from code_puppy_core_plugins.prune.prune_menu import PruneMenu
+    from code_puppy_core_plugins.prune.prune_model import (
         ContextBudget,
         annotate_context_window,
         build_message_entries,

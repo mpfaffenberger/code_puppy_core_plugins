@@ -27,7 +27,7 @@ import logging
 
 from code_puppy.callbacks import register_callback
 from code_puppy.config import get_value, set_config_value
-from code_puppy.plugins.agent_skills.config import (
+from code_puppy_core_plugins.agent_skills.config import (
     get_frontmatter_in_system_prompt,
     set_frontmatter_in_system_prompt,
 )

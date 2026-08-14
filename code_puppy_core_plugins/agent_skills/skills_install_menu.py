@@ -32,9 +32,12 @@ from code_puppy.command_line.pagination import (
 )
 from code_puppy.command_line.utils import safe_input
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
-from code_puppy.plugins.agent_skills.downloader import download_and_install_skill
-from code_puppy.plugins.agent_skills.installer import InstallResult
-from code_puppy.plugins.agent_skills.skill_catalog import SkillCatalogEntry, catalog
+from code_puppy_core_plugins.agent_skills.downloader import download_and_install_skill
+from code_puppy_core_plugins.agent_skills.installer import InstallResult
+from code_puppy_core_plugins.agent_skills.skill_catalog import (
+    SkillCatalogEntry,
+    catalog,
+)
 from code_puppy.tools.command_runner import set_awaiting_user_input
 from code_puppy.callbacks import on_prompt_toolkit_style
 

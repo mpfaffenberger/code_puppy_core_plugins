@@ -5,7 +5,7 @@ Historically, code_puppy used a local static catalog. We now source skills from
 `remote_catalog.fetch_remote_catalog()` while keeping the same access patterns.
 
 Public API:
-    from code_puppy.plugins.agent_skills.skill_catalog import (
+    from code_puppy_core_plugins.agent_skills.skill_catalog import (
         SkillCatalog,
         SkillCatalogEntry,
         _format_display_name,
@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from code_puppy.plugins.agent_skills.remote_catalog import fetch_remote_catalog
+from code_puppy_core_plugins.agent_skills.remote_catalog import fetch_remote_catalog
 
 logger = logging.getLogger(__name__)
 

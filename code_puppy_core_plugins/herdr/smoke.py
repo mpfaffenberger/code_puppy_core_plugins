@@ -13,7 +13,7 @@ working pane is never touched.
 
 Usage (from inside a herdr pane)::
 
-    python -m code_puppy.plugins.herdr.smoke
+    python -m code_puppy_core_plugins.herdr.smoke
 
 Requires the ``herdr`` CLI on ``PATH`` and the ``HERDR_ENV`` /
 ``HERDR_SOCKET_PATH`` / ``HERDR_PANE_ID`` variables herdr injects. Exits 0
@@ -65,7 +65,7 @@ def _make_client(pane_id: str):
     # inherited from the surrounding pane.
     os.environ["HERDR_ENV"] = "1"
     os.environ["HERDR_PANE_ID"] = pane_id
-    from code_puppy.plugins.herdr.client import HerdrClient
+    from code_puppy_core_plugins.herdr.client import HerdrClient
 
     return HerdrClient()
 

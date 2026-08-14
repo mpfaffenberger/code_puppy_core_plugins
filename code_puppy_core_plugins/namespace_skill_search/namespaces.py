@@ -14,8 +14,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import Dict, List, Optional
 
-from code_puppy.plugins.agent_skills.enabled_skills import list_enabled_skill_metadata
-from code_puppy.plugins.agent_skills.metadata import SkillMetadata
+from code_puppy_core_plugins.agent_skills.enabled_skills import (
+    list_enabled_skill_metadata,
+)
+from code_puppy_core_plugins.agent_skills.metadata import SkillMetadata
 
 _DEFAULT_NAMESPACE = "General"
 

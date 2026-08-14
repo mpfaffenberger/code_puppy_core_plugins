@@ -39,7 +39,7 @@ from acp.schema import (
     SetSessionModeResponse,
 )
 
-from code_puppy.plugins.acp import (
+from code_puppy_core_plugins.acp import (
     capabilities,
     io_delegation,
     mcp_config,
@@ -49,8 +49,8 @@ from code_puppy.plugins.acp import (
     session_config,
     state,
 )
-from code_puppy.plugins.acp.bridge import EventBridge
-from code_puppy.plugins.acp.session import ACPSession
+from code_puppy_core_plugins.acp.bridge import EventBridge
+from code_puppy_core_plugins.acp.session import ACPSession
 
 logger = logging.getLogger(__name__)
 

@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional, Tuple
 from acp.schema import PermissionOption, ToolCallUpdate
 
 from code_puppy.callbacks import register_callback
-from code_puppy.plugins.acp import state
+from code_puppy_core_plugins.acp import state
 
 logger = logging.getLogger(__name__)
 

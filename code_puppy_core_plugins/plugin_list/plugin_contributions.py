@@ -95,7 +95,7 @@ def _plugin_owner_of_module(module_name: Optional[str]) -> Optional[str]:
 
     Mirrors the three plugin module-name layouts:
 
-    * builtin -> ``code_puppy.plugins.<name>.<...>``
+    * builtin -> ``code_puppy_core_plugins.<name>.<...>``
     * project -> ``project_plugins.<name>.<...>``
     * user    -> ``<name>.<...>``
 
@@ -104,6 +104,9 @@ def _plugin_owner_of_module(module_name: Optional[str]) -> Optional[str]:
     if not module_name:
         return None
     parts = module_name.split(".")
+    if module_name.startswith("code_puppy_core_plugins."):
+        return parts[1] if len(parts) >= 2 else None
+    # Retain attribution for third-party plugins using the host's legacy layout.
     if module_name.startswith("code_puppy.plugins."):
         return parts[2] if len(parts) >= 3 else None
     if module_name.startswith("project_plugins."):

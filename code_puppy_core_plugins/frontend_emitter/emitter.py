@@ -8,7 +8,7 @@ Session-channel model
 ---------------------
 - Producers may attach a ``session_id`` to an event in two ways:
     1. Explicit kwarg:  ``emit_event(type, data, session_id="abc")``
-    2. ContextVar:      set ``code_puppy.plugins.frontend_emitter.session_context.current_emitter_session_id``
+    2. ContextVar:      set ``code_puppy_core_plugins.frontend_emitter.session_context.current_emitter_session_id``
                         before calling ``emit_event``; the value is
                         picked up automatically.
   The explicit kwarg always wins over the ContextVar.
@@ -42,7 +42,7 @@ from code_puppy.config import (
     get_frontend_emitter_max_recent_events,
     get_frontend_emitter_queue_size,
 )
-from code_puppy.plugins.frontend_emitter.session_context import (
+from code_puppy_core_plugins.frontend_emitter.session_context import (
     current_emitter_session_id,
 )
 
@@ -108,7 +108,7 @@ def emit_event(
         event_type: Type of event (e.g., "tool_call_start", "stream_token").
         data: Event data payload - should be JSON-serializable.
         session_id: Optional session identifier. If omitted, the value of
-            the ``code_puppy.plugins.frontend_emitter.session_context.current_emitter_session_id`` ContextVar is
+            the ``code_puppy_core_plugins.frontend_emitter.session_context.current_emitter_session_id`` ContextVar is
             used (or ``None`` if no ContextVar is set). Pass
             ``session_id=None`` explicitly to bypass the ContextVar
             fallback.

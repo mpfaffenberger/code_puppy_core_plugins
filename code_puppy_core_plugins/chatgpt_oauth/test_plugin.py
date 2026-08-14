@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_puppy.plugins.chatgpt_oauth import config, image_generation, image_tool, utils
+from code_puppy_core_plugins.chatgpt_oauth import (
+    config,
+    image_generation,
+    image_tool,
+    utils,
+)
 
 
 def test_codex_image_generation_posts_codex_payload(tmp_path):
@@ -189,7 +194,7 @@ def test_emit_iterm_image_ignores_other_terminals(tmp_path):
 
 
 def test_codex_imagegen_command():
-    from code_puppy.plugins.chatgpt_oauth import register_callbacks
+    from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
 
     with (
         patch.object(
@@ -214,7 +219,7 @@ def test_codex_imagegen_command():
 
 
 def test_imagegen_skill_and_tool_registration():
-    from code_puppy.plugins.chatgpt_oauth import register_callbacks
+    from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
 
     with patch.object(
         register_callbacks,
@@ -234,21 +239,21 @@ def test_imagegen_skill_and_tool_registration():
 
 
 def test_imagegen_skill_is_not_registered_when_logged_out():
-    from code_puppy.plugins.chatgpt_oauth import register_callbacks
+    from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
 
     with patch.object(register_callbacks, "load_stored_tokens", return_value=None):
         assert register_callbacks._register_imagegen_skill() == []
 
 
 def test_imagegen_tool_is_not_advertised_when_logged_out():
-    from code_puppy.plugins.chatgpt_oauth import register_callbacks
+    from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
 
     with patch.object(register_callbacks, "load_stored_tokens", return_value=None):
         assert register_callbacks._advertise_imagegen_tool("code-puppy") == []
 
 
 def test_logout_reloads_agent_to_unbind_imagegen(tmp_path):
-    from code_puppy.plugins.chatgpt_oauth import register_callbacks
+    from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
 
     token_path = tmp_path / "tokens.json"
     token_path.write_text("{}")
@@ -275,7 +280,7 @@ def test_logout_reloads_agent_to_unbind_imagegen(tmp_path):
 
 
 def test_logout_does_not_refresh_skills_when_already_logged_out(tmp_path):
-    from code_puppy.plugins.chatgpt_oauth import register_callbacks
+    from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
 
     token_path = tmp_path / "tokens.json"
     with (
@@ -296,7 +301,7 @@ def test_logout_does_not_refresh_skills_when_already_logged_out(tmp_path):
 
 
 def test_auth_command_refreshes_skill_cache():
-    from code_puppy.plugins.chatgpt_oauth import register_callbacks
+    from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
 
     with (
         patch.object(register_callbacks, "run_oauth_flow") as oauth_flow,
@@ -566,7 +571,7 @@ def test_remove_chatgpt_models(tmp_path):
         assert "claude-3-opus" in remaining
 
 
-@patch("code_puppy.plugins.chatgpt_oauth.utils.requests.post")
+@patch("code_puppy_core_plugins.chatgpt_oauth.utils.requests.post")
 def test_exchange_code_for_tokens(mock_post):
     """Test authorization code exchange."""
     mock_response = MagicMock()
@@ -587,7 +592,7 @@ def test_exchange_code_for_tokens(mock_post):
     assert "last_refresh" in tokens
 
 
-@patch("code_puppy.plugins.chatgpt_oauth.utils.requests.get")
+@patch("code_puppy_core_plugins.chatgpt_oauth.utils.requests.get")
 def test_fetch_chatgpt_models(mock_get):
     """Test fetching models from ChatGPT Codex API."""
     mock_response = MagicMock()
@@ -616,7 +621,7 @@ def test_fetch_chatgpt_models(mock_get):
     assert "codex-mini" in models
 
 
-@patch("code_puppy.plugins.chatgpt_oauth.utils.requests.get")
+@patch("code_puppy_core_plugins.chatgpt_oauth.utils.requests.get")
 def test_fetch_chatgpt_models_fallback(mock_get):
     """Test that fetch_chatgpt_models returns default list on API failure."""
     mock_response = MagicMock()

@@ -11,7 +11,7 @@ filter events by session without monkey-patching the emitter.
 
 Usage::
 
-    from code_puppy.plugins.frontend_emitter.session_context import (
+    from code_puppy_core_plugins.frontend_emitter.session_context import (
         current_emitter_session_id,
     )
 

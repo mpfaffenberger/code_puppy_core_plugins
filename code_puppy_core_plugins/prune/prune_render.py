@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, List, Tuple
 
-from code_puppy.plugins.prune.prune_model import (
+from code_puppy_core_plugins.prune.prune_model import (
     ContextBudget,
     MessageEntry,
     Row,

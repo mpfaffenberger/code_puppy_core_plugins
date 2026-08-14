@@ -20,7 +20,7 @@ def _get_skills_prompt_section() -> Optional[str]:
 
     Returns None if skills are disabled or no enabled skills exist.
     Disabled skills never have their frontmatter loaded — see
-    :mod:`code_puppy.plugins.agent_skills.enabled_skills`.
+    :mod:`code_puppy_core_plugins.agent_skills.enabled_skills`.
 
     When ``frontmatter_in_system_prompt`` is ``False``, the per-skill list is
     omitted but the short guidance line is still emitted so the model knows
@@ -139,19 +139,19 @@ def _handle_skills_command(command: str, name: str) -> Optional[Any]:
         return handle_skill_command(command, name)
 
     from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
-    from code_puppy.plugins.agent_skills.config import (
+    from code_puppy_core_plugins.agent_skills.config import (
         get_disabled_skills,
         get_frontmatter_in_system_prompt,
         get_skills_enabled,
         set_frontmatter_in_system_prompt,
         set_skills_enabled,
     )
-    from code_puppy.plugins.agent_skills.discovery import (
+    from code_puppy_core_plugins.agent_skills.discovery import (
         discover_skills,
         refresh_skill_cache,
     )
-    from code_puppy.plugins.agent_skills.metadata import parse_skill_metadata
-    from code_puppy.plugins.agent_skills.skills_menu import show_skills_menu
+    from code_puppy_core_plugins.agent_skills.metadata import parse_skill_metadata
+    from code_puppy_core_plugins.agent_skills.skills_menu import show_skills_menu
 
     tokens = command.split()
 
@@ -201,7 +201,7 @@ def _handle_skills_command(command: str, name: str) -> Optional[Any]:
             return True
 
         elif subcommand == "install":
-            from code_puppy.plugins.agent_skills.skills_install_menu import (
+            from code_puppy_core_plugins.agent_skills.skills_install_menu import (
                 run_skills_install_menu,
             )
 

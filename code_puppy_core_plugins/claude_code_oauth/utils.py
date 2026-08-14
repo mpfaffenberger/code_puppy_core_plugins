@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from code_puppy.plugins.oauth_pasteback import parse_oauth_callback_input
+from code_puppy_core_plugins.oauth_pasteback import parse_oauth_callback_input
 
 from .config import (
     CLAUDE_CODE_OAUTH_CONFIG,

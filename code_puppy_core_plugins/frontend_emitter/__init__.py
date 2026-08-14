@@ -5,7 +5,7 @@ allowing WebSocket handlers to subscribe to real-time events from the
 agent system including tool calls, streaming events, and agent invocations.
 
 Usage:
-    from code_puppy.plugins.frontend_emitter.emitter import (
+    from code_puppy_core_plugins.frontend_emitter.emitter import (
         emit_event,
         subscribe,
         unsubscribe,

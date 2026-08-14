@@ -82,8 +82,8 @@ async def _serve() -> int:
     from rich.console import Console
 
     from code_puppy.agents.event_stream_handler import set_streaming_console
-    from code_puppy.plugins.acp import io_delegation, permissions, state
-    from code_puppy.plugins.acp.agent import CodePuppyAgent
+    from code_puppy_core_plugins.acp import io_delegation, permissions, state
+    from code_puppy_core_plugins.acp.agent import CodePuppyAgent
 
     # Route all incidental console output to stderr; stdout is JSON-RPC only.
     set_streaming_console(Console(file=sys.stderr))

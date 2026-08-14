@@ -5,7 +5,7 @@ from code_puppy.messaging import emit_info
 # forwards the content to the agent as a prompt; absent plugin falls back to
 # display-only behavior rather than failing the whole plugin load.
 try:
-    from code_puppy.plugins.customizable_commands.register_callbacks import (
+    from code_puppy_core_plugins.customizable_commands.register_callbacks import (
         MarkdownCommandResult,
     )
 except ImportError:  # pragma: no cover - defensive fallback

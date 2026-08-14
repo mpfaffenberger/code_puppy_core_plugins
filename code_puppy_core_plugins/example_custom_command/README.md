@@ -43,7 +43,7 @@ from code_puppy.messaging import emit_info
 # Returning a ``MarkdownCommandResult`` tells the dispatcher to forward
 # the wrapped content to the agent as a user prompt.
 try:
-    from code_puppy.plugins.customizable_commands.register_callbacks import (
+    from code_puppy_core_plugins.customizable_commands.register_callbacks import (
         MarkdownCommandResult,
     )
 except ImportError:
