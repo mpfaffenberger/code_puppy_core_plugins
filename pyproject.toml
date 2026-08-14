@@ -8,6 +8,9 @@ version = "0.0.2"
 description = "Official plugin bundle for Code Puppy"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
+dependencies = [
+    "httpx>=0.24.1",
+]
 license = {text = "MIT"}
 authors = [{name = "Michael Pfaffenberger"}]
 classifiers = [

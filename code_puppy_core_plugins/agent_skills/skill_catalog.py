@@ -13,7 +13,7 @@ Public API:
     )
 
 If the remote catalog can't be fetched (and there's no cache), the catalog is
-empty by default (and we log a warning).
+empty by default. Loading is deferred until a catalog-backed operation needs it.
 """
 
 from __future__ import annotations
@@ -133,19 +133,24 @@ class SkillCatalog:
         self._entries: list[SkillCatalogEntry] = []
         self._by_id: dict[str, SkillCatalogEntry] = {}
         self._by_category: dict[str, list[SkillCatalogEntry]] = {}
+        self._loaded = False
+
+    def _load(self) -> None:
+        """Load the optional remote catalog once, on first catalog access."""
+
+        if self._loaded:
+            return
+        self._loaded = True
 
         try:
             remote = fetch_remote_catalog()
         except Exception as e:
             # fetch_remote_catalog should already be defensive, but let's be extra safe.
-            logger.warning(f"Failed to fetch remote catalog: {e}")
-            remote = None
+            logger.debug(f"Failed to fetch remote catalog: {e}")
+            return
 
         if remote is None:
-            logger.warning(
-                "Remote skill catalog unavailable (no network and no cache). "
-                "Catalog will be empty."
-            )
+            logger.debug("Remote skill catalog unavailable; catalog will be empty.")
             return
 
         entries: list[SkillCatalogEntry] = []
@@ -198,12 +203,14 @@ class SkillCatalog:
     def list_categories(self) -> List[str]:
         """List all categories."""
 
+        self._load()
         categories = {e.category for e in self._entries if e.category}
         return sorted(categories, key=lambda c: c.casefold())
 
     def get_by_category(self, category: str) -> List[SkillCatalogEntry]:
         """Return all entries in a category (case-insensitive)."""
 
+        self._load()
         if not category:
             return []
         return list(self._by_category.get(category.casefold(), []))
@@ -211,6 +218,7 @@ class SkillCatalog:
     def search(self, query: str) -> List[SkillCatalogEntry]:
         """Search by substring over id/name/display_name/description/tags/category."""
 
+        self._load()
         q = (query or "").strip().casefold()
         if not q:
             return self.get_all()
@@ -234,6 +242,7 @@ class SkillCatalog:
     def get_by_id(self, skill_id: str) -> Optional[SkillCatalogEntry]:
         """Get a skill entry by id (case-sensitive exact match)."""
 
+        self._load()
         if not skill_id:
             return None
         return self._by_id.get(skill_id)
@@ -241,6 +250,7 @@ class SkillCatalog:
     def get_all(self) -> List[SkillCatalogEntry]:
         """Return all entries."""
 
+        self._load()
         return list(self._entries)
 
 
