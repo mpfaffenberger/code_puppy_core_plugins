@@ -1,0 +1,235 @@
+"""Plugin: spill oversized dict-shaped tool results to private files.
+
+Ported from DeepSeek Harness's MIT-licensed spill design. See
+``LICENSE.deepseek`` in this package for its copyright and license notice.
+
+The post-tool hook receives the same dict reference that Code Puppy later
+serializes for the model, so this plugin can replace top-level string fields
+in place. Non-dict results (notably plain strings) cannot be replaced through
+this hook and are deliberately left untouched.
+
+When the combined UTF-8 size of top-level string values exceeds the configured
+cap, fields are considered largest-first. Their full text is saved verbatim,
+then replaced by a bounded byte-sliced head/tail preview and a retrieval notice.
+``read_file`` is skipped by default to avoid a read -> spill -> read loop.
+Every failure is best-effort: the successful tool result stays available inline.
+
+Config (puppy.cfg, also settable with ``/set``):
+    spill_max_inline_bytes = 32768  # 0 or negative disables
+    spill_preview_bytes = 4096      # source bytes retained per field
+    spill_root =                    # unset uses a private OS temp directory
+    spill_skip_tools = read_file    # comma-separated tool names
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from pathlib import Path
+from typing import Any
+
+from code_puppy.callbacks import register_callback
+
+from . import store
+
+logger = logging.getLogger(__name__)
+
+MAX_INLINE_KEY = "spill_max_inline_bytes"
+PREVIEW_KEY = "spill_preview_bytes"
+ROOT_KEY = "spill_root"
+SKIP_TOOLS_KEY = "spill_skip_tools"
+DEFAULT_MAX_INLINE_BYTES = 32768
+DEFAULT_PREVIEW_BYTES = 4096
+DEFAULT_SKIP_TOOLS = frozenset({"read_file"})
+OMISSION_MARKER = "\n\n[...]\n\n"
+
+
+def _get_value(key: str) -> Any:
+    try:
+        from code_puppy.config import get_value
+
+        return get_value(key)
+    except Exception:
+        return None
+
+
+def _get_int(key: str, default: int) -> int:
+    raw = _get_value(key)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s value; falling back to %d", key, default)
+        return default
+
+
+def _get_root() -> str | None:
+    raw = _get_value(ROOT_KEY)
+    if raw is None or not str(raw).strip():
+        return None
+    return str(raw).strip()
+
+
+def _get_skip_tools() -> frozenset[str]:
+    raw = _get_value(SKIP_TOOLS_KEY)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_SKIP_TOOLS
+    return frozenset(name.strip() for name in str(raw).split(",") if name.strip())
+
+
+def _byte_size(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _preview(text: str, budget: int) -> tuple[str, int]:
+    """Return a byte-sliced preview and the count of omitted source bytes."""
+    encoded = text.encode("utf-8")
+    kept_bytes = min(max(0, budget), len(encoded))
+    if kept_bytes == 0:
+        return "", len(encoded)
+    head_bytes = math.ceil(kept_bytes / 2)
+    tail_bytes = math.floor(kept_bytes / 2)
+    head = encoded[:head_bytes].decode("utf-8", errors="replace")
+    tail = encoded[-tail_bytes:].decode("utf-8", errors="replace") if tail_bytes else ""
+    return f"{head}{OMISSION_MARKER}{tail}", len(encoded) - kept_bytes
+
+
+def _notice(omitted: int, path: Path) -> str:
+    return (
+        f"(~{omitted} bytes omitted. Full output stored at: {path}. "
+        "Retrieve it with read_file using start_line/num_lines, or grep this path.)"
+    )
+
+
+def _build_replacement(
+    text: str,
+    path: Path,
+    preview_bytes: int,
+    max_bytes: int | None,
+) -> str | None:
+    """Build a strictly smaller replacement, optionally fitting ``max_bytes``."""
+    original_bytes = _byte_size(text)
+    budget = min(max(0, preview_bytes), original_bytes)
+    limit = original_bytes - 1
+    if max_bytes is not None:
+        limit = min(limit, max_bytes)
+    if limit < 0:
+        return None
+
+    while True:
+        preview, omitted = _preview(text, budget)
+        notice = _notice(omitted, path)
+        replacement = f"{preview}\n\n{notice}" if preview else notice
+        replacement_bytes = _byte_size(replacement)
+        if replacement_bytes <= limit:
+            return replacement
+        if budget == 0:
+            return None
+        budget = max(0, budget - max(1, replacement_bytes - limit))
+
+
+def _spill_result(tool_name: str, result: dict[Any, Any]) -> None:
+    cap = _get_int(MAX_INLINE_KEY, DEFAULT_MAX_INLINE_BYTES)
+    if cap <= 0 or tool_name in _get_skip_tools():
+        return
+    preview_bytes = _get_int(PREVIEW_KEY, DEFAULT_PREVIEW_BYTES)
+    if preview_bytes < 0:
+        logger.warning(
+            "Invalid %s value; falling back to %d",
+            PREVIEW_KEY,
+            DEFAULT_PREVIEW_BYTES,
+        )
+        preview_bytes = DEFAULT_PREVIEW_BYTES
+
+    fields = [
+        (key, value, _byte_size(value))
+        for key, value in result.items()
+        if isinstance(value, str)
+    ]
+    total = sum(size for _, _, size in fields)
+    if total <= cap:
+        return
+
+    replacements: dict[Any, str] = {}
+    for key, original, original_bytes in sorted(
+        fields, key=lambda item: item[2], reverse=True
+    ):
+        if total <= cap:
+            break
+        try:
+            path = store.save_text(original, tool_name, _get_root())
+        except Exception:
+            logger.warning(
+                "Failed to spill %s result field %r; keeping it inline",
+                tool_name,
+                key,
+                exc_info=True,
+            )
+            continue
+
+        other_bytes = total - original_bytes
+        field_limit = cap - other_bytes if other_bytes < cap else None
+        replacement = _build_replacement(
+            original,
+            path,
+            preview_bytes,
+            field_limit,
+        )
+        if replacement is None:
+            logger.warning(
+                "Spill notice for %s result field %r cannot fit; keeping it inline",
+                tool_name,
+                key,
+            )
+            continue
+        replacements[key] = replacement
+        total = other_bytes + _byte_size(replacement)
+
+    # Commit atomically. A partial preview set that still exceeds the cap is
+    # neither bounded nor graceful; keep every original inline in that case.
+    if total <= cap:
+        result.update(replacements)
+
+
+def _on_post_tool_call(
+    tool_name: str,
+    tool_args: dict,
+    result: Any,
+    duration_ms: float,
+    context: Any = None,
+) -> None:
+    """Spill oversized top-level string fields without breaking tool calls."""
+    _ = tool_args, duration_ms, context
+    try:
+        if not isinstance(result, dict) or set(result) == {"error"}:
+            return
+        _spill_result(tool_name, result)
+    except Exception:
+        logger.debug(
+            "spill plugin failed; keeping the tool result inline", exc_info=True
+        )
+
+
+def _reset_state() -> None:
+    """Reset lazy process storage state for tests and defensive re-init."""
+    store._reset_state()
+
+
+register_callback("post_tool_call", _on_post_tool_call)
+
+
+__all__ = [
+    "DEFAULT_MAX_INLINE_BYTES",
+    "DEFAULT_PREVIEW_BYTES",
+    "DEFAULT_SKIP_TOOLS",
+    "MAX_INLINE_KEY",
+    "PREVIEW_KEY",
+    "ROOT_KEY",
+    "SKIP_TOOLS_KEY",
+    "_build_replacement",
+    "_get_int",
+    "_on_post_tool_call",
+    "_reset_state",
+    "_spill_result",
+]
