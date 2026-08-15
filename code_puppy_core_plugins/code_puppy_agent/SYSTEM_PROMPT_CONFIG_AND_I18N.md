@@ -76,6 +76,36 @@ turning off `frontmatter_in_system_prompt` on its first run) does **not**
 automatically revert. Disabling the plugin and undoing what it already
 did to your config are two separate actions.
 
+### Bounding oversized tool results with `spill`
+
+The builtin `spill` plugin keeps oversized dict-shaped tool results out
+of model context. It measures the UTF-8 byte size of top-level string
+fields, saves full oversized fields to private scope directories, and
+replaces them with bounded head/tail previews plus `read_file`/`grep`
+retrieval guidance. `read_file` is skipped by default to avoid a
+read → spill → read loop. Error-only dicts and non-dict results are left
+untouched; the latter cannot be replaced through the current
+`post_tool_call` hook.
+
+| `puppy.cfg` key | Default | Meaning |
+|-----------------|---------|---------|
+| `spill_max_inline_bytes` | `32768` | Aggregate inline string-byte cap; `0` or negative disables spilling |
+| `spill_preview_bytes` | `4096` | Head-plus-tail source-byte budget per spilled field |
+| `spill_root` | unset | Storage root override; otherwise use a private per-process OS temp directory |
+| `spill_skip_tools` | `read_file` | Comma-separated tool names that must remain inline |
+
+Spill files are owner-only (`0600`) beneath private scope directories
+(`0700`). An async-safe conversation ID scopes the directory when one is
+available; otherwise spill uses a stable per-process fallback rather than
+a racy process-global session value. Storage is best-effort: any write or
+bounding failure keeps the original successful tool result inline. The
+OS temp directory is the v1 retention policy; no durable cleanup service
+is involved.
+
+Implementation and callback-order details:
+`code_puppy_core_plugins/spill/register_callbacks.py` and
+`code_puppy_core_plugins/spill/store.py`.
+
 ---
 
 ## Messaging & UI

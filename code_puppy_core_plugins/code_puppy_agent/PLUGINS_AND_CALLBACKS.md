@@ -36,12 +36,43 @@ time. All hooks accept sync or async functions.
 | `get_model_system_prompt` | Per-model prompt patch | `dict` with `instructions`/`handled` or `None` |
 | `custom_command` | Unknown `/slash` command | `True` (handled), `str` (message), or `None` (not mine) |
 | `pre_tool_call` | Before tool executes | Can modify args |
-| `post_tool_call` | After tool finishes | Observes result + duration |
+| `post_tool_call` | After tool finishes | Observes result + duration; can mutate dict results in place |
 | `run_shell_command` | Before shell exec | Return `{"blocked": True}` to block |
 | `file_permission` | Before file op | `bool` — allow/deny |
 | `agent_run_start` / `agent_run_end` | Agent lifecycle | Observes name, model, session |
 
 The full list is in `callbacks.py` — `PhaseType` has ~45 phases.
+
+### Mutating results from `post_tool_call`
+
+Code Puppy's patched tool runner evaluates `return result` before it
+awaits `post_tool_call` callbacks in the surrounding `finally` block.
+The evaluated value is still a reference, so a callback may mutate a
+plain dict result **in place** and that mutation is visible when the
+result is serialized for the model. This is how the builtin `spill`
+plugin bounds oversized tool output without requiring a core change.
+
+Replacing a string, Pydantic model, or other non-dict result is not
+possible through this hook: rebinding the callback's local `result`
+name cannot replace the return reference that was already evaluated.
+On a tool exception, the hook receives an error-only dict; result-shaping
+plugins should preserve that corrective feedback.
+
+Result mutation is order-sensitive. A bounding callback that runs before
+another plugin appends content cannot guarantee a cap on the final
+model-facing result. `spill` therefore uses a `startup` callback to move
+its already-registered `post_tool_call` callback to the end after plugin
+discovery has completed. `unregister_callback()` preserves ownership
+metadata, so disabled-plugin filtering continues to work after this
+reordering.
+
+Finally, the async callback dispatcher invokes sync callbacks directly
+on the event loop. Never perform blocking filesystem or network work in
+a sync `post_tool_call` callback. Make the callback async and offload
+blocking work with `asyncio.to_thread()`, as `spill` does.
+
+Canonical implementation:
+`code_puppy_core_plugins/spill/register_callbacks.py`.
 
 ## Minimal plugin example
 
