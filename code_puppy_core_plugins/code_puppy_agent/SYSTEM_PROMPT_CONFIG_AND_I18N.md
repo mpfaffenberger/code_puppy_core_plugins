@@ -76,6 +76,23 @@ turning off `frontmatter_in_system_prompt` on its first run) does **not**
 automatically revert. Disabling the plugin and undoing what it already
 did to your config are two separate actions.
 
+### Bounding oversized tool results with `spill`
+
+The builtin `spill` plugin saves oversized top-level string fields to
+private files and substitutes bounded head/tail previews with retrieval
+guidance. It leaves error-only and non-dict results untouched and skips
+`read_file` by default to avoid a read → spill → read loop.
+
+| `puppy.cfg` key | Default | Meaning |
+|-----------------|---------|---------|
+| `spill_max_inline_bytes` | `32768` | Aggregate inline string-byte cap; `0` or negative disables spilling |
+| `spill_preview_bytes` | `4096` | Head-plus-tail source-byte budget per spilled field |
+| `spill_root` | unset | Storage root override; otherwise use a private OS temp directory |
+| `spill_skip_tools` | `read_file` | Comma-separated tool names that must remain inline |
+
+Storage is best-effort: any spill failure keeps the original successful
+tool result inline.
+
 ---
 
 ## Messaging & UI

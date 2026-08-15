@@ -36,12 +36,26 @@ time. All hooks accept sync or async functions.
 | `get_model_system_prompt` | Per-model prompt patch | `dict` with `instructions`/`handled` or `None` |
 | `custom_command` | Unknown `/slash` command | `True` (handled), `str` (message), or `None` (not mine) |
 | `pre_tool_call` | Before tool executes | Can modify args |
-| `post_tool_call` | After tool finishes | Observes result + duration |
+| `post_tool_call` | After tool finishes | Observes result + duration; can mutate dict results in place |
 | `run_shell_command` | Before shell exec | Return `{"blocked": True}` to block |
 | `file_permission` | Before file op | `bool` — allow/deny |
 | `agent_run_start` / `agent_run_end` | Agent lifecycle | Observes name, model, session |
 
 The full list is in `callbacks.py` — `PhaseType` has ~45 phases.
+
+### Mutating results from `post_tool_call`
+
+The patched tool runner evaluates the result reference before awaiting
+`post_tool_call`. A callback can therefore mutate a plain dict result in
+place and the model sees the change. It cannot replace a string or other
+non-dict result by rebinding its local argument. Tool exceptions arrive
+as error-only dicts and should remain intact.
+
+Mutation is order-sensitive: result-bounding callbacks must run after
+callbacks that append content. Sync callbacks also execute on the event
+loop, so blocking work belongs in an async callback via
+`asyncio.to_thread()`. The builtin `spill` plugin is the canonical
+implementation.
 
 ## Minimal plugin example
 

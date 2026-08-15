@@ -89,11 +89,11 @@ Plugins hook into every stage via callbacks.
 | File | Read this for |
 |------|----------------|
 | `AGENTS_AND_TOOLS.md` | How agents are structured/discovered (Python, JSON, plugin agents, precedence). How tools get registered and wired to an agent. Async-tool blocking-I/O gotcha. |
-| `PLUGINS_AND_CALLBACKS.md` | Plugin discovery tiers, the full callback hook table, a minimal plugin example, and **two hook-system gotchas** (`get_model_system_prompt` last-write-wins; don't do real work at import time) worth reading before writing any new plugin. |
+| `PLUGINS_AND_CALLBACKS.md` | Plugin discovery tiers, the callback hook table, in-place tool-result mutation and ordering, a minimal plugin example, and hook-system gotchas (`get_model_system_prompt` last-write-wins; don't do real work at import time). |
 | `MODELS_AND_MCP.md` | ModelFactory, model config precedence, model types. MCP server lifecycle, agent bindings, and a known gap (MCP servers can't yet provide skills). |
 | `SESSIONS_AND_HISTORY.md` | Message history, context-window compaction, session save/load commands. |
 | `SKILLS_SYSTEM.md` | Skill discovery/activation, bundled-resource-file gotcha for plugin-registered skills, and **skill namespaces** — how `namespace_skill_search` groups large skill catalogs and replaces the flat prompt list. |
-| `SYSTEM_PROMPT_CONFIG_AND_I18N.md` | Exact system-prompt assembly order (which layer skills/rules/patches land in), `puppy.cfg` + key directories, the messaging bus, and an i18n quick-reference (full guide: `docs/I18N.md`). |
+| `SYSTEM_PROMPT_CONFIG_AND_I18N.md` | Exact system-prompt assembly order, `puppy.cfg` + key directories, spill configuration, the messaging bus, and an i18n quick-reference (full guide: `docs/I18N.md`). |
 
 Don't guess which file has what you need — the table above is exhaustive
 for this skill's scope. If a question doesn't map cleanly to one row, it's

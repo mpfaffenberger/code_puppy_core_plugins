@@ -23,12 +23,13 @@ Config (puppy.cfg, also settable with ``/set``):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from pathlib import Path
 from typing import Any
 
-from code_puppy.callbacks import register_callback
+from code_puppy.callbacks import register_callback, unregister_callback
 
 from . import store
 
@@ -129,7 +130,9 @@ def _build_replacement(
         budget = max(0, budget - max(1, replacement_bytes - limit))
 
 
-def _spill_result(tool_name: str, result: dict[Any, Any]) -> None:
+def _spill_result(
+    tool_name: str, result: dict[Any, Any], session_id: str | None = None
+) -> None:
     cap = _get_int(MAX_INLINE_KEY, DEFAULT_MAX_INLINE_BYTES)
     if cap <= 0 or tool_name in _get_skip_tools():
         return
@@ -158,7 +161,9 @@ def _spill_result(tool_name: str, result: dict[Any, Any]) -> None:
         if total <= cap:
             break
         try:
-            path = store.save_text(original, tool_name, _get_root())
+            path = store.save_text(
+                original, tool_name, _get_root(), session_id=session_id
+            )
         except Exception:
             logger.warning(
                 "Failed to spill %s result field %r; keeping it inline",
@@ -192,23 +197,38 @@ def _spill_result(tool_name: str, result: dict[Any, Any]) -> None:
         result.update(replacements)
 
 
-def _on_post_tool_call(
+async def _on_post_tool_call(
     tool_name: str,
     tool_args: dict,
     result: Any,
     duration_ms: float,
     context: Any = None,
 ) -> None:
-    """Spill oversized top-level string fields without breaking tool calls."""
+    """Spill oversized string fields off the event loop without breaking calls."""
     _ = tool_args, duration_ms, context
     try:
         if not isinstance(result, dict) or set(result) == {"error"}:
             return
-        _spill_result(tool_name, result)
+        # Capture session attribution before entering the worker. The result
+        # reference remains valid and the callback dispatcher awaits us before
+        # the model serializes it.
+        session_id = store.current_session_id()
+        await asyncio.to_thread(_spill_result, tool_name, result, session_id)
     except Exception:
         logger.debug(
             "spill plugin failed; keeping the tool result inline", exc_info=True
         )
+
+
+def _on_startup() -> None:
+    """Move spill behind result-mutating plugins so the final result is capped."""
+    if unregister_callback("post_tool_call", _on_post_tool_call):
+        # unregister_callback intentionally preserves callback ownership, so
+        # disabled-plugin filtering still recognizes this as the spill hook.
+        register_callback("post_tool_call", _on_post_tool_call)
+
+
+register_callback("startup", _on_startup)
 
 
 def _reset_state() -> None:
@@ -230,6 +250,7 @@ __all__ = [
     "_build_replacement",
     "_get_int",
     "_on_post_tool_call",
+    "_on_startup",
     "_reset_state",
     "_spill_result",
 ]
