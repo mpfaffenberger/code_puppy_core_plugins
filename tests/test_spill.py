@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import os
 import stat
+import time
+from pathlib import Path
 
 import pytest
 
-from code_puppy import config
+from code_puppy import callbacks, config
+from code_puppy.tools.subagent_context import (
+    reset_conversation_root_id,
+    set_conversation_root_id,
+    subagent_context,
+)
 from code_puppy_core_plugins.spill import register_callbacks as spill
 from code_puppy_core_plugins.spill import store
 
 
 def _call(tool_name: str, result):
-    spill._on_post_tool_call(tool_name, {}, result, 1.0)
+    asyncio.run(spill._on_post_tool_call(tool_name, {}, result, 1.0))
 
 
 def _string_bytes(result: dict) -> int:
@@ -70,9 +80,14 @@ def test_multiple_fields_spill_largest_first_until_under_cap(monkeypatch):
     saved_contents: list[str] = []
     real_save = store.save_text
 
-    def recording_save(content: str, tool_name: str, configured_root: str | None):
+    def recording_save(
+        content: str,
+        tool_name: str,
+        configured_root: str | None,
+        session_id: str | None = None,
+    ):
         saved_contents.append(content)
-        return real_save(content, tool_name, configured_root)
+        return real_save(content, tool_name, configured_root, session_id)
 
     monkeypatch.setattr(store, "save_text", recording_save)
     _call("agent_run_shell_command", result)
@@ -175,3 +190,112 @@ def test_tiny_cap_keeps_original_when_notice_cannot_fit():
     _call("some_tool", result)
 
     assert result == original
+
+
+@pytest.mark.asyncio
+async def test_slow_storage_does_not_block_event_loop(monkeypatch):
+    config.set_value(spill.MAX_INLINE_KEY, "100")
+    ticks = 0
+    running = True
+
+    async def ticker():
+        nonlocal ticks
+        while running:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    def slow_failure(*args, **kwargs):
+        time.sleep(0.1)
+        raise OSError("slow storage failure")
+
+    monkeypatch.setattr(store, "save_text", slow_failure)
+    ticker_task = asyncio.create_task(ticker())
+    await asyncio.sleep(0.01)
+    before = ticks
+    await spill._on_post_tool_call("some_tool", {}, {"stdout": "x" * 1000}, 1.0)
+    running = False
+    await ticker_task
+
+    assert ticks - before >= 5
+
+
+def test_preplanted_session_symlink_is_rejected(_spill_root, monkeypatch, tmp_path):
+    session_id = "known-session"
+    digest = hashlib.sha256(session_id.encode()).hexdigest()[:12]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _spill_root.mkdir()
+    os.symlink(outside, _spill_root / f"session-{digest}")
+    monkeypatch.setattr(store, "current_session_id", lambda: session_id)
+
+    with pytest.raises(OSError):
+        store.save_text("secret", "some_tool", str(_spill_root))
+
+    assert list(outside.iterdir()) == []
+
+
+def test_async_safe_conversation_root_scopes_spills():
+    token = set_conversation_root_id("conversation-root")
+    try:
+        assert store.current_session_id() == "conversation-root"
+    finally:
+        reset_conversation_root_id(token)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_subagents_do_not_use_racy_message_bus_sessions():
+    from code_puppy.messaging import set_session_context
+
+    first_set = asyncio.Event()
+    second_set = asyncio.Event()
+
+    async def get_scope(name: str, session_id: str, wait_for, release):
+        with subagent_context(name):
+            set_session_context(session_id)
+            release.set()
+            await wait_for.wait()
+            return store.current_session_id()
+
+    try:
+        first, second = await asyncio.gather(
+            get_scope("first", "session-A", second_set, first_set),
+            get_scope("second", "session-B", first_set, second_set),
+        )
+    finally:
+        set_session_context(None)
+
+    assert first == second
+    assert first not in {"session-A", "session-B"}
+
+
+@pytest.mark.asyncio
+async def test_startup_moves_spill_after_late_result_mutators(monkeypatch):
+    cap = 300
+    result = {"stdout": "x" * 5000}
+
+    def late_mutator(tool_name, tool_args, result, duration_ms, context=None):
+        result["late"] = "z" * 50
+
+    callbacks.register_callback("post_tool_call", late_mutator)
+    try:
+        spill._on_startup()
+        registered = callbacks.get_callbacks("post_tool_call", include_disabled=True)
+        assert registered[-1] is spill._on_post_tool_call
+
+        late_mutator("some_tool", {}, result, 1.0)
+        monkeypatch.setattr(
+            spill,
+            "_get_int",
+            lambda key, default: cap if key == spill.MAX_INLINE_KEY else 80,
+        )
+        monkeypatch.setattr(spill, "_get_skip_tools", lambda: frozenset())
+        monkeypatch.setattr(
+            store,
+            "save_text",
+            lambda *args, **kwargs: Path("/tmp/spill-result"),
+        )
+        await spill._on_post_tool_call("some_tool", {}, result, 1.0)
+    finally:
+        callbacks.unregister_callback("post_tool_call", late_mutator)
+
+    assert _string_bytes(result) <= cap
