@@ -156,8 +156,8 @@ def _fetch_remote_json(url: str) -> Optional[dict[str, Any]]:
             f"{e.response.status_code} {e.response.reason_phrase}"
         )
         return None
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-        logger.warning(f"Remote catalog network failure: {e}")
+    except httpx.TransportError as e:
+        logger.debug(f"Remote catalog network failure: {e}")
         return None
     except json.JSONDecodeError as e:
         logger.warning(f"Remote catalog returned invalid JSON: {e}")
@@ -296,7 +296,7 @@ def fetch_remote_catalog(force_refresh: bool = False) -> Optional[RemoteCatalogD
             f"(cache_path={_CACHE_PATH}, fresh={cache_fresh})"
         )
     else:
-        logger.info("No cache present; fetching remote skills catalog")
+        logger.debug("No cache present; fetching remote skills catalog")
 
     remote_raw = _fetch_remote_json(SKILLS_JSON_URL)
     if remote_raw is not None:
@@ -309,7 +309,7 @@ def fetch_remote_catalog(force_refresh: bool = False) -> Optional[RemoteCatalogD
 
     # Offline fallback: use cache even if expired.
     if _CACHE_PATH.exists():
-        logger.warning(
+        logger.debug(
             "Remote fetch failed; falling back to cached skills catalog "
             f"(even if expired): {_CACHE_PATH}"
         )
@@ -318,5 +318,5 @@ def fetch_remote_catalog(force_refresh: bool = False) -> Optional[RemoteCatalogD
             return None
         return _parse_catalog(cached)
 
-    logger.error("Remote fetch failed and no cache is available")
+    logger.debug("Remote fetch failed and no cache is available")
     return None

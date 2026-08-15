@@ -4,10 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-puppy-core-plugins"
-version = "0.0.2"
+version = "0.0.3"
 description = "Official plugin bundle for Code Puppy"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
+dependencies = [
+    "httpx>=0.24.1,<1",
+]
 license = {text = "MIT"}
 authors = [{name = "Michael Pfaffenberger"}]
 classifiers = [

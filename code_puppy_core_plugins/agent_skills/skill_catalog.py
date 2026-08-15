@@ -13,12 +13,14 @@ Public API:
     )
 
 If the remote catalog can't be fetched (and there's no cache), the catalog is
-empty by default (and we log a warning).
+empty by default. Loading is deferred until a catalog-backed operation needs it.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -26,6 +28,7 @@ from typing import List, Optional
 from code_puppy_core_plugins.agent_skills.remote_catalog import fetch_remote_catalog
 
 logger = logging.getLogger(__name__)
+_RETRY_DELAY_SECONDS = 60
 
 
 _ACRONYMS = {
@@ -133,47 +136,59 @@ class SkillCatalog:
         self._entries: list[SkillCatalogEntry] = []
         self._by_id: dict[str, SkillCatalogEntry] = {}
         self._by_category: dict[str, list[SkillCatalogEntry]] = {}
+        self._loaded = False
+        self._next_retry_at = 0.0
+        self._load_lock = threading.Lock()
 
-        try:
-            remote = fetch_remote_catalog()
-        except Exception as e:
-            # fetch_remote_catalog should already be defensive, but let's be extra safe.
-            logger.warning(f"Failed to fetch remote catalog: {e}")
-            remote = None
+    def _load(self) -> None:
+        """Load the optional remote catalog, retrying after bounded failures."""
 
-        if remote is None:
-            logger.warning(
-                "Remote skill catalog unavailable (no network and no cache). "
-                "Catalog will be empty."
-            )
+        if self._loaded or time.monotonic() < self._next_retry_at:
             return
 
-        entries: list[SkillCatalogEntry] = []
+        with self._load_lock:
+            if self._loaded or time.monotonic() < self._next_retry_at:
+                return
 
-        for remote_entry in remote.entries:
-            skill_id = remote_entry.name
-            entry = SkillCatalogEntry(
-                id=skill_id,
-                name=remote_entry.name,
-                display_name=_format_display_name(remote_entry.name),
-                description=remote_entry.description,
-                category=remote_entry.group,
-                tags=[],
-                source_path=None,
-                has_scripts=remote_entry.has_scripts,
-                has_references=remote_entry.has_references,
-                file_count=remote_entry.file_count,
-                download_url=remote_entry.download_url,
-                zip_size_bytes=remote_entry.zip_size_bytes,
+            try:
+                remote = fetch_remote_catalog()
+            except Exception as e:
+                logger.debug(f"Failed to fetch remote catalog: {e}")
+                self._next_retry_at = time.monotonic() + _RETRY_DELAY_SECONDS
+                return
+
+            if remote is None:
+                logger.debug("Remote skill catalog unavailable; catalog will be empty.")
+                self._next_retry_at = time.monotonic() + _RETRY_DELAY_SECONDS
+                return
+
+            entries: list[SkillCatalogEntry] = []
+
+            for remote_entry in remote.entries:
+                skill_id = remote_entry.name
+                entry = SkillCatalogEntry(
+                    id=skill_id,
+                    name=remote_entry.name,
+                    display_name=_format_display_name(remote_entry.name),
+                    description=remote_entry.description,
+                    category=remote_entry.group,
+                    tags=[],
+                    source_path=None,
+                    has_scripts=remote_entry.has_scripts,
+                    has_references=remote_entry.has_references,
+                    file_count=remote_entry.file_count,
+                    download_url=remote_entry.download_url,
+                    zip_size_bytes=remote_entry.zip_size_bytes,
+                )
+                entries.append(entry)
+
+            self._rebuild_indices(entries)
+            self._loaded = True
+
+            logger.info(
+                f"Loaded remote skill catalog: {len(self._entries)} skills in "
+                f"{len(self._by_category)} categories"
             )
-            entries.append(entry)
-
-        self._rebuild_indices(entries)
-
-        logger.info(
-            f"Loaded remote skill catalog: {len(self._entries)} skills in "
-            f"{len(self._by_category)} categories"
-        )
 
     def _rebuild_indices(self, entries: list[SkillCatalogEntry]) -> None:
         """Rebuild internal lookup indices from the loaded entries."""
@@ -198,12 +213,14 @@ class SkillCatalog:
     def list_categories(self) -> List[str]:
         """List all categories."""
 
+        self._load()
         categories = {e.category for e in self._entries if e.category}
         return sorted(categories, key=lambda c: c.casefold())
 
     def get_by_category(self, category: str) -> List[SkillCatalogEntry]:
         """Return all entries in a category (case-insensitive)."""
 
+        self._load()
         if not category:
             return []
         return list(self._by_category.get(category.casefold(), []))
@@ -211,6 +228,7 @@ class SkillCatalog:
     def search(self, query: str) -> List[SkillCatalogEntry]:
         """Search by substring over id/name/display_name/description/tags/category."""
 
+        self._load()
         q = (query or "").strip().casefold()
         if not q:
             return self.get_all()
@@ -234,6 +252,7 @@ class SkillCatalog:
     def get_by_id(self, skill_id: str) -> Optional[SkillCatalogEntry]:
         """Get a skill entry by id (case-sensitive exact match)."""
 
+        self._load()
         if not skill_id:
             return None
         return self._by_id.get(skill_id)
@@ -241,6 +260,7 @@ class SkillCatalog:
     def get_all(self) -> List[SkillCatalogEntry]:
         """Return all entries."""
 
+        self._load()
         return list(self._entries)
 
 
