@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from code_puppy import callbacks, config
+from code_puppy.agent_execution_context import executing_agent_context
 from code_puppy.tools.subagent_context import (
     reset_conversation_root_id,
     set_conversation_root_id,
@@ -31,6 +32,14 @@ def _string_bytes(result: dict) -> int:
         for value in result.values()
         if isinstance(value, str)
     )
+
+
+class _ConfiguredAgent:
+    def __init__(self, tools_config):
+        self._tools_config = tools_config
+
+    def get_tools_config(self):
+        return self._tools_config
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +87,6 @@ def test_multiple_fields_spill_largest_first_until_under_cap(monkeypatch):
     config.set_value(spill.PREVIEW_KEY, "80")
     result = {"second": "b" * 1200, "largest": "a" * 2000, "small": "ok"}
     saved_contents: list[str] = []
-    real_save = store.save_text
 
     def recording_save(
         content: str,
@@ -86,8 +94,9 @@ def test_multiple_fields_spill_largest_first_until_under_cap(monkeypatch):
         configured_root: str | None,
         session_id: str | None = None,
     ):
+        _ = tool_name, configured_root, session_id
         saved_contents.append(content)
-        return real_save(content, tool_name, configured_root, session_id)
+        return Path("/tmp/spill-result")
 
     monkeypatch.setattr(store, "save_text", recording_save)
     _call("agent_run_shell_command", result)
@@ -158,6 +167,44 @@ def test_zero_cap_disables_plugin():
     original = result.copy()
     _call("some_tool", result)
     assert result == original
+
+
+@pytest.mark.asyncio
+async def test_agent_can_disable_spill_without_affecting_concurrent_agent(
+    _spill_root,
+):
+    config.set_value(spill.MAX_INLINE_KEY, "500")
+    config.set_value(spill.PREVIEW_KEY, "100")
+    disabled_result = {"stdout": "d" * 5000}
+    disabled_original = disabled_result.copy()
+    enabled_result = {"stdout": "e" * 5000}
+
+    async def call_for_agent(agent, result):
+        with executing_agent_context(agent):
+            await spill._on_post_tool_call("some_tool", {}, result, 1.0)
+
+    disabled_agent = _ConfiguredAgent({"spill": {"enabled": False}})
+    enabled_agent = _ConfiguredAgent({"spill": {"enabled": True}})
+    await asyncio.gather(
+        call_for_agent(disabled_agent, disabled_result),
+        call_for_agent(enabled_agent, enabled_result),
+    )
+
+    assert disabled_result == disabled_original
+    assert "Full output stored at:" in enabled_result["stdout"]
+    assert len(list(_spill_root.glob("session-*/*"))) == 1
+
+
+def test_invalid_agent_spill_setting_fails_open(_spill_root):
+    config.set_value(spill.MAX_INLINE_KEY, "500")
+    result = {"stdout": "x" * 5000}
+    agent = _ConfiguredAgent({"spill": {"enabled": "false"}})
+
+    with executing_agent_context(agent):
+        _call("some_tool", result)
+
+    assert "Full output stored at:" in result["stdout"]
+    assert list(_spill_root.glob("session-*/*"))
 
 
 def test_invalid_cap_falls_back_to_default(_spill_root, caplog):

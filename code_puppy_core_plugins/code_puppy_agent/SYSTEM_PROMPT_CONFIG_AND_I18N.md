@@ -93,6 +93,24 @@ guidance. It leaves error-only and non-dict results untouched and skips
 Storage is best-effort: any spill failure keeps the original successful
 tool result inline.
 
+An individual JSON agent can disable spill while leaving it enabled globally:
+
+```json
+{
+  "tools_config": {
+    "spill": {
+      "enabled": false
+    }
+  }
+}
+```
+
+Python agents can opt out by returning the same shape from
+`get_tools_config()`. Only the literal boolean `false` disables spill; missing
+or malformed settings fail open to the global behavior. The executing-agent
+lookup is backed by a `ContextVar`, so concurrent main agents and sub-agents
+can use different settings without leaking state across tasks.
+
 ---
 
 ## Messaging & UI

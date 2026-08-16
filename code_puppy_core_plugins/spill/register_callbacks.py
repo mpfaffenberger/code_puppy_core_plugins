@@ -14,11 +14,14 @@ then replaced by a bounded byte-sliced head/tail preview and a retrieval notice.
 ``read_file`` is skipped by default to avoid a read -> spill -> read loop.
 Every failure is best-effort: the successful tool result stays available inline.
 
-Config (puppy.cfg, also settable with ``/set``):
+Global config (puppy.cfg, also settable with ``/set``):
     spill_max_inline_bytes = 32768  # 0 or negative disables
     spill_preview_bytes = 4096      # source bytes retained per field
     spill_root =                    # unset uses a private OS temp directory
     spill_skip_tools = read_file    # comma-separated tool names
+
+An individual agent can opt out without changing the global cap:
+    "tools_config": {"spill": {"enabled": false}}
 """
 
 from __future__ import annotations
@@ -39,6 +42,8 @@ MAX_INLINE_KEY = "spill_max_inline_bytes"
 PREVIEW_KEY = "spill_preview_bytes"
 ROOT_KEY = "spill_root"
 SKIP_TOOLS_KEY = "spill_skip_tools"
+AGENT_CONFIG_KEY = "spill"
+AGENT_ENABLED_KEY = "enabled"
 DEFAULT_MAX_INLINE_BYTES = 32768
 DEFAULT_PREVIEW_BYTES = 4096
 DEFAULT_SKIP_TOOLS = frozenset({"read_file"})
@@ -77,6 +82,36 @@ def _get_skip_tools() -> frozenset[str]:
     if raw is None or not str(raw).strip():
         return DEFAULT_SKIP_TOOLS
     return frozenset(name.strip() for name in str(raw).split(",") if name.strip())
+
+
+def _is_enabled_for_executing_agent() -> bool:
+    """Return false only for an explicit per-agent boolean opt-out.
+
+    Older Code Puppy versions do not expose the execution-context seam. They
+    safely retain the historical globally configured behavior.
+    """
+    try:
+        from code_puppy.agent_execution_context import get_executing_agent
+    except ImportError:
+        return True
+
+    agent = get_executing_agent()
+    if agent is None:
+        return True
+
+    try:
+        tools_config = agent.get_tools_config()
+    except Exception:
+        logger.debug("Could not read executing agent tools_config", exc_info=True)
+        return True
+
+    if not isinstance(tools_config, dict):
+        return True
+    spill_config = tools_config.get(AGENT_CONFIG_KEY)
+    if not isinstance(spill_config, dict):
+        return True
+    enabled = spill_config.get(AGENT_ENABLED_KEY, True)
+    return enabled if isinstance(enabled, bool) else True
 
 
 def _byte_size(text: str) -> int:
@@ -209,6 +244,8 @@ async def _on_post_tool_call(
     try:
         if not isinstance(result, dict) or set(result) == {"error"}:
             return
+        if not _is_enabled_for_executing_agent():
+            return
         # Capture session attribution before entering the worker. The result
         # reference remains valid and the callback dispatcher awaits us before
         # the model serializes it.
@@ -240,6 +277,8 @@ register_callback("post_tool_call", _on_post_tool_call)
 
 
 __all__ = [
+    "AGENT_CONFIG_KEY",
+    "AGENT_ENABLED_KEY",
     "DEFAULT_MAX_INLINE_BYTES",
     "DEFAULT_PREVIEW_BYTES",
     "DEFAULT_SKIP_TOOLS",
@@ -249,6 +288,7 @@ __all__ = [
     "SKIP_TOOLS_KEY",
     "_build_replacement",
     "_get_int",
+    "_is_enabled_for_executing_agent",
     "_on_post_tool_call",
     "_on_startup",
     "_reset_state",
