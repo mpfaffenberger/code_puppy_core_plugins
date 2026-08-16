@@ -108,6 +108,10 @@ class TestHandleChatgptLogout:
             ),
             patch.dict(os.environ, {env_var: "value"}),
             patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.load_stored_tokens",
+                return_value=None,
+            ),
+            patch(
                 "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.remove_chatgpt_models",
                 return_value=2,
             ),
@@ -135,6 +139,10 @@ class TestHandleChatgptLogout:
             patch(
                 "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.CHATGPT_OAUTH_CONFIG",
                 {"api_key_env_var": "NOT_SET_VAR"},
+            ),
+            patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.load_stored_tokens",
+                return_value=None,
             ),
             patch(
                 "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.remove_chatgpt_models",

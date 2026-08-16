@@ -283,3 +283,57 @@ class TestLegacyContextLengthSelfHeal:
 
         assert loaded["codex-gpt-5.6-sol"]["context_length"] == 353400
         assert loaded["user-custom"]["context_length"] == 1050000
+
+
+class TestModelsConfigBridge:
+    """The load_models_config hook must carry healed values past core's raw
+    file read (ModelFactory merges hook results after the JSON file sources)."""
+
+    def test_bridge_serves_healed_values_to_model_factory(self, tmp_path):
+        from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
+
+        models_path = tmp_path / "models.json"
+        models_path.write_text(
+            json.dumps(
+                {
+                    "codex-gpt-5.6-sol": {
+                        "name": "gpt-5.6-sol",
+                        "oauth_source": "chatgpt-oauth-plugin",
+                        "context_length": 1050000,
+                    }
+                }
+            )
+        )
+
+        with patch.object(utils, "get_chatgpt_models_path", return_value=models_path):
+            bridged = register_callbacks._load_models_config()
+
+        assert bridged["codex-gpt-5.6-sol"]["context_length"] == 258400
+
+    def test_malformed_entries_do_not_crash_add_or_remove(self, tmp_path):
+        models_path = tmp_path / "models.json"
+        models_path.write_text(
+            json.dumps(
+                {
+                    "codex-garbage": "oops",
+                    "codex-gpt-5.6-sol": {
+                        "name": "gpt-5.6-sol",
+                        "oauth_source": "chatgpt-oauth-plugin",
+                        "context_length": 353400,
+                    },
+                }
+            )
+        )
+
+        with patch.object(utils, "get_chatgpt_models_path", return_value=models_path):
+            assert utils.add_models_to_extra_config(["gpt-5.6-sol"])
+            loaded = utils.load_chatgpt_models()
+
+        # Garbage survives untouched; the real model is rewritten cleanly.
+        assert loaded["codex-garbage"] == "oops"
+        assert loaded["codex-gpt-5.6-sol"]["context_length"] == 258400
+
+        with patch.object(utils, "get_chatgpt_models_path", return_value=models_path):
+            removed = utils.remove_chatgpt_models()
+
+        assert removed == 1

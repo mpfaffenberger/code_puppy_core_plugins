@@ -265,6 +265,17 @@ def _register_model_types() -> List[Dict[str, Any]]:
     return [{"type": "chatgpt_oauth", "handler": _create_chatgpt_oauth_model}]
 
 
+def _load_models_config() -> Dict[str, Any]:
+    """Expose sanitized ChatGPT models to ModelFactory.load_config().
+
+    Core reads chatgpt_models.json as raw JSON, which would keep serving
+    pre-fix 1.05M budgets to the context/compaction logic. The
+    load_models_config hook runs after the file merge, so these (sanitized)
+    values override whatever is on disk.
+    """
+    return load_chatgpt_models()
+
+
 def _refresh_usage_on_agent_run(
     agent_name: str, model_name: str, session_id: str | None = None
 ) -> None:
@@ -282,6 +293,7 @@ register_callback("custom_command_help", _custom_help)
 register_callback("custom_command", _handle_custom_command)
 register_callback("usage_status", get_usage_status)
 register_callback("register_model_type", _register_model_types)
+register_callback("load_models_config", _load_models_config)
 register_callback("register_skills", _register_imagegen_skill)
 register_callback("register_tools", _register_imagegen_tools)
 register_callback("register_agent_tools", _advertise_imagegen_tool)

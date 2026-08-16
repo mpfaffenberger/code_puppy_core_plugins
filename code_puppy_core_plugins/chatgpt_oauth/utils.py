@@ -281,9 +281,10 @@ def _sanitize_legacy_context_lengths(chatgpt_models: Dict[str, Any]) -> Dict[str
     """Self-heal pre-fix registrations in memory, never on disk.
 
     Configs written before the catalog-driven fix carry a 1.05M budget that
-    would keep starving compaction until the user re-auths. Swap plugin-owned
-    entries carrying that value down to the resolved fallback; the file is
-    rewritten with live catalog data on the next ``/chatgpt-auth``.
+    starves compaction (core reads the file raw). Swap plugin-owned entries
+    carrying that value down to the resolved fallback; consumers see the
+    healed values via the ``load_models_config`` bridge, and the file itself
+    is rewritten with live catalog data on the next ``/chatgpt-auth``.
     """
     for model_config in chatgpt_models.values():
         if not isinstance(model_config, dict):
@@ -469,12 +470,15 @@ def fetch_chatgpt_models(access_token: str, account_id: str) -> List[CodexModelI
                     return catalog
             except (json.JSONDecodeError, ValueError) as exc:
                 logger.warning("Failed to parse models response: %s", exc)
-
-        # API didn't return usable models (non-200 or empty/unparsable body)
-        logger.info(
-            "Models endpoint unusable (status %d), using default model list",
-            response.status_code,
-        )
+            logger.info(
+                "Models endpoint returned 200 with no usable models; "
+                "using default model list"
+            )
+        else:
+            logger.info(
+                "Models endpoint unusable (status %d), using default model list",
+                response.status_code,
+            )
 
     except requests.exceptions.Timeout:
         logger.warning("Timeout fetching models, using default list")
@@ -508,7 +512,9 @@ def add_models_to_extra_config(models: List[Union[str, CodexModelInfo]]) -> bool
         chatgpt_models = {
             key: config
             for key, config in chatgpt_models.items()
-            if config.get("oauth_source") != "chatgpt-oauth-plugin"
+            # Malformed (non-dict) entries are preserved, not crashed on.
+            if not isinstance(config, dict)
+            or config.get("oauth_source") != "chatgpt-oauth-plugin"
             or key in desired_model_keys
         }
         added = 0
@@ -559,7 +565,8 @@ def remove_chatgpt_models() -> int:
         to_remove = [
             name
             for name, config in chatgpt_models.items()
-            if config.get("oauth_source") == "chatgpt-oauth-plugin"
+            if isinstance(config, dict)
+            and config.get("oauth_source") == "chatgpt-oauth-plugin"
         ]
         for model_name in to_remove:
             chatgpt_models.pop(model_name, None)
