@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
     "httpx>=0.24.1,<1",
-    "pydantic-ai-slim[openai,anthropic,mcp]>=1.107.5,<2",
+    "pydantic-ai-slim[openai,anthropic,mcp]>=2.31.0,<3",
 ]
 license = {text = "MIT"}
 authors = [{name = "Michael Pfaffenberger"}]

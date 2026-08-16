@@ -1,9 +1,9 @@
 """Attach client-injected MCP servers (from ``session/new``) to a session agent.
 
 ACP lets the client pass MCP server specs per session. We translate each into
-the pydantic-ai 1.x ``MCPToolset`` API and append it to the agent's
-``_mcp_servers`` list; ``run_with_mcp`` starts them for that session's runs.
-Best-effort: a malformed spec is skipped, never fatal.
+the pydantic-ai v2 ``MCPToolset`` API and append it to the host agent's
+MCP configuration; the session agent owns their lifecycle. Best-effort: a
+malformed spec is skipped, never fatal.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _translate(spec: Any) -> Optional[Any]:
             args=list(getattr(spec, "args", None) or []),
             env=_kv(getattr(spec, "env", None)) or None,
         )
-        return _with_prefix(MCPToolset(transport), name)
+        return _with_prefix(MCPToolset(transport, prefer_tasks=False), name)
     url = getattr(spec, "url", None)
     if not url:
         return None
@@ -54,7 +54,7 @@ def _translate(spec: Any) -> Optional[Any]:
         transport = SSETransport(url=url, headers=headers)
     else:
         transport = StreamableHttpTransport(url=url, headers=headers)
-    return _with_prefix(MCPToolset(transport), name)
+    return _with_prefix(MCPToolset(transport, prefer_tasks=False), name)
 
 
 def attach(agent: Any, specs: List[Any]) -> None:

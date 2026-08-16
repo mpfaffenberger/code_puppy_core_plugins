@@ -307,7 +307,7 @@ def _to_acp_usage(result: Any) -> Optional[Usage]:
         return None
     try:
         usage = getattr(result, "usage", None)
-        # pydantic-ai 1.107.5 exposes usage as a property. Ignore an older
+        # pydantic-ai 2.31.0 exposes usage as a property. Ignore an older
         # method-style value rather than invoking its deprecated call path.
     except Exception:  # noqa: BLE001
         return None

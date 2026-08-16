@@ -1,6 +1,6 @@
 """Async context manager wrapping pydantic_agent.run() with a DBOS workflow ID.
 
-pydantic-ai 1.107.5's DBOSAgent converts constructor-level MCP toolsets to
+pydantic-ai 2.31.0's DBOSAgent converts constructor-level MCP toolsets to
 DBOS-safe variants. Runtime private-toolset swaps are intentionally gone;
 ``mcp_servers`` remains in the callback signature for host compatibility.
 """

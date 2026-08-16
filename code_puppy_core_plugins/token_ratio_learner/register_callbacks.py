@@ -143,7 +143,7 @@ async def _patched_run_with_mcp(
     # Try to extract token usage from the result
     try:
         usage = getattr(result, "usage", None)
-        # pydantic-ai 1.107.5 exposes usage as a property. A callable value
+        # pydantic-ai 2.31.0 exposes usage as a property. A callable value
         # belongs to an older method-style host; ignore it rather than
         # triggering the deprecated call path.
         if callable(usage):
