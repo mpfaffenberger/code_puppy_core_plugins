@@ -69,7 +69,7 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@d56460d7ad16e8ee24e78669e53c9131a22c0403"
+          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@5525ad5d8d74b06a08bb498b285b29192b5809b3"
           uv pip install -e . --group dev
       - name: Coordinated full suite
         env:
