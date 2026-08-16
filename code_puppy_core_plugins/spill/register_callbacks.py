@@ -20,8 +20,9 @@ Global config (puppy.cfg, also settable with ``/set``):
     spill_root =                    # unset uses a private OS temp directory
     spill_skip_tools = read_file    # comma-separated tool names
 
-An individual agent can opt out without changing the global cap:
+An individual agent can opt out or add exact-name tool skips:
     "tools_config": {"spill": {"enabled": false}}
+    "tools_config": {"spill": {"skip_tools": ["custom_report"]}}
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ ROOT_KEY = "spill_root"
 SKIP_TOOLS_KEY = "spill_skip_tools"
 AGENT_CONFIG_KEY = "spill"
 AGENT_ENABLED_KEY = "enabled"
+AGENT_SKIP_TOOLS_KEY = "skip_tools"
 DEFAULT_MAX_INLINE_BYTES = 32768
 DEFAULT_PREVIEW_BYTES = 4096
 DEFAULT_SKIP_TOOLS = frozenset({"read_file"})
@@ -84,8 +86,8 @@ def _get_skip_tools() -> frozenset[str]:
     return frozenset(name.strip() for name in str(raw).split(",") if name.strip())
 
 
-def _is_enabled_for_executing_agent() -> bool:
-    """Return false only for an explicit per-agent boolean opt-out.
+def _get_executing_agent_spill_config() -> dict[str, Any]:
+    """Return valid spill config for this run's agent, or an empty config.
 
     Older Code Puppy versions do not expose the execution-context seam. They
     safely retain the historical globally configured behavior.
@@ -93,25 +95,48 @@ def _is_enabled_for_executing_agent() -> bool:
     try:
         from code_puppy.agent_execution_context import get_executing_agent
     except ImportError:
-        return True
+        return {}
 
     agent = get_executing_agent()
     if agent is None:
-        return True
+        return {}
 
     try:
         tools_config = agent.get_tools_config()
     except Exception:
         logger.debug("Could not read executing agent tools_config", exc_info=True)
-        return True
+        return {}
 
     if not isinstance(tools_config, dict):
-        return True
+        return {}
     spill_config = tools_config.get(AGENT_CONFIG_KEY)
-    if not isinstance(spill_config, dict):
-        return True
+    return spill_config if isinstance(spill_config, dict) else {}
+
+
+def _is_agent_spill_enabled(spill_config: dict[str, Any]) -> bool:
+    """Return false only for an explicit per-agent boolean opt-out."""
     enabled = spill_config.get(AGENT_ENABLED_KEY, True)
     return enabled if isinstance(enabled, bool) else True
+
+
+def _get_agent_skip_tools(spill_config: dict[str, Any]) -> frozenset[str]:
+    """Return valid exact-name skips contributed by one agent."""
+    raw = spill_config.get(AGENT_SKIP_TOOLS_KEY)
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(
+        name.strip() for name in raw if isinstance(name, str) and name.strip()
+    )
+
+
+def _is_enabled_for_executing_agent(
+    spill_config: dict[str, Any] | None = None,
+) -> bool:
+    """Return whether spill is enabled for the executing agent."""
+    effective_config = (
+        _get_executing_agent_spill_config() if spill_config is None else spill_config
+    )
+    return _is_agent_spill_enabled(effective_config)
 
 
 def _byte_size(text: str) -> int:
@@ -244,7 +269,10 @@ async def _on_post_tool_call(
     try:
         if not isinstance(result, dict) or set(result) == {"error"}:
             return
-        if not _is_enabled_for_executing_agent():
+        spill_config = _get_executing_agent_spill_config()
+        if not _is_enabled_for_executing_agent(spill_config):
+            return
+        if tool_name in _get_agent_skip_tools(spill_config):
             return
         # Capture session attribution before entering the worker. The result
         # reference remains valid and the callback dispatcher awaits us before
@@ -279,6 +307,7 @@ register_callback("post_tool_call", _on_post_tool_call)
 __all__ = [
     "AGENT_CONFIG_KEY",
     "AGENT_ENABLED_KEY",
+    "AGENT_SKIP_TOOLS_KEY",
     "DEFAULT_MAX_INLINE_BYTES",
     "DEFAULT_PREVIEW_BYTES",
     "DEFAULT_SKIP_TOOLS",
@@ -287,7 +316,10 @@ __all__ = [
     "ROOT_KEY",
     "SKIP_TOOLS_KEY",
     "_build_replacement",
+    "_get_agent_skip_tools",
+    "_get_executing_agent_spill_config",
     "_get_int",
+    "_is_agent_spill_enabled",
     "_is_enabled_for_executing_agent",
     "_on_post_tool_call",
     "_on_startup",

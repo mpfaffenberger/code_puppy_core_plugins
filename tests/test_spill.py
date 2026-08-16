@@ -195,6 +195,41 @@ async def test_agent_can_disable_spill_without_affecting_concurrent_agent(
     assert len(list(_spill_root.glob("session-*/*"))) == 1
 
 
+def test_agent_can_skip_selected_tool_while_spilling_other_tools(_spill_root):
+    config.set_value(spill.MAX_INLINE_KEY, "500")
+    config.set_value(spill.PREVIEW_KEY, "100")
+    skipped_result = {"content": "s" * 5000}
+    skipped_original = skipped_result.copy()
+    default_skipped_result = {"content": "r" * 5000}
+    default_skipped_original = default_skipped_result.copy()
+    spilled_result = {"content": "p" * 5000}
+    agent = _ConfiguredAgent(
+        {"spill": {"skip_tools": [" custom_report ", "", 123, None]}}
+    )
+
+    with executing_agent_context(agent):
+        _call("custom_report", skipped_result)
+        _call("read_file", default_skipped_result)
+        _call("other_tool", spilled_result)
+
+    assert skipped_result == skipped_original
+    assert default_skipped_result == default_skipped_original
+    assert "Full output stored at:" in spilled_result["content"]
+    assert len(list(_spill_root.glob("session-*/*"))) == 1
+
+
+def test_malformed_agent_skip_tools_fails_open(_spill_root):
+    config.set_value(spill.MAX_INLINE_KEY, "500")
+    result = {"content": "x" * 5000}
+    agent = _ConfiguredAgent({"spill": {"skip_tools": "custom_report"}})
+
+    with executing_agent_context(agent):
+        _call("custom_report", result)
+
+    assert "Full output stored at:" in result["content"]
+    assert list(_spill_root.glob("session-*/*"))
+
+
 def test_invalid_agent_spill_setting_fails_open(_spill_root):
     config.set_value(spill.MAX_INLINE_KEY, "500")
     result = {"stdout": "x" * 5000}
