@@ -35,9 +35,50 @@ jobs:
           CODE_PUPPY_TEST_FAST: '1'
         run: uv run pytest -q
 
+  minimum-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimum supported runtime
+        run: |
+          pip install uv
+          uv venv
+          uv pip install "code-puppy @ git+https://github.com/mpfaffenberger/code_puppy.git@757db1cf33138dcf34ea58a7888f4a16f4f4ca1c"
+          uv pip install -e . --group dev
+          uv pip install "pydantic>=2.11,<2.12"
+      - name: Minimum-version spill contract
+        env:
+          CI: '1'
+          CODE_PUPPY_TEST_FAST: '1'
+        run: |
+          uv run --no-sync python -c 'import pydantic; assert pydantic.__version__.startswith("2.11.")'
+          uv run --no-sync pytest -q tests/test_spill.py tests/test_spill_models.py tests/test_spill_static_gate.py
+
+  coordinated-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install tooling and coordinated Code Puppy runtime
+        run: |
+          pip install uv
+          uv venv
+          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@dcb6618454a6ba22ccf7077a20f12c92d82fc847"
+          uv pip install -e . --group dev
+      - name: Coordinated spill contract
+        env:
+          CI: '1'
+          CODE_PUPPY_TEST_FAST: '1'
+        run: uv run pytest -q tests/test_spill.py tests/test_spill_models.py tests/test_spill_context.py tests/test_spill_static_gate.py
+
   build-publish:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, minimum-compatibility, coordinated-contract]
     env:
       HAS_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
     steps:

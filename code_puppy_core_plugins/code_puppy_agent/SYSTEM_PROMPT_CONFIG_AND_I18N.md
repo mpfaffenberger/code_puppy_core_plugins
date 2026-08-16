@@ -79,22 +79,35 @@ did to your config are two separate actions.
 ### Bounding oversized tool results with `spill`
 
 The builtin `spill` plugin saves oversized top-level string fields from plain
-dictionaries and Pydantic output models to private files, then substitutes
-bounded head/tail previews with retrieval guidance. It leaves error-only and
-unsupported results such as strings and `ToolReturn` image payloads untouched.
+dictionaries and safely mutable Pydantic output models to private files, then
+substitutes bounded head/tail previews with retrieval guidance. Pydantic support
+is deliberately conservative: only an audited allowlist of Code Puppy built-in
+scalar output classes is eligible (shell, file-listing, and agent-invocation
+results). Arbitrary/custom Pydantic models—including nested fields, custom
+validators/serializers/schema hooks, aliases, extras, exclusions, computed or
+frozen fields—remain inline. Error-only
+results, plain strings, and `ToolReturn` image payloads remain untouched when
+there is no pre-tool hook context. Hook context creates a safely serialized
+textual dictionary envelope; that envelope may spill regardless of the original
+shape, without exposing excluded Pydantic fields through `str(model)`.
 `read_file` is skipped to avoid a read → spill → read loop; `activate_skill` is
 skipped because its instructions are intentionally consumed as one unit.
 
 | `puppy.cfg` key | Default | Meaning |
 |-----------------|---------|---------|
-| `spill_max_inline_bytes` | `32768` | Aggregate inline string-byte cap; `0` or negative disables spilling |
+| `spill_max_inline_bytes` | `32768` | Aggregate decoded UTF-8 bytes in supported top-level string values; excludes JSON keys/syntax/escaping, wire bytes, and tokens; `0` or negative disables |
 | `spill_preview_bytes` | `4096` | Head-plus-tail source-byte budget per spilled field |
 | `spill_root` | unset | Storage root override; otherwise use a private OS temp directory |
 | `spill_skip_tools` | `read_file,activate_skill` | Comma-separated tool names that must remain inline |
 
-Only declared top-level string fields count toward the cap; nested strings are
-not traversed. Storage and in-place model mutation are best-effort: any failure
-keeps the original successful tool result inline.
+Only supported top-level string values count toward this decoded-value budget;
+nested strings are not traversed. Spill validates model replacements on a
+fresh schema-validated candidate in a worker and commits replacements together
+only if the live result still matches its snapshot. Storage and mutation are
+best-effort: any validation, persistence, cancellation, stale-plan, or commit
+failure keeps the newer/original successful result inline and attempts to
+remove every staged file. Cleanup itself remains best-effort when the operating
+system refuses deletion.
 
 An individual JSON agent can disable spill while leaving it enabled globally:
 

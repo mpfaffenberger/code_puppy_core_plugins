@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import secrets
@@ -11,6 +12,8 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _default_root: Path | None = None
 _process_session_id: str | None = None
@@ -137,16 +140,54 @@ def save_text(
     path = directory / filename
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = -1
+    created = False
     try:
         if directory_fd is None:
             descriptor = os.open(path, flags, 0o600)
         else:
             descriptor = os.open(filename, flags, 0o600, dir_fd=directory_fd)
+        created = True
         if hasattr(os, "fchmod"):
             os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as spill_file:
             descriptor = -1
             spill_file.write(content)
+        if directory_fd is not None:
+            try:
+                os.close(directory_fd)
+            except OSError as close_error:
+                # The payload file is already successfully closed. A directory-handle
+                # close error must not turn success into an uncleanable failure.
+                logger.debug(
+                    "Could not close spill directory handle (%s)",
+                    type(close_error).__name__,
+                )
+            directory_fd = None
+    except BaseException:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            descriptor = -1
+        if created:
+            try:
+                if directory_fd is None:
+                    os.unlink(path)
+                else:
+                    os.unlink(filename, dir_fd=directory_fd)
+            except OSError as cleanup_error:
+                logger.warning(
+                    "Could not remove incomplete spill file (%s)",
+                    type(cleanup_error).__name__,
+                )
+        if directory_fd is not None:
+            try:
+                os.close(directory_fd)
+            except OSError:
+                pass
+            directory_fd = None
+        raise
     finally:
         if descriptor >= 0:
             os.close(descriptor)

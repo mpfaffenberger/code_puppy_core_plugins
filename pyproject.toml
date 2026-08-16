@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
     "httpx>=0.24.1,<1",
+    "pydantic>=2.11,<3",
 ]
 license = {text = "MIT"}
 authors = [{name = "Michael Pfaffenberger"}]

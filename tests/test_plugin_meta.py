@@ -18,6 +18,8 @@ from unittest.mock import patch
 import pytest
 
 from code_puppy import callbacks
+
+from tests.callback_registry_helpers import preserve_callback_registry
 from code_puppy_core_plugins.plugin_list import plugin_meta
 from code_puppy_core_plugins.plugin_list.plugins_menu_render import (
     fill_pane,
@@ -34,19 +36,8 @@ def clean_callbacks():
     Tests register fake-owner callbacks via the loading-context machinery;
     this keeps that pollution from leaking into other tests.
     """
-    saved_callbacks = {
-        phase: list(funcs) for phase, funcs in callbacks._callbacks.items()
-    }
-    saved_owners = dict(callbacks._callback_owners)
-    saved_loading = callbacks._current_loading_plugin
-    try:
+    with preserve_callback_registry(callbacks):
         yield
-    finally:
-        for phase in callbacks._callbacks:
-            callbacks._callbacks[phase] = saved_callbacks.get(phase, [])
-        callbacks._callback_owners.clear()
-        callbacks._callback_owners.update(saved_owners)
-        callbacks._current_loading_plugin = saved_loading
 
 
 def _register_owned(owner: str, phase: str):

@@ -5,13 +5,20 @@ Ported from DeepSeek Harness's MIT-licensed spill design. See
 
 The post-tool hook receives the same result object that Code Puppy later
 serializes for the model. This plugin can therefore replace top-level string
-fields in plain dictionaries and mutable Pydantic models in place. Other
-results (notably plain strings and ``ToolReturn`` image payloads) cannot be
-replaced through this hook and are deliberately left untouched.
+fields in exact built-in dictionaries and an audited allowlist of Code Puppy
+scalar output models in place. The allowlist covers practical shell,
+file-listing, and agent-invocation results while arbitrary/custom Pydantic
+models remain inline. Captured serializer/validator identities and runtime
+field types must still match before an allowlisted model is inspected.
+Other results (notably strings and ``ToolReturn`` image payloads) are untouched
+unless pre-tool hook context has safely converted the combined return into a
+plain textual envelope, which is independently eligible for spilling.
 
-When the combined UTF-8 size of top-level string values exceeds the configured
-cap, fields are considered largest-first. Their full text is saved verbatim,
-then replaced by a bounded byte-sliced head/tail preview and a retrieval notice.
+When the combined decoded UTF-8 size of top-level string values exceeds the
+configured budget, fields are considered largest-first. JSON keys, syntax,
+escaping, provider wire bytes, and tokens are intentionally outside this
+budget. Full text is saved verbatim, then replaced by a bounded byte-sliced
+head/tail preview and a retrieval notice.
 ``read_file`` is skipped by default to avoid a read -> spill -> read loop.
 ``activate_skill`` is also skipped because its instructions are intentionally
 consumed as one semantic unit. Every failure is best-effort: the successful
@@ -31,16 +38,39 @@ An individual agent can opt out or add exact-name tool skips:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import math
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from code_puppy.callbacks import register_callback
 
-from code_puppy.callbacks import register_callback, unregister_callback
+try:
+    from code_puppy.callbacks import (
+        _register_terminal_callback,
+        on_final_tool_result as _final_tool_result_api,
+    )
+except ImportError:  # Compatibility while coordinated Code Puppy releases roll out.
+    _HAS_FINAL_TOOL_RESULT = False
+    _HAS_TERMINAL_CALLBACKS = False
+else:
+    _HAS_FINAL_TOOL_RESULT = callable(_final_tool_result_api)
+    _HAS_TERMINAL_CALLBACKS = callable(_register_terminal_callback)
 
 from . import store
+from .result_shapes import (
+    ModelValidationSpec,
+    byte_size as _byte_size,
+    commit_replacements as _commit_replacements,
+    model_facing_mapping as _model_facing_mapping,
+    model_validation_spec as _model_validation_spec,
+    result_accepts_fields as _result_accepts_fields,
+    string_fields as _string_fields,
+    validate_model_replacements as _validate_model_replacements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +84,9 @@ AGENT_SKIP_TOOLS_KEY = "skip_tools"
 DEFAULT_MAX_INLINE_BYTES = 32768
 DEFAULT_PREVIEW_BYTES = 4096
 DEFAULT_SKIP_TOOLS = frozenset({"activate_skill", "read_file"})
+MAX_SPILL_FIELDS = 128
 OMISSION_MARKER = "\n\n[...]\n\n"
+_CLEANUP_EXECUTOR = concurrent.futures.ThreadPoolExecutor(1, "spill-cleanup")
 
 
 def _get_value(key: str) -> Any:
@@ -144,55 +176,73 @@ def _is_enabled_for_executing_agent(
     return _is_agent_spill_enabled(effective_config)
 
 
-def _result_items(result: Any) -> list[tuple[Any, Any]] | None:
-    """Return declared top-level result fields for supported mutable shapes."""
-    if isinstance(result, dict):
-        return list(result.items())
-    if isinstance(result, BaseModel):
-        try:
-            return [
-                (field_name, getattr(result, field_name))
-                for field_name in type(result).model_fields
-            ]
-        except Exception:
-            logger.debug("Could not inspect Pydantic tool result", exc_info=True)
-    return None
+@dataclass(frozen=True)
+class _SpillSettings:
+    cap: int
+    preview_bytes: int
+    root: str | None
+    skip_tools: frozenset[str]
 
 
-def _apply_replacements(result: Any, replacements: dict[Any, str]) -> bool:
-    """Commit replacements in place, rolling model fields back on failure."""
-    if isinstance(result, dict):
-        result.update(replacements)
-        return True
-    if not isinstance(result, BaseModel):
+@dataclass(frozen=True)
+class _SpillPlan:
+    replacements: dict[Any, str]
+    expected_strings: dict[Any, str]
+    paths: tuple[Path, ...]
+    model_validated: bool
+
+
+@dataclass
+class _SpillJob:
+    """Coordinate worker-owned files with cancellation on the event loop."""
+
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+    _cancelled: bool = False
+    _paths: set[Path] = field(default_factory=set)
+
+    def is_cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def track(self, path: Path) -> bool:
+        with self._lock:
+            if not self._cancelled:
+                self._paths.add(path)
+                return True
+        _cleanup_paths([path])
         return False
 
-    originals = {field_name: getattr(result, field_name) for field_name in replacements}
-    applied: list[Any] = []
-    try:
-        for field_name, replacement in replacements.items():
-            setattr(result, field_name, replacement)
-            applied.append(field_name)
-    except Exception:
+    def forget(self, path: Path) -> None:
+        with self._lock:
+            self._paths.discard(path)
+
+    def cancel(self) -> tuple[Path, ...]:
+        with self._lock:
+            self._cancelled = True
+            paths = tuple(self._paths)
+            self._paths.clear()
+        return paths
+
+    def release(self) -> None:
+        with self._lock:
+            self._paths.clear()
+
+
+def _get_settings() -> _SpillSettings:
+    preview_bytes = _get_int(PREVIEW_KEY, DEFAULT_PREVIEW_BYTES)
+    if preview_bytes < 0:
         logger.warning(
-            "Could not mutate Pydantic tool result; keeping it inline",
-            exc_info=True,
+            "Invalid %s value; falling back to %d",
+            PREVIEW_KEY,
+            DEFAULT_PREVIEW_BYTES,
         )
-        for field_name in reversed(applied):
-            try:
-                setattr(result, field_name, originals[field_name])
-            except Exception:
-                logger.error(
-                    "Could not roll back Pydantic result field %r",
-                    field_name,
-                    exc_info=True,
-                )
-        return False
-    return True
-
-
-def _byte_size(text: str) -> int:
-    return len(text.encode("utf-8"))
+        preview_bytes = DEFAULT_PREVIEW_BYTES
+    return _SpillSettings(
+        cap=_get_int(MAX_INLINE_KEY, DEFAULT_MAX_INLINE_BYTES),
+        preview_bytes=preview_bytes,
+        root=_get_root(),
+        skip_tools=_get_skip_tools(),
+    )
 
 
 def _preview(text: str, budget: int) -> tuple[str, int]:
@@ -213,6 +263,11 @@ def _notice(omitted: int, path: Path) -> str:
         f"(~{omitted} bytes omitted. Full output stored at: {path}. "
         "Retrieve it with read_file using start_line/num_lines, or grep this path.)"
     )
+
+
+def _minimum_notice_bytes(original_bytes: int) -> int:
+    """Lower bound for a zero-preview notice before allocating a spill path."""
+    return _byte_size(_notice(original_bytes, Path(".")))
 
 
 def _build_replacement(
@@ -242,72 +297,174 @@ def _build_replacement(
         budget = max(0, budget - max(1, replacement_bytes - limit))
 
 
-def _spill_result(tool_name: str, result: Any, session_id: str | None = None) -> None:
-    cap = _get_int(MAX_INLINE_KEY, DEFAULT_MAX_INLINE_BYTES)
-    if cap <= 0 or tool_name in _get_skip_tools():
-        return
-    preview_bytes = _get_int(PREVIEW_KEY, DEFAULT_PREVIEW_BYTES)
-    if preview_bytes < 0:
-        logger.warning(
-            "Invalid %s value; falling back to %d",
-            PREVIEW_KEY,
-            DEFAULT_PREVIEW_BYTES,
-        )
-        preview_bytes = DEFAULT_PREVIEW_BYTES
-
-    result_items = _result_items(result)
-    if result_items is None:
-        return
-    fields = [
-        (key, value, _byte_size(value))
-        for key, value in result_items
-        if isinstance(value, str)
-    ]
-    total = sum(size for _, _, size in fields)
-    if total <= cap:
-        return
-
-    replacements: dict[Any, str] = {}
-    for key, original, original_bytes in sorted(
-        fields, key=lambda item: item[2], reverse=True
-    ):
-        if total <= cap:
-            break
+def _cleanup_paths(paths: tuple[Path, ...] | list[Path]) -> None:
+    for path in set(paths):
         try:
-            path = store.save_text(
-                original, tool_name, _get_root(), session_id=session_id
-            )
+            path.unlink(missing_ok=True)
         except Exception:
-            logger.warning(
-                "Failed to spill %s result field %r; keeping it inline",
-                tool_name,
-                key,
-                exc_info=True,
-            )
-            continue
+            logger.debug("Could not clean up an unused spill file")
 
-        other_bytes = total - original_bytes
-        field_limit = cap - other_bytes if other_bytes < cap else None
-        replacement = _build_replacement(
-            original,
-            path,
-            preview_bytes,
-            field_limit,
+
+def _prepare_spill(
+    tool_name: str,
+    fields: tuple[tuple[Any, str, int], ...],
+    settings: _SpillSettings,
+    session_id: str | None,
+    job: _SpillJob | None = None,
+    model_spec: ModelValidationSpec | None = None,
+) -> _SpillPlan | None:
+    """Build a globally feasible bounded plan, then persist only needed fields."""
+    total = sum(size for _, _, size in fields)
+    if total <= settings.cap:
+        return None
+
+    ordered = sorted(fields, key=lambda item: item[2], reverse=True)
+    candidates = [
+        (*item, _minimum_notice_bytes(item[2]))
+        for item in ordered
+        if _minimum_notice_bytes(item[2]) < item[2]
+    ][:MAX_SPILL_FIELDS]
+    maximum_reduction = sum(
+        original_bytes - minimum_bytes
+        for _, _, original_bytes, minimum_bytes in candidates
+    )
+    if total - maximum_reduction > settings.cap:
+        return None
+
+    active_job = job or _SpillJob()
+    paths: list[Path] = []
+    selected: list[tuple[Any, str, Path, str]] = []
+    minimum_total = total
+    try:
+        for key, original, original_bytes, _ in candidates:
+            if minimum_total <= settings.cap:
+                break
+            if active_job.is_cancelled():
+                _cleanup_paths([*paths, *active_job.cancel()])
+                return None
+            try:
+                path = store.save_text(
+                    original,
+                    tool_name,
+                    settings.root,
+                    session_id=session_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist a %s spill field (%s); keeping it inline",
+                    tool_name,
+                    type(exc).__name__,
+                )
+                continue
+
+            try:
+                if not active_job.track(path):
+                    return None
+                paths.append(path)
+            except BaseException:
+                _cleanup_paths([path, *active_job.cancel()])
+                raise
+
+            minimum = _build_replacement(original, path, 0, None)
+            if minimum is None:
+                _cleanup_paths([path])
+                active_job.forget(path)
+                paths.remove(path)
+                continue
+            selected.append((key, original, path, minimum))
+            minimum_total += _byte_size(minimum) - original_bytes
+
+        if minimum_total > settings.cap or active_job.is_cancelled():
+            _cleanup_paths([*paths, *active_job.cancel()])
+            return None
+
+        slack = settings.cap - minimum_total
+        replacements: dict[Any, str] = {}
+        for key, original, path, minimum in selected:
+            minimum_bytes = _byte_size(minimum)
+            replacement = _build_replacement(
+                original,
+                path,
+                settings.preview_bytes,
+                minimum_bytes + slack,
+            )
+            if replacement is None:
+                replacement = minimum
+            growth = _byte_size(replacement) - minimum_bytes
+            slack -= growth
+            replacements[key] = replacement
+
+        if model_spec is not None and not _validate_model_replacements(
+            model_spec, replacements, settings.cap
+        ):
+            _cleanup_paths([*paths, *active_job.cancel()])
+            return None
+        return _SpillPlan(
+            replacements=replacements,
+            expected_strings={key: value for key, value, _ in fields},
+            paths=tuple(paths),
+            model_validated=model_spec is not None,
         )
-        if replacement is None:
-            logger.warning(
-                "Spill notice for %s result field %r cannot fit; keeping it inline",
-                tool_name,
-                key,
-            )
-            continue
-        replacements[key] = replacement
-        total = other_bytes + _byte_size(replacement)
+    except BaseException:
+        _cleanup_paths([*paths, *active_job.cancel()])
+        raise
 
-    # Commit atomically. A partial preview set that still exceeds the cap is
-    # neither bounded nor graceful; keep every original inline in that case.
-    if total <= cap:
-        _apply_replacements(result, replacements)
+
+def _inspect_and_prepare_spill(
+    tool_name: str,
+    result: Any,
+    settings: _SpillSettings,
+    job: _SpillJob,
+    session_id: str | None = None,
+) -> _SpillPlan | None:
+    """Inspect, size, validate, and persist entirely on a worker thread."""
+    if job.is_cancelled():
+        return None
+    mapping = _model_facing_mapping(result)
+    if mapping is None or set(mapping) == {"error"}:
+        return None
+    fields = tuple(_string_fields(mapping))
+    if sum(size for _, _, size in fields) <= settings.cap:
+        return None
+    if not _result_accepts_fields(result, tuple(key for key, _, _ in fields)):
+        return None
+    return _prepare_spill(
+        tool_name,
+        fields,
+        settings,
+        session_id or store.current_session_id(),
+        job,
+        _model_validation_spec(result),
+    )
+
+
+def _spill_result(tool_name: str, result: Any, session_id: str | None = None) -> None:
+    """Synchronous compatibility entry point used by tests and embedders."""
+    settings = _get_settings()
+    if settings.cap <= 0 or tool_name in settings.skip_tools:
+        return
+    plan = _inspect_and_prepare_spill(
+        tool_name,
+        result,
+        settings,
+        _SpillJob(),
+        session_id,
+    )
+    if plan is None:
+        return
+    committed = False
+    try:
+        committed = _commit_replacements(
+            result,
+            plan.replacements,
+            plan.expected_strings,
+            model_validated=plan.model_validated,
+        )
+    except Exception as exc:
+        logger.debug("Synchronous spill commit failed (%s)", type(exc).__name__)
+    finally:
+        if not committed:
+            _cleanup_paths(plan.paths)
 
 
 async def _on_post_tool_call(
@@ -320,34 +477,90 @@ async def _on_post_tool_call(
     """Spill oversized string fields off the event loop without breaking calls."""
     _ = tool_args, duration_ms, context
     try:
-        result_items = _result_items(result)
-        if result_items is None or {key for key, _ in result_items} == {"error"}:
-            return
+        # Resolve every setting before inspecting result fields or dispatching
+        # work. Disabled/skipped tools should pay essentially zero spill cost.
         spill_config = _get_executing_agent_spill_config()
         if not _is_enabled_for_executing_agent(spill_config):
             return
         if tool_name in _get_agent_skip_tools(spill_config):
             return
-        # Capture session attribution before entering the worker. The result
-        # reference remains valid and the callback dispatcher awaits us before
-        # the model serializes it.
-        session_id = store.current_session_id()
-        await asyncio.to_thread(_spill_result, tool_name, result, session_id)
-    except Exception:
+        settings = _get_settings()
+        if settings.cap <= 0 or tool_name in settings.skip_tools:
+            return
+
+        job = _SpillJob()
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                _inspect_and_prepare_spill,
+                tool_name,
+                result,
+                settings,
+                job,
+            )
+        )
+        try:
+            plan = await worker
+        except asyncio.CancelledError:
+            paths = job.cancel()
+            if paths:
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        _CLEANUP_EXECUTOR,
+                        _cleanup_paths,
+                        paths,
+                    )
+                except BaseException as cleanup_error:
+                    logger.debug(
+                        "Cancellation spill cleanup failed (%s)",
+                        type(cleanup_error).__name__,
+                    )
+            raise
+        except Exception:
+            await asyncio.to_thread(_cleanup_paths, job.cancel())
+            raise
+        if plan is None:
+            await asyncio.to_thread(_cleanup_paths, job.cancel())
+            return
+
+        committed = False
+        try:
+            committed = _commit_replacements(
+                result,
+                plan.replacements,
+                plan.expected_strings,
+                model_validated=plan.model_validated,
+            )
+        except Exception as exc:
+            logger.debug("spill commit failed (%s)", type(exc).__name__)
+        finally:
+            if committed:
+                job.release()
+            else:
+                await asyncio.to_thread(_cleanup_paths, job.cancel())
+    except Exception as exc:
         logger.debug(
-            "spill plugin failed; keeping the tool result inline", exc_info=True
+            "spill plugin failed (%s); keeping the tool result inline",
+            type(exc).__name__,
         )
 
 
 def _on_startup() -> None:
-    """Move spill behind result-mutating plugins so the final result is capped."""
-    if unregister_callback("post_tool_call", _on_post_tool_call):
-        # unregister_callback intentionally preserves callback ownership, so
-        # disabled-plugin filtering still recognizes this as the spill hook.
-        register_callback("post_tool_call", _on_post_tool_call)
+    """Retain legacy startup ordering for older Code Puppy releases."""
+    if _HAS_FINAL_TOOL_RESULT and _HAS_TERMINAL_CALLBACKS:
+        return
+    from code_puppy import callbacks
+
+    callbacks.unregister_callback("post_tool_call", _on_post_tool_call)
+    callbacks.register_callback("post_tool_call", _on_post_tool_call)
 
 
-register_callback("startup", _on_startup)
+def _register_callbacks() -> None:
+    if _HAS_FINAL_TOOL_RESULT and _HAS_TERMINAL_CALLBACKS:
+        _register_terminal_callback("final_tool_result", _on_post_tool_call)
+        return
+    register_callback("post_tool_call", _on_post_tool_call)
+    register_callback("startup", _on_startup)
 
 
 def _reset_state() -> None:
@@ -355,7 +568,7 @@ def _reset_state() -> None:
     store._reset_state()
 
 
-register_callback("post_tool_call", _on_post_tool_call)
+_register_callbacks()
 
 
 __all__ = [
@@ -369,16 +582,19 @@ __all__ = [
     "PREVIEW_KEY",
     "ROOT_KEY",
     "SKIP_TOOLS_KEY",
-    "_apply_replacements",
     "_build_replacement",
+    "_cleanup_paths",
+    "_commit_replacements",
     "_get_agent_skip_tools",
     "_get_executing_agent_spill_config",
     "_get_int",
+    "_get_settings",
     "_is_agent_spill_enabled",
     "_is_enabled_for_executing_agent",
+    "_model_facing_mapping",
     "_on_post_tool_call",
     "_on_startup",
+    "_prepare_spill",
     "_reset_state",
-    "_result_items",
     "_spill_result",
 ]

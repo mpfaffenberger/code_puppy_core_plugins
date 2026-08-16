@@ -423,14 +423,16 @@ def test_set_awaiting_user_input_fires_callback():
     from code_puppy.tools.command_runner import set_awaiting_user_input
 
     seen: list[bool] = []
-    callbacks.register_callback(
-        "awaiting_user_input", lambda awaiting: seen.append(awaiting)
-    )
+
+    def observe(awaiting):
+        seen.append(awaiting)
+
+    callbacks.register_callback("awaiting_user_input", observe)
     try:
         set_awaiting_user_input(True)
         set_awaiting_user_input(False)
     finally:
-        callbacks._callbacks["awaiting_user_input"].clear()
+        callbacks.unregister_callback("awaiting_user_input", observe)
     assert seen == [True, False]
 
 

@@ -1,1 +1,1 @@
-"""Keep oversized dict-shaped tool results out of model context."""
+"""Spill oversized supported tool results and textual hook envelopes."""

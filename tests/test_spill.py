@@ -10,13 +10,14 @@ import time
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, ConfigDict, field_validator
 
 from code_puppy import callbacks, config
-from code_puppy.agent_execution_context import executing_agent_context
-from code_puppy.tools.command_runner import ShellCommandOutput
-from code_puppy.tools.file_operations import ListFileOutput, ReadFileOutput
-from code_puppy.tools.skills_tools import SkillActivateOutput
+
+try:
+    from code_puppy.agent_execution_context import executing_agent_context
+except ImportError:
+    executing_agent_context = None
+
 from code_puppy.tools.subagent_context import (
     reset_conversation_root_id,
     set_conversation_root_id,
@@ -25,35 +26,26 @@ from code_puppy.tools.subagent_context import (
 from code_puppy_core_plugins.spill import register_callbacks as spill
 from code_puppy_core_plugins.spill import store
 
+_requires_execution_context = pytest.mark.skipif(
+    executing_agent_context is None,
+    reason="requires coordinated Code Puppy execution context",
+)
+_requires_final_result = pytest.mark.skipif(
+    not hasattr(callbacks, "on_final_tool_result"),
+    reason="requires coordinated Code Puppy final-result phase",
+)
+
 
 def _call(tool_name: str, result):
     asyncio.run(spill._on_post_tool_call(tool_name, {}, result, 1.0))
 
 
-def _string_bytes(result) -> int:
+def _string_bytes(result: dict) -> int:
     return sum(
         len(value.encode("utf-8"))
-        for _, value in (spill._result_items(result) or [])
+        for value in result.values()
         if isinstance(value, str)
     )
-
-
-class _ErrorOutput(BaseModel):
-    error: str
-
-
-class _RejectingOutput(BaseModel):
-    model_config = ConfigDict(validate_assignment=True)
-
-    first: str
-    second: str
-
-    @field_validator("second")
-    @classmethod
-    def reject_spill_preview(cls, value: str) -> str:
-        if "Full output stored at:" in value:
-            raise ValueError("second field must remain verbatim")
-        return value
 
 
 class _ConfiguredAgent:
@@ -102,91 +94,6 @@ def test_oversized_field_is_spilled_and_bounded(_spill_root):
     assert len(replacement.encode()) < len(full_output.encode())
     assert stat.S_IMODE(files[0].stat().st_mode) == 0o600
     assert stat.S_IMODE(files[0].parent.stat().st_mode) == 0o700
-
-
-def test_shell_command_output_model_is_spilled_and_serializes_preview(_spill_root):
-    config.set_value(spill.MAX_INLINE_KEY, "700")
-    config.set_value(spill.PREVIEW_KEY, "100")
-    full_output = "shell-head\n" + "x" * 5000 + "\nshell-tail"
-    result = ShellCommandOutput(
-        success=True,
-        command="produce-lots-of-output",
-        error="",
-        stdout=full_output,
-        stderr="",
-        exit_code=0,
-        execution_time=0.1,
-    )
-
-    _call("agent_run_shell_command", result)
-
-    files = list(_spill_root.glob("session-*/*"))
-    assert len(files) == 1
-    assert files[0].read_text(encoding="utf-8") == full_output
-    assert "Full output stored at:" in result.stdout
-    assert result.model_dump()["stdout"] == result.stdout
-    assert _string_bytes(result) <= 700
-
-
-def test_list_files_output_model_is_spilled(_spill_root):
-    config.set_value(spill.MAX_INLINE_KEY, "700")
-    config.set_value(spill.PREVIEW_KEY, "100")
-    full_output = "\n".join(f"file-{index}.txt" for index in range(1000))
-    result = ListFileOutput(content=full_output)
-
-    _call("list_files", result)
-
-    files = list(_spill_root.glob("session-*/*"))
-    assert len(files) == 1
-    assert files[0].read_text(encoding="utf-8") == full_output
-    assert "Full output stored at:" in result.content
-    assert _string_bytes(result) <= 700
-
-
-def test_default_skips_preserve_read_file_and_activated_skill_models(_spill_root):
-    config.set_value(spill.MAX_INLINE_KEY, "500")
-    read_result = ReadFileOutput(content="r" * 5000, num_tokens=1000)
-    skill_result = SkillActivateOutput(
-        skill_name="large-skill",
-        content="s" * 5000,
-        resources=[],
-    )
-    original_read = read_result.model_copy(deep=True)
-    original_skill = skill_result.model_copy(deep=True)
-
-    _call("read_file", read_result)
-    _call("activate_skill", skill_result)
-
-    assert read_result == original_read
-    assert skill_result == original_skill
-    assert not list(_spill_root.glob("session-*/*"))
-
-
-def test_error_only_model_result_is_untouched(_spill_root):
-    config.set_value(spill.MAX_INLINE_KEY, "500")
-    result = _ErrorOutput(error="x" * 5000)
-    original = result.model_copy(deep=True)
-
-    _call("some_tool", result)
-
-    assert result == original
-    assert not list(_spill_root.glob("session-*/*"))
-
-
-def test_model_assignment_failure_rolls_back_all_fields(monkeypatch):
-    config.set_value(spill.MAX_INLINE_KEY, "700")
-    config.set_value(spill.PREVIEW_KEY, "50")
-    result = _RejectingOutput(first="a" * 3000, second="b" * 2000)
-    original = result.model_copy(deep=True)
-    monkeypatch.setattr(
-        store,
-        "save_text",
-        lambda *args, **kwargs: Path("/tmp/spill-result"),
-    )
-
-    _call("some_tool", result)
-
-    assert result == original
 
 
 def test_multiple_fields_spill_largest_first_until_under_cap(monkeypatch):
@@ -249,6 +156,88 @@ def test_storage_failure_keeps_original_result(monkeypatch):
     assert result == original
 
 
+@pytest.mark.parametrize("failure_point", ["write", "close"])
+def test_save_text_removes_partial_file_on_persistence_failure(
+    _spill_root,
+    monkeypatch,
+    failure_point,
+):
+    real_fdopen = os.fdopen
+
+    class FailingFile:
+        def __init__(self, descriptor, *args, **kwargs):
+            self._file = real_fdopen(descriptor, *args, **kwargs)
+
+        def __enter__(self):
+            return self
+
+        def write(self, content):
+            if failure_point == "write":
+                self._file.write(content[:6])
+                self._file.flush()
+                raise OSError("disk full")
+            return self._file.write(content)
+
+        def __exit__(self, exc_type, exc, traceback):
+            self._file.close()
+            if exc_type is None and failure_point == "close":
+                raise OSError("close failed")
+            return False
+
+    monkeypatch.setattr(os, "fdopen", FailingFile)
+
+    with pytest.raises(OSError):
+        store.save_text("SECRET" * 100, "some_tool", str(_spill_root), "session")
+
+    assert not [path for path in _spill_root.rglob("*") if path.is_file()]
+
+
+def test_directory_handle_close_error_does_not_misreport_persistence_failure(
+    _spill_root,
+    monkeypatch,
+):
+    real_open_session = store._open_session_dir
+    real_close = os.close
+    target = {}
+
+    def recording_open(root, session_id):
+        directory, descriptor = real_open_session(root, session_id)
+        if descriptor is None:
+            pytest.skip("platform has no directory-fd spill path")
+        target["descriptor"] = descriptor
+        return directory, descriptor
+
+    def close_then_raise(descriptor):
+        real_close(descriptor)
+        if descriptor == target.get("descriptor"):
+            raise OSError("simulated directory close error")
+
+    monkeypatch.setattr(store, "_open_session_dir", recording_open)
+    monkeypatch.setattr(os, "close", close_then_raise)
+
+    path = store.save_text("full output", "some_tool", str(_spill_root), "session")
+
+    assert path.read_text(encoding="utf-8") == "full output"
+
+
+def test_unexpected_preview_failure_cleans_staged_file(
+    _spill_root,
+    monkeypatch,
+):
+    config.set_value(spill.MAX_INLINE_KEY, "500")
+    result = {"stdout": "x" * 5000}
+    original = result.copy()
+
+    def fail_preview(*args, **kwargs):
+        raise RuntimeError("preview failed")
+
+    monkeypatch.setattr(spill, "_build_replacement", fail_preview)
+    _call("some_tool", result)
+
+    assert result == original
+    assert not list(_spill_root.glob("session-*/*"))
+
+
 def test_hostile_tool_name_cannot_escape_session_directory(_spill_root):
     config.set_value(spill.MAX_INLINE_KEY, "500")
     config.set_value(spill.PREVIEW_KEY, "50")
@@ -276,6 +265,43 @@ def test_zero_cap_disables_plugin():
     assert result == original
 
 
+@_requires_execution_context
+def test_agent_disabled_returns_before_result_inspection(monkeypatch):
+    result = {"stdout": "x" * 5000}
+    original = result.copy()
+    agent = _ConfiguredAgent({"spill": {"enabled": False}})
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("disabled spill must not inspect results or start work")
+
+    monkeypatch.setattr(spill, "_model_facing_mapping", fail_if_called)
+    monkeypatch.setattr(store, "current_session_id", fail_if_called)
+    monkeypatch.setattr(asyncio, "to_thread", fail_if_called)
+    with executing_agent_context(agent):
+        _call("some_tool", result)
+
+    assert result == original
+
+
+@_requires_execution_context
+def test_agent_skip_returns_before_result_inspection(monkeypatch):
+    result = {"stdout": "x" * 5000}
+    original = result.copy()
+    agent = _ConfiguredAgent({"spill": {"skip_tools": ["some_tool"]}})
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("agent-skipped spill must not inspect or start work")
+
+    monkeypatch.setattr(spill, "_model_facing_mapping", fail_if_called)
+    monkeypatch.setattr(store, "current_session_id", fail_if_called)
+    monkeypatch.setattr(asyncio, "to_thread", fail_if_called)
+    with executing_agent_context(agent):
+        _call("some_tool", result)
+
+    assert result == original
+
+
+@_requires_execution_context
 @pytest.mark.asyncio
 async def test_agent_can_disable_spill_without_affecting_concurrent_agent(
     _spill_root,
@@ -302,6 +328,7 @@ async def test_agent_can_disable_spill_without_affecting_concurrent_agent(
     assert len(list(_spill_root.glob("session-*/*"))) == 1
 
 
+@_requires_execution_context
 def test_agent_can_skip_selected_tool_while_spilling_other_tools(_spill_root):
     config.set_value(spill.MAX_INLINE_KEY, "500")
     config.set_value(spill.PREVIEW_KEY, "100")
@@ -325,6 +352,7 @@ def test_agent_can_skip_selected_tool_while_spilling_other_tools(_spill_root):
     assert len(list(_spill_root.glob("session-*/*"))) == 1
 
 
+@_requires_execution_context
 def test_malformed_agent_skip_tools_fails_open(_spill_root):
     config.set_value(spill.MAX_INLINE_KEY, "500")
     result = {"content": "x" * 5000}
@@ -337,6 +365,7 @@ def test_malformed_agent_skip_tools_fails_open(_spill_root):
     assert list(_spill_root.glob("session-*/*"))
 
 
+@_requires_execution_context
 def test_invalid_agent_spill_setting_fails_open(_spill_root):
     config.set_value(spill.MAX_INLINE_KEY, "500")
     result = {"stdout": "x" * 5000}
@@ -371,7 +400,7 @@ def test_multibyte_preview_respects_utf8_cap():
     assert "�" in result["stdout"]
 
 
-def test_tiny_cap_keeps_original_when_notice_cannot_fit():
+def test_tiny_cap_keeps_original_and_removes_unused_file(_spill_root):
     config.set_value(spill.MAX_INLINE_KEY, "1")
     result = {"stdout": "abc"}
     original = result.copy()
@@ -379,77 +408,40 @@ def test_tiny_cap_keeps_original_when_notice_cannot_fit():
     _call("some_tool", result)
 
     assert result == original
+    assert not list(_spill_root.glob("session-*/*"))
 
 
 @pytest.mark.asyncio
-async def test_pydantic_runner_sends_spilled_model_to_next_request(
-    _spill_root,
-):
-    from pydantic_ai import Agent
-    from pydantic_ai._tool_manager import ToolManager
-    from pydantic_ai.messages import (
-        ModelResponse,
-        TextPart,
-        ToolCallPart,
-        ToolReturnPart,
-    )
-    from pydantic_ai.models.function import FunctionModel
+async def test_slow_result_inspection_does_not_block_event_loop(monkeypatch):
+    config.set_value(spill.MAX_INLINE_KEY, "10000")
+    ticks = 0
+    running = True
+    real_inspect = spill._model_facing_mapping
 
-    from code_puppy.pydantic_patches import patch_tool_call_callbacks
+    async def ticker():
+        nonlocal ticks
+        while running:
+            ticks += 1
+            await asyncio.sleep(0.005)
 
-    config.set_value(spill.MAX_INLINE_KEY, str(spill.DEFAULT_MAX_INLINE_BYTES))
-    config.set_value(spill.PREVIEW_KEY, str(spill.DEFAULT_PREVIEW_BYTES))
-    seen_tool_return = {}
+    def slow_inspect(result):
+        time.sleep(0.1)
+        return real_inspect(result)
 
-    def model_function(messages, info):
-        _ = info
-        returns = [
-            part
-            for message in messages
-            for part in message.parts
-            if isinstance(part, ToolReturnPart)
-        ]
-        if not returns:
-            return ModelResponse(parts=[ToolCallPart("agent_run_shell_command", {})])
-        seen_tool_return["content"] = returns[-1].content
-        return ModelResponse(parts=[TextPart("done")])
+    monkeypatch.setattr(spill, "_model_facing_mapping", slow_inspect)
+    ticker_task = asyncio.create_task(ticker())
+    await asyncio.sleep(0.01)
+    before = ticks
+    await spill._on_post_tool_call("some_tool", {}, {"stdout": "small"}, 1.0)
+    running = False
+    await ticker_task
 
-    original_call_tool = ToolManager._call_tool
-    original_get_tool_def = ToolManager.get_tool_def
-    original_handle_call = ToolManager.handle_call
-    patch_tool_call_callbacks()
-    try:
-        agent = Agent(FunctionModel(model_function))
-
-        @agent.tool_plain
-        def agent_run_shell_command() -> ShellCommandOutput:
-            return ShellCommandOutput(
-                success=True,
-                command="generate-output",
-                error="",
-                stdout="x" * 50_000,
-                stderr="",
-                exit_code=0,
-                execution_time=0.1,
-            )
-
-        run_result = await agent.run("go")
-    finally:
-        ToolManager._call_tool = original_call_tool
-        ToolManager.get_tool_def = original_get_tool_def
-        ToolManager.handle_call = original_handle_call
-
-    content = seen_tool_return["content"]
-    assert run_result.output == "done"
-    assert isinstance(content, ShellCommandOutput)
-    assert "Full output stored at:" in content.stdout
-    assert "x" * 50_000 not in content.stdout
-    assert len(list(_spill_root.glob("session-*/*"))) == 1
+    assert ticks - before >= 5
 
 
 @pytest.mark.asyncio
 async def test_slow_storage_does_not_block_event_loop(monkeypatch):
-    config.set_value(spill.MAX_INLINE_KEY, "100")
+    config.set_value(spill.MAX_INLINE_KEY, "300")
     ticks = 0
     running = True
 
@@ -523,34 +515,80 @@ async def test_concurrent_subagents_do_not_use_racy_message_bus_sessions():
     assert first not in {"session-A", "session-B"}
 
 
+def test_legacy_registration_keeps_startup_ordering_fallback(monkeypatch):
+    registrations = []
+
+    def record(phase, function, **kwargs):
+        registrations.append((phase, function, kwargs))
+
+    monkeypatch.setattr(spill, "_HAS_TERMINAL_CALLBACKS", False)
+    monkeypatch.setattr(spill, "register_callback", record)
+
+    spill._register_callbacks()
+
+    assert registrations == [
+        ("post_tool_call", spill._on_post_tool_call, {}),
+        ("startup", spill._on_startup, {}),
+    ]
+
+
+def test_hybrid_runtime_uses_legacy_startup_reordering(monkeypatch):
+    operations = []
+
+    monkeypatch.setattr(spill, "_HAS_FINAL_TOOL_RESULT", True)
+    monkeypatch.setattr(spill, "_HAS_TERMINAL_CALLBACKS", False)
+    monkeypatch.setattr(
+        callbacks,
+        "unregister_callback",
+        lambda phase, function: operations.append(("unregister", phase, function)),
+    )
+    monkeypatch.setattr(
+        callbacks,
+        "register_callback",
+        lambda phase, function: operations.append(("register", phase, function)),
+    )
+
+    spill._on_startup()
+
+    assert operations == [
+        ("unregister", "post_tool_call", spill._on_post_tool_call),
+        ("register", "post_tool_call", spill._on_post_tool_call),
+    ]
+
+
+@_requires_final_result
+@pytest.mark.parametrize(
+    "priority",
+    [getattr(callbacks, "FINALIZER_CALLBACK_PRIORITY", 1000), 10_000_000],
+)
 @pytest.mark.asyncio
-async def test_startup_moves_spill_after_late_result_mutators(monkeypatch):
-    cap = 300
+async def test_terminal_boundary_keeps_spill_after_public_mutators(
+    _spill_root,
+    priority,
+):
+    cap = 700
+    config.set_value(spill.MAX_INLINE_KEY, str(cap))
+    config.set_value(spill.PREVIEW_KEY, "80")
     result = {"stdout": "x" * 5000}
 
     def late_mutator(tool_name, tool_args, result, duration_ms, context=None):
+        _ = tool_name, tool_args, duration_ms, context
         result["late"] = "z" * 50
 
-    callbacks.register_callback("post_tool_call", late_mutator)
+    callbacks.register_callback(
+        "final_tool_result",
+        late_mutator,
+        priority=priority,
+    )
     try:
-        spill._on_startup()
-        registered = callbacks.get_callbacks("post_tool_call", include_disabled=True)
-        assert registered[-1] is spill._on_post_tool_call
-
-        late_mutator("some_tool", {}, result, 1.0)
-        monkeypatch.setattr(
-            spill,
-            "_get_int",
-            lambda key, default: cap if key == spill.MAX_INLINE_KEY else 80,
+        registered = callbacks.get_callbacks("final_tool_result", include_disabled=True)
+        assert registered.index(late_mutator) < registered.index(
+            spill._on_post_tool_call
         )
-        monkeypatch.setattr(spill, "_get_skip_tools", lambda: frozenset())
-        monkeypatch.setattr(
-            store,
-            "save_text",
-            lambda *args, **kwargs: Path("/tmp/spill-result"),
-        )
-        await spill._on_post_tool_call("some_tool", {}, result, 1.0)
+        await callbacks.on_final_tool_result("some_tool", {}, result, 1.0)
     finally:
-        callbacks.unregister_callback("post_tool_call", late_mutator)
+        callbacks.unregister_callback("final_tool_result", late_mutator)
 
+    assert result["late"] == "z" * 50
     assert _string_bytes(result) <= cap
+    assert len(list(_spill_root.glob("session-*/*"))) == 1

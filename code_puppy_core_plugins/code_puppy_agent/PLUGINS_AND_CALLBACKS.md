@@ -19,9 +19,10 @@ auto-discovers it. Project plugins shadow user plugins on name collision.
 
 ## The callback hook system
 
-`register_callback(phase, func)` at module scope. The callback engine
-(`callbacks.py`) stores functions per phase and fires them at the right
-time. All hooks accept sync or async functions.
+`register_callback(phase, func, priority=0)` at module scope. The callback
+engine (`callbacks.py`) stores functions per phase and fires them at the right
+time. All hooks accept sync or async callables; higher priorities run later and
+equal priorities retain registration order.
 
 **Most important hooks for extending Code Puppy:**
 
@@ -36,26 +37,36 @@ time. All hooks accept sync or async functions.
 | `get_model_system_prompt` | Per-model prompt patch | `dict` with `instructions`/`handled` or `None` |
 | `custom_command` | Unknown `/slash` command | `True` (handled), `str` (message), or `None` (not mine) |
 | `pre_tool_call` | Before tool executes | Can modify args |
-| `post_tool_call` | After tool finishes | Observes result + duration; can mutate mutable result objects in place |
+| `post_tool_call` | After tool finishes, before hook context | Observes the original result + duration; can mutate mutable results in place |
+| `final_tool_result` | After hook-context composition | Last public mutable-result phase before the reserved terminal boundary |
 | `run_shell_command` | Before shell exec | Return `{"blocked": True}` to block |
 | `file_permission` | Before file op | `bool` — allow/deny |
 | `agent_run_start` / `agent_run_end` | Agent lifecycle | Observes name, model, session |
 
-The full list is in `callbacks.py` — `PhaseType` has ~45 phases.
+The authoritative full hook list is `callbacks.py`'s `PhaseType`.
 
-### Mutating results from `post_tool_call`
+### Mutating tool results
 
-The patched tool runner evaluates the result reference before awaiting
-`post_tool_call`. A callback can therefore mutate a mutable result object—such
-as a plain dictionary or Pydantic model—in place and the model sees the change.
-It cannot replace a string or other immutable result by rebinding its local
-argument. Tool exceptions arrive as error-only dicts and should remain intact.
+The patched runner first awaits `post_tool_call` with the original result. It
+then safely serializes any pre-tool hook context into a mutable envelope and
+awaits `final_tool_result` immediately before returning to pydantic-ai. A
+callback can mutate a mutable result object—such as a plain dictionary or a
+supported Pydantic model—in place and the model sees the change. It cannot
+replace a string or other immutable result by rebinding its local argument.
+Raised tool exceptions are observed by `post_tool_call` as error-only dicts, but
+`final_tool_result` runs only for successfully executed calls. Calls blocked by
+a pre-tool hook and calls that raise never enter the final phase.
 
-Mutation is order-sensitive: result-bounding callbacks must run after
-callbacks that append content. Sync callbacks also execute on the event
-loop, so blocking work belongs in an async callback via
-`asyncio.to_thread()`. The builtin `spill` plugin is the canonical
-implementation.
+Mutation is order-sensitive: result-bounding callbacks belong in
+`final_tool_result` after callbacks that append content.
+`register_callback(..., priority=N)` provides stable ordering regardless of
+later project-plugin loads; higher priorities run later, while equal priorities
+retain registration order. Public result mutators should use
+`FINALIZER_CALLBACK_PRIORITY`; Code Puppy reserves a separate, non-public
+terminal boundary after every public priority for invariant enforcement such as
+`spill`. Sync callbacks execute on the event loop, so blocking work belongs in
+an async callback via `asyncio.to_thread()`. Spill commits mutations only after
+worker persistence and schema validation return.
 
 ## Minimal plugin example
 
