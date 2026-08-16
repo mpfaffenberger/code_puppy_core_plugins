@@ -38,6 +38,7 @@ prune
 puppy_kennel
 puppy_spinner
 quick_resume
+read_before_write
 review_pr
 shell_safety
 spill
