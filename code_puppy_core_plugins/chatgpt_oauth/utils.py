@@ -10,7 +10,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import parse_qs as urllib_parse_qs
 from urllib.parse import urlencode, urlparse
 
@@ -20,6 +20,11 @@ from .config import (
     CHATGPT_OAUTH_CONFIG,
     get_chatgpt_models_path,
     get_token_storage_path,
+)
+from .model_catalog import (
+    CodexModelInfo,
+    fallback_catalog,
+    parse_model_catalog,
 )
 
 logger = logging.getLogger(__name__)
@@ -353,12 +358,13 @@ DEFAULT_CODEX_MODELS = [
     "codex-auto-review",
 ]
 
-# Per-model context length overrides (tokens).
-# Models not listed here use CHATGPT_OAUTH_CONFIG["default_context_length"] (272,000).
+# Per-model context length overrides (tokens), used only when the Codex
+# /models catalog is unreachable. These match the effective window the
+# ChatGPT Codex backend actually serves — NOT the 1.05M raw API model spec,
+# which the OAuth backend has never honored (openai/codex#31860, #32806:
+# 372K raw → 353.4K effective, later 272K raw → 258.4K effective).
+# Models not listed here use CHATGPT_OAUTH_CONFIG["default_context_length"].
 CODEX_MODEL_CONTEXT_LENGTHS = {
-    "gpt-5.6-sol": 1050000,
-    "gpt-5.6-terra": 1050000,
-    "gpt-5.6-luna": 1050000,
     "gpt-5.3-codex-spark": 131000,
     "gpt-5.3-instant": 192000,
 }
@@ -377,7 +383,9 @@ def _supports_max_reasoning(model_name: str) -> bool:
     return model_name.lower().startswith("gpt-5.6")
 
 
-def fetch_chatgpt_models(access_token: str, account_id: str) -> Optional[List[str]]:
+def fetch_chatgpt_models(
+    access_token: str, account_id: str
+) -> Optional[List[CodexModelInfo]]:
     """Fetch available models from ChatGPT Codex API.
 
     Attempts to fetch models from the API, but falls back to a default list
@@ -388,7 +396,9 @@ def fetch_chatgpt_models(access_token: str, account_id: str) -> Optional[List[st
         account_id: ChatGPT account ID (required for the API)
 
     Returns:
-        List of model IDs, or default list if API fails
+        Catalog entries with the backend-advertised effective context window
+        (``context_length`` is ``None`` only for fallback entries), or the
+        default list if API fails
     """
     import platform
 
@@ -424,24 +434,12 @@ def fetch_chatgpt_models(access_token: str, account_id: str) -> Optional[List[st
         response = requests.get(models_url, headers=headers, params=params, timeout=30)
 
         if response.status_code == 200:
-            # Parse JSON response
+            # Parse JSON response; keep the backend-advertised context window
+            # so we budget against what this account is actually served.
             try:
-                data = response.json()
-                # The response has a "models" key with list of model objects
-                if "models" in data and isinstance(data["models"], list):
-                    models = []
-                    seen_models = set()
-                    for model in data["models"]:
-                        if model is None:
-                            continue
-                        model_id = (
-                            model.get("slug") or model.get("id") or model.get("name")
-                        )
-                        if model_id and model_id not in seen_models:
-                            seen_models.add(model_id)
-                            models.append(model_id)
-                    if models:
-                        return models
+                catalog = parse_model_catalog(response.json())
+                if catalog:
+                    return catalog
             except (json.JSONDecodeError, ValueError) as exc:
                 logger.warning("Failed to parse models response: %s", exc)
 
@@ -458,17 +456,27 @@ def fetch_chatgpt_models(access_token: str, account_id: str) -> Optional[List[st
     except Exception as exc:
         logger.warning("Error fetching models: %s, using default list", exc)
 
-    # Return default models when API fails
+    # Return default models when API fails; their context lengths resolve
+    # from the override table / default at registration time.
     logger.info("Using default Codex models: %s", DEFAULT_CODEX_MODELS)
-    return DEFAULT_CODEX_MODELS
+    return fallback_catalog(DEFAULT_CODEX_MODELS)
 
 
-def add_models_to_extra_config(models: List[str]) -> bool:
-    """Add ChatGPT models to chatgpt_models.json configuration."""
+def add_models_to_extra_config(models: List[Union[str, CodexModelInfo]]) -> bool:
+    """Add ChatGPT models to chatgpt_models.json configuration.
+
+    Entries may be plain model names or :class:`CodexModelInfo` records from
+    the live catalog. Server-advertised context windows always win; names
+    resolve through the override table / conservative default.
+    """
     try:
+        entries = [
+            entry if isinstance(entry, CodexModelInfo) else CodexModelInfo(name=entry)
+            for entry in models
+        ]
         chatgpt_models = load_chatgpt_models()
         desired_model_keys = {
-            f"{CHATGPT_OAUTH_CONFIG['prefix']}{model_name}" for model_name in models
+            f"{CHATGPT_OAUTH_CONFIG['prefix']}{entry.name}" for entry in entries
         }
         chatgpt_models = {
             key: config
@@ -477,7 +485,8 @@ def add_models_to_extra_config(models: List[str]) -> bool:
             or key in desired_model_keys
         }
         added = 0
-        for model_name in models:
+        for entry in entries:
+            model_name = entry.name
             prefixed = f"{CHATGPT_OAUTH_CONFIG['prefix']}{model_name}"
 
             # Responses-API models always support reasoning effort, summaries,
@@ -498,7 +507,8 @@ def add_models_to_extra_config(models: List[str]) -> bool:
                     # Codex API uses chatgpt.com/backend-api/codex, not api.openai.com
                     "url": CHATGPT_OAUTH_CONFIG["api_base_url"],
                 },
-                "context_length": CODEX_MODEL_CONTEXT_LENGTHS.get(
+                "context_length": entry.context_length
+                or CODEX_MODEL_CONTEXT_LENGTHS.get(
                     model_name, CHATGPT_OAUTH_CONFIG["default_context_length"]
                 ),
                 "oauth_source": "chatgpt-oauth-plugin",

@@ -600,6 +600,12 @@ def test_fetch_chatgpt_models(mock_get):
     # New response format uses "models" key with "slug" field
     mock_response.json.return_value = {
         "models": [
+            {
+                "slug": "gpt-5.6-sol",
+                "context_window": 372000,
+                "max_context_window": 372000,
+                "effective_context_window_percent": 95,
+            },
             {"slug": "gpt-4o"},
             {"slug": "gpt-3.5-turbo"},
             {"slug": "o1-preview"},
@@ -610,15 +616,23 @@ def test_fetch_chatgpt_models(mock_get):
 
     models = utils.fetch_chatgpt_models("test_access_token", "test_account_id")
     assert models is not None
+    names = [model.name for model in models]
     # A successful endpoint response is authoritative; fallback models are
     # used only when discovery fails.
-    assert "gpt-5.4" not in models
-    assert "gpt-5.4-mini" not in models
+    assert "gpt-5.4" not in names
+    assert "gpt-5.4-mini" not in names
     # API-returned models are preserved.
-    assert "gpt-4o" in models
-    assert "gpt-3.5-turbo" in models
-    assert "o1-preview" in models
-    assert "codex-mini" in models
+    assert "gpt-5.6-sol" in names
+    assert "gpt-4o" in names
+    assert "gpt-3.5-turbo" in names
+    assert "o1-preview" in names
+    assert "codex-mini" in names
+    # The backend-served effective window must ride along (372K * 95%).
+    sol = next(model for model in models if model.name == "gpt-5.6-sol")
+    assert sol.context_length == 353400
+    # Entries without catalog context metadata carry no budget.
+    plain = next(model for model in models if model.name == "gpt-4o")
+    assert plain.context_length is None
 
 
 @patch("code_puppy_core_plugins.chatgpt_oauth.utils.requests.get")
@@ -631,15 +645,19 @@ def test_fetch_chatgpt_models_fallback(mock_get):
 
     models = utils.fetch_chatgpt_models("test_access_token", "test_account_id")
     assert models is not None
+    names = [model.name for model in models]
     # Keep the fallback aligned with the models currently exposed by Codex.
-    assert "gpt-5.4" in models
-    assert "gpt-5.4-mini" in models
-    assert "gpt-5.3-codex-spark" in models
-    assert "codex-auto-review" in models
-    assert "gpt-5.3-instant" not in models
-    assert "gpt-5.3-codex" not in models
-    assert "gpt-5.2-codex" not in models
-    assert "gpt-5.2" not in models
+    assert "gpt-5.6-sol" in names
+    assert "gpt-5.4" in names
+    assert "gpt-5.4-mini" in names
+    assert "gpt-5.3-codex-spark" in names
+    assert "codex-auto-review" in names
+    assert "gpt-5.3-instant" not in names
+    assert "gpt-5.3-codex" not in names
+    assert "gpt-5.2-codex" not in names
+    assert "gpt-5.2" not in names
+    # Fallback entries carry no context budget; it is resolved at write time.
+    assert all(model.context_length is None for model in models)
 
 
 def test_add_models_to_chatgpt_config(tmp_path):
@@ -657,6 +675,54 @@ def test_add_models_to_chatgpt_config(tmp_path):
         assert loaded["codex-gpt-4o"]["type"] == "chatgpt_oauth"
         assert loaded["codex-gpt-4o"]["name"] == "gpt-4o"
         assert loaded["codex-gpt-4o"]["oauth_source"] == "chatgpt-oauth-plugin"
+        # Plain names resolve to the conservative default, not the API spec.
+        assert loaded["codex-gpt-4o"]["context_length"] == 272000
+
+
+def test_add_models_prefers_server_context_length(tmp_path):
+    """Catalog-advertised windows must override the static fallback table."""
+    from code_puppy_core_plugins.chatgpt_oauth.model_catalog import CodexModelInfo
+
+    with patch.object(
+        utils, "get_chatgpt_models_path", return_value=tmp_path / "chatgpt_models.json"
+    ):
+        assert utils.add_models_to_extra_config(
+            [CodexModelInfo(name="gpt-5.6-sol", context_length=353400)]
+        )
+
+        loaded = utils.load_chatgpt_models()
+        assert loaded["codex-gpt-5.6-sol"]["context_length"] == 353400
+
+
+def test_add_models_fallback_never_claims_api_spec_context(tmp_path):
+    """Without catalog metadata GPT-5.6 must fall back to the backend-served
+    window (272K), never the 1.05M raw API model spec."""
+    from code_puppy_core_plugins.chatgpt_oauth.model_catalog import CodexModelInfo
+
+    with patch.object(
+        utils, "get_chatgpt_models_path", return_value=tmp_path / "chatgpt_models.json"
+    ):
+        assert utils.add_models_to_extra_config(
+            [
+                CodexModelInfo(name="gpt-5.6-sol"),
+                CodexModelInfo(name="gpt-5.6-luna"),
+            ]
+        )
+
+        loaded = utils.load_chatgpt_models()
+        assert loaded["codex-gpt-5.6-sol"]["context_length"] == 272000
+        assert loaded["codex-gpt-5.6-luna"]["context_length"] == 272000
+
+
+def test_add_models_keeps_per_model_overrides(tmp_path):
+    """The static override table still applies for known smaller models."""
+    with patch.object(
+        utils, "get_chatgpt_models_path", return_value=tmp_path / "chatgpt_models.json"
+    ):
+        assert utils.add_models_to_extra_config(["gpt-5.3-codex-spark"])
+
+        loaded = utils.load_chatgpt_models()
+        assert loaded["codex-gpt-5.3-codex-spark"]["context_length"] == 131000
 
 
 if __name__ == "__main__":
