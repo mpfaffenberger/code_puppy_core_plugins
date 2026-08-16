@@ -68,7 +68,7 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@c5421a346bb9ee68f1afac231eadec8e1886cf38"
+          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@a0386ba823d44b5293570dab37f9e1ea518043cc"
           uv pip install -e . --group dev
       - name: Coordinated spill contract
         env:

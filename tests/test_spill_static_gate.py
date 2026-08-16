@@ -111,6 +111,85 @@ def test_allowlisted_model_rejects_hostile_internal_dict_without_execution(
     assert not list(_spill_root.glob("session-*/*"))
 
 
+@pytest.mark.parametrize(
+    "attribute",
+    ["model_dump", "model_validate", "__getattribute__"],
+)
+def test_allowlisted_model_rejects_late_base_model_monkeypatch(
+    monkeypatch,
+    attribute,
+):
+    calls = []
+    result = ShellCommandOutput(
+        success=True,
+        command="contract",
+        error="",
+        stdout="x" * 5000,
+        stderr="",
+        exit_code=0,
+        execution_time=0.1,
+    )
+
+    if attribute == "model_validate":
+
+        def replacement(cls, value, **kwargs):
+            calls.append((cls, value, kwargs))
+            return value
+
+        replacement = classmethod(replacement)
+    elif attribute == "__getattribute__":
+
+        def replacement(self, name):
+            calls.append(name)
+            return object.__getattribute__(self, name)
+
+    else:
+
+        def replacement(self, **kwargs):
+            calls.append((self, kwargs))
+            return {}
+
+    monkeypatch.setattr(BaseModel, attribute, replacement)
+
+    assert spill._model_facing_mapping(result) is None
+    assert spill._model_validation_spec(result) is None
+    assert calls == []
+
+
+def test_allowlisted_model_rejects_hostile_private_state(_spill_root):
+    calls = []
+
+    class HostileSet(set):
+        def __iter__(self):
+            calls.append("iter")
+            return super().__iter__()
+
+    result = ShellCommandOutput(
+        success=True,
+        command="private-state",
+        error="",
+        stdout="x" * 5000,
+        stderr="",
+        exit_code=0,
+        execution_time=0.1,
+    )
+    object.__setattr__(
+        result,
+        "__pydantic_fields_set__",
+        HostileSet(result.__pydantic_fields_set__),
+    )
+
+    assert spill._model_facing_mapping(result) is None
+    assert calls == []
+
+    object.__setattr__(
+        result, "__pydantic_fields_set__", set(type(result).model_fields)
+    )
+    object.__setattr__(result, "__pydantic_private__", {})
+    assert spill._model_facing_mapping(result) is None
+    assert not list(_spill_root.glob("session-*/*"))
+
+
 def test_allowlisted_model_rechecks_class_contract(monkeypatch):
     result = ShellCommandOutput(
         success=True,

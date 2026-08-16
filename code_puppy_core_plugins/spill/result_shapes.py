@@ -12,6 +12,10 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 _SAFE_SCALAR_TYPES = (str, bool, int, float)
+_BASE_GETATTRIBUTE = BaseModel.__getattribute__
+_BASE_SETATTR = BaseModel.__setattr__
+_BASE_MODEL_DUMP = BaseModel.model_dump
+_BASE_MODEL_VALIDATE = BaseModel.model_validate.__func__
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,10 @@ class _ModelContract:
     field_types: dict[str, tuple[type, ...]]
     field_objects: dict[str, object]
     model_config: dict[str, Any]
+    getattribute_method: object
+    setattr_method: object
+    model_dump_method: object
+    model_validate_method: object
 
 
 def byte_size(text: str) -> int:
@@ -94,10 +102,10 @@ def _build_model_contract(model_type: type[BaseModel]) -> _ModelContract | None:
     if type(model_type) is not type(BaseModel):
         return None
     if (
-        model_type.__setattr__ is not BaseModel.__setattr__
-        or model_type.__getattribute__ is not BaseModel.__getattribute__
-        or model_type.model_dump is not BaseModel.model_dump
-        or model_type.model_validate.__func__ is not BaseModel.model_validate.__func__
+        model_type.__setattr__ is not _BASE_SETATTR
+        or model_type.__getattribute__ is not _BASE_GETATTRIBUTE
+        or model_type.model_dump is not _BASE_MODEL_DUMP
+        or model_type.model_validate.__func__ is not _BASE_MODEL_VALIDATE
         or type(model_type.model_config) is not dict
         or bool(model_type.model_config)
     ):
@@ -131,6 +139,10 @@ def _build_model_contract(model_type: type[BaseModel]) -> _ModelContract | None:
         field_types=field_types,
         field_objects=dict(model_type.model_fields),
         model_config=model_type.model_config,
+        getattribute_method=model_type.__getattribute__,
+        setattr_method=model_type.__setattr__,
+        model_dump_method=model_type.model_dump,
+        model_validate_method=model_type.model_validate.__func__,
     )
 
 
@@ -159,13 +171,12 @@ def _model_contract(result: BaseModel) -> _ModelContract | None:
             or type(model_type.model_config) is not dict
             or model_type.model_config is not contract.model_config
             or bool(model_type.model_config)
-            or model_type.__getattribute__ is not BaseModel.__getattribute__
-            or model_type.__setattr__ is not BaseModel.__setattr__
+            or model_type.__getattribute__ is not contract.getattribute_method
+            or model_type.__setattr__ is not contract.setattr_method
             or model_type.__pydantic_serializer__ is not contract.serializer
             or model_type.__pydantic_validator__ is not contract.validator
-            or model_type.model_dump is not BaseModel.model_dump
-            or model_type.model_validate.__func__
-            is not BaseModel.model_validate.__func__
+            or model_type.model_dump is not contract.model_dump_method
+            or model_type.model_validate.__func__ is not contract.model_validate_method
             or set(model_fields) != set(contract.field_types)
             or any(
                 model_fields[name] is not field
@@ -194,16 +205,30 @@ def _model_contract(result: BaseModel) -> _ModelContract | None:
     return contract
 
 
-def _model_instance_is_safe(result: BaseModel) -> bool:
-    contract = _model_contract(result)
+def _model_instance_is_safe(
+    result: BaseModel,
+    contract: _ModelContract | None = None,
+) -> bool:
+    contract = contract or _model_contract(result)
     if contract is None:
         return False
     try:
         raw_values = object.__getattribute__(result, "__dict__")
         extra = object.__getattribute__(result, "__pydantic_extra__")
+        fields_set = object.__getattribute__(result, "__pydantic_fields_set__")
+        private = object.__getattribute__(result, "__pydantic_private__")
     except Exception:
         return False
-    if type(raw_values) is not dict or extra is not None:
+    if (
+        type(raw_values) is not dict
+        or extra is not None
+        or type(fields_set) is not set
+        or private is not None
+        or any(
+            type(name) is not str or name not in contract.field_types
+            for name in set.__iter__(fields_set)
+        )
+    ):
         return False
     if set(dict.keys(raw_values)) != set(contract.field_types):
         return False
@@ -224,15 +249,22 @@ def model_facing_mapping(result: Any) -> dict[str, Any] | None:
         ):
             return None
         return dict(result)
-    if not isinstance(result, BaseModel) or not _model_instance_is_safe(result):
+    if type(result) not in _MODEL_CONTRACTS:
+        return None
+    contract = _model_contract(result)
+    if contract is None or not _model_instance_is_safe(result, contract):
         return None
 
     try:
         raw_values = object.__getattribute__(result, "__dict__")
-        serialized = result.model_dump(mode="json", warnings="error")
+        serialized = contract.serializer.to_python(
+            result,
+            mode="json",
+            warnings="error",
+        )
         if type(serialized) is not dict:
             return None
-        if set(serialized) != set(type(result).model_fields):
+        if set(serialized) != set(contract.field_types):
             return None
         for field_name, serialized_value in dict.items(serialized):
             raw_value = dict.__getitem__(raw_values, field_name)
@@ -273,14 +305,14 @@ def string_snapshot(result: Any) -> dict[str, str] | None:
         ):
             return None
         return {key: value for key, value in result.items() if type(value) is str}
-    if not isinstance(result, BaseModel) or not _model_instance_is_safe(result):
+    if type(result) not in _MODEL_CONTRACTS or not _model_instance_is_safe(result):
         return None
     raw_values = object.__getattribute__(result, "__dict__")
     return {key: value for key, value in dict.items(raw_values) if type(value) is str}
 
 
 def model_validation_spec(result: Any) -> ModelValidationSpec | None:
-    if not isinstance(result, BaseModel) or not _model_instance_is_safe(result):
+    if type(result) not in _MODEL_CONTRACTS or not _model_instance_is_safe(result):
         return None
     raw_values = object.__getattribute__(result, "__dict__")
     return ModelValidationSpec(type(result), dict.copy(raw_values))
@@ -320,10 +352,15 @@ def validate_model_replacements(
 def result_accepts_fields(result: Any, field_names: tuple[str, ...]) -> bool:
     if type(result) is dict:
         return all(type(name) is str for name in field_names)
-    if not isinstance(result, BaseModel) or not _model_instance_is_safe(result):
+    if type(result) not in _MODEL_CONTRACTS:
         return False
-    fields = type(result).model_fields
-    return all(name in fields and not fields[name].frozen for name in field_names)
+    contract = _model_contract(result)
+    if contract is None or not _model_instance_is_safe(result, contract):
+        return False
+    return all(
+        name in contract.field_objects and not contract.field_objects[name].frozen
+        for name in field_names
+    )
 
 
 def commit_replacements(
@@ -347,7 +384,7 @@ def commit_replacements(
         return True
     if (
         not model_validated
-        or not isinstance(result, BaseModel)
+        or type(result) not in _MODEL_CONTRACTS
         or not result_accepts_fields(result, tuple(replacements))
         or string_snapshot(result) != expected_strings
     ):
