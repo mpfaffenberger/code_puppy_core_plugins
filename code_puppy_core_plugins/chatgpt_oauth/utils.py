@@ -265,10 +265,38 @@ def load_chatgpt_models() -> Dict[str, Any]:
         models_path = get_chatgpt_models_path()
         if models_path.exists():
             with open(models_path, "r", encoding="utf-8") as handle:
-                return json.load(handle)
+                return _sanitize_legacy_context_lengths(json.load(handle))
     except Exception as exc:
         logger.error("Failed to load ChatGPT models: %s", exc)
     return {}
+
+
+# The one context value this plugin ever persisted that the OAuth backend
+# cannot serve: the raw 1.05M API-spec window from before the catalog-driven
+# fix (openai/codex#31860, #32806 cap ChatGPT-auth Codex far below it).
+_LEGACY_API_SPEC_CONTEXT_LENGTH = 1050000
+
+
+def _sanitize_legacy_context_lengths(chatgpt_models: Dict[str, Any]) -> Dict[str, Any]:
+    """Self-heal pre-fix registrations in memory, never on disk.
+
+    Configs written before the catalog-driven fix carry a 1.05M budget that
+    would keep starving compaction until the user re-auths. Swap plugin-owned
+    entries carrying that value down to the resolved fallback; the file is
+    rewritten with live catalog data on the next ``/chatgpt-auth``.
+    """
+    for model_config in chatgpt_models.values():
+        if not isinstance(model_config, dict):
+            continue
+        if model_config.get("oauth_source") != "chatgpt-oauth-plugin":
+            continue
+        if model_config.get("context_length") != _LEGACY_API_SPEC_CONTEXT_LENGTH:
+            continue
+        model_config["context_length"] = CODEX_MODEL_CONTEXT_LENGTHS.get(
+            model_config.get("name", ""),
+            CHATGPT_OAUTH_CONFIG["default_context_length"],
+        )
+    return chatgpt_models
 
 
 def save_chatgpt_models(models: Dict[str, Any]) -> bool:
@@ -359,14 +387,14 @@ DEFAULT_CODEX_MODELS = [
 ]
 
 # Per-model context length overrides (tokens), used only when the Codex
-# /models catalog is unreachable. These match the effective window the
-# ChatGPT Codex backend actually serves — NOT the 1.05M raw API model spec,
-# which the OAuth backend has never honored (openai/codex#31860, #32806:
-# 372K raw → 353.4K effective, later 272K raw → 258.4K effective).
-# Models not listed here use CHATGPT_OAUTH_CONFIG["default_context_length"].
+# /models catalog is unreachable or an entry carries no window metadata.
+# These are EFFECTIVE windows — what the ChatGPT Codex backend serves — not
+# raw API-spec numbers, which the OAuth backend has never honored
+# (openai/codex#31860, #32806: 372K raw → 353.4K effective, later rolled
+# back to 272K raw → 258.4K effective). Models not listed here use
+# CHATGPT_OAUTH_CONFIG["default_context_length"] (258,400).
 CODEX_MODEL_CONTEXT_LENGTHS = {
     "gpt-5.3-codex-spark": 131000,
-    "gpt-5.3-instant": 192000,
 }
 
 
@@ -383,9 +411,7 @@ def _supports_max_reasoning(model_name: str) -> bool:
     return model_name.lower().startswith("gpt-5.6")
 
 
-def fetch_chatgpt_models(
-    access_token: str, account_id: str
-) -> Optional[List[CodexModelInfo]]:
+def fetch_chatgpt_models(access_token: str, account_id: str) -> List[CodexModelInfo]:
     """Fetch available models from ChatGPT Codex API.
 
     Attempts to fetch models from the API, but falls back to a default list
@@ -396,9 +422,10 @@ def fetch_chatgpt_models(
         account_id: ChatGPT account ID (required for the API)
 
     Returns:
-        Catalog entries with the backend-advertised effective context window
-        (``context_length`` is ``None`` only for fallback entries), or the
-        default list if API fails
+        Catalog entries carrying the backend-advertised effective context
+        window. ``context_length`` is ``None`` when an entry (live or
+        fallback) carried no usable window metadata; registration then
+        resolves it from the override table / default.
     """
     import platform
 
@@ -443,9 +470,9 @@ def fetch_chatgpt_models(
             except (json.JSONDecodeError, ValueError) as exc:
                 logger.warning("Failed to parse models response: %s", exc)
 
-        # API didn't return valid models, use default list
+        # API didn't return usable models (non-200 or empty/unparsable body)
         logger.info(
-            "Models endpoint returned %d, using default model list",
+            "Models endpoint unusable (status %d), using default model list",
             response.status_code,
         )
 

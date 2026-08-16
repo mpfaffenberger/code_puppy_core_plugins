@@ -1,5 +1,9 @@
 """Unit tests for the Codex /models catalog parser."""
 
+import json
+from unittest.mock import patch
+
+from code_puppy_core_plugins.chatgpt_oauth import utils
 from code_puppy_core_plugins.chatgpt_oauth.model_catalog import (
     CodexModelInfo,
     fallback_catalog,
@@ -61,6 +65,41 @@ class TestEffectiveContextLength:
 
         assert catalog[0].context_length == 100000
 
+    def test_context_window_wins_over_max_context_window(self):
+        """Pin codex-rs precedence (openai_models.rs resolved_context_window):
+        context_window is preferred when both fields are present."""
+        catalog = parse_model_catalog(
+            {
+                "models": [
+                    {
+                        "slug": "gpt-5.6-sol",
+                        "context_window": 273000,
+                        "max_context_window": 400000,
+                        "effective_context_window_percent": 95,
+                    }
+                ]
+            }
+        )
+
+        assert catalog[0].context_length == 259350  # 273_000 * 95 // 100
+
+    def test_garbage_small_windows_are_treated_as_missing(self):
+        """A hostile catalog must not be able to shrink the budget to ~1 token
+        (server-wins would otherwise persist it)."""
+        catalog = parse_model_catalog(
+            {
+                "models": [
+                    {"slug": "tiny-raw", "context_window": 2},
+                    {"slug": "rounds-to-zero", "context_window": 1},
+                    {"slug": "legit", "context_window": 20000},
+                ]
+            }
+        )
+
+        assert catalog[0].context_length is None
+        assert catalog[1].context_length is None
+        assert catalog[2].context_length == 19000
+
     def test_ignores_nonpositive_and_junk_windows(self):
         catalog = parse_model_catalog(
             {
@@ -82,20 +121,20 @@ class TestEffectiveContextLength:
                 "models": [
                     {
                         "slug": "over",
-                        "context_window": 1000,
+                        "context_window": 100000,
                         "effective_context_window_percent": 150,
                     },
                     {
                         "slug": "zero-pct",
-                        "context_window": 1000,
+                        "context_window": 100000,
                         "effective_context_window_percent": 0,
                     },
                 ]
             }
         )
 
-        assert catalog[0].context_length == 950
-        assert catalog[1].context_length == 950
+        assert catalog[0].context_length == 95000
+        assert catalog[1].context_length == 95000
 
 
 class TestParseModelCatalog:
@@ -139,3 +178,108 @@ class TestFallbackCatalog:
         catalog = fallback_catalog(["gpt-5.6-sol", "gpt-5.5"])
 
         assert catalog == [CodexModelInfo("gpt-5.6-sol"), CodexModelInfo("gpt-5.5")]
+
+
+class TestRegistrationContextResolution:
+    """context_length precedence at registration: server > table > default."""
+
+    def test_server_context_wins_over_fallback_table(self, tmp_path):
+        with patch.object(
+            utils, "get_chatgpt_models_path", return_value=tmp_path / "models.json"
+        ):
+            assert utils.add_models_to_extra_config(
+                [CodexModelInfo(name="gpt-5.6-sol", context_length=353400)]
+            )
+
+            assert (
+                utils.load_chatgpt_models()["codex-gpt-5.6-sol"]["context_length"]
+                == 353400
+            )
+
+    def test_fallback_never_claims_api_spec_context(self, tmp_path):
+        """Without catalog metadata, GPT-5.6 must fall back to the effective
+        window of the rolled-back catalog (258,400) — never the 1.05M raw
+        API model spec."""
+        with patch.object(
+            utils, "get_chatgpt_models_path", return_value=tmp_path / "models.json"
+        ):
+            assert utils.add_models_to_extra_config(
+                [
+                    CodexModelInfo(name="gpt-5.6-sol"),
+                    CodexModelInfo(name="gpt-5.6-luna"),
+                ]
+            )
+
+            loaded = utils.load_chatgpt_models()
+            assert loaded["codex-gpt-5.6-sol"]["context_length"] == 258400
+            assert loaded["codex-gpt-5.6-luna"]["context_length"] == 258400
+
+    def test_per_model_overrides_still_apply(self, tmp_path):
+        with patch.object(
+            utils, "get_chatgpt_models_path", return_value=tmp_path / "models.json"
+        ):
+            assert utils.add_models_to_extra_config(["gpt-5.3-codex-spark"])
+
+            assert (
+                utils.load_chatgpt_models()["codex-gpt-5.3-codex-spark"][
+                    "context_length"
+                ]
+                == 131000
+            )
+
+
+class TestLegacyContextLengthSelfHeal:
+    """Pre-fix installs persisted 1.05M; loading must not keep serving it."""
+
+    def _write_models(self, tmp_path, payload):
+        import json as jsonlib
+
+        models_path = tmp_path / "models.json"
+        models_path.write_text(jsonlib.dumps(payload))
+        return models_path
+
+    def test_legacy_1050000_swapped_in_memory_only(self, tmp_path):
+        models_path = self._write_models(
+            tmp_path,
+            {
+                "codex-gpt-5.6-sol": {
+                    "type": "chatgpt_oauth",
+                    "name": "gpt-5.6-sol",
+                    "oauth_source": "chatgpt-oauth-plugin",
+                    "context_length": 1050000,
+                }
+            },
+        )
+
+        with patch.object(utils, "get_chatgpt_models_path", return_value=models_path):
+            loaded = utils.load_chatgpt_models()
+
+        assert loaded["codex-gpt-5.6-sol"]["context_length"] == 258400
+        # Disk is untouched — the file is rewritten with live catalog data on
+        # the next /chatgpt-auth, never silently mutated by a read.
+        assert (
+            json.loads(models_path.read_text())["codex-gpt-5.6-sol"]["context_length"]
+            == 1050000
+        )
+
+    def test_live_catalog_values_and_foreign_entries_untouched(self, tmp_path):
+        models_path = self._write_models(
+            tmp_path,
+            {
+                "codex-gpt-5.6-sol": {
+                    "name": "gpt-5.6-sol",
+                    "oauth_source": "chatgpt-oauth-plugin",
+                    "context_length": 353400,
+                },
+                "user-custom": {
+                    "name": "whatever",
+                    "context_length": 1050000,
+                },
+            },
+        )
+
+        with patch.object(utils, "get_chatgpt_models_path", return_value=models_path):
+            loaded = utils.load_chatgpt_models()
+
+        assert loaded["codex-gpt-5.6-sol"]["context_length"] == 353400
+        assert loaded["user-custom"]["context_length"] == 1050000

@@ -7,6 +7,11 @@ from typing import Any, Iterable
 
 DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
 
+# Effective windows below this are catalog garbage (the smallest real Codex
+# model serves ~131K). Treat them as absent so a hostile or buggy catalog
+# can't force hyper-aggressive compaction with e.g. context_window=2.
+MIN_EFFECTIVE_CONTEXT_WINDOW = 16_000
+
 
 @dataclass(frozen=True)
 class CodexModelInfo:
@@ -37,7 +42,8 @@ def _effective_context_length(model: dict[str, Any]) -> int | None:
     percentage = _positive_int(model.get("effective_context_window_percent"))
     if percentage is None or percentage > 100:
         percentage = DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT
-    return raw_context_length * percentage // 100
+    effective = raw_context_length * percentage // 100
+    return effective if effective >= MIN_EFFECTIVE_CONTEXT_WINDOW else None
 
 
 def parse_model_catalog(payload: Any) -> list[CodexModelInfo]:

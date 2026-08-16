@@ -23,7 +23,10 @@ CHATGPT_OAUTH_CONFIG: Dict[str, Any] = {
     "token_storage": None,  # Set dynamically in get_token_storage_path()
     # Model configuration
     "prefix": "codex-",
-    "default_context_length": 272000,
+    # Fallback budget when the /models catalog is unreachable: the EFFECTIVE
+    # window of the rolled-back catalog (272,000 raw × 95%), matching what the
+    # backend serves — never the raw number (openai/codex#31860, #32806).
+    "default_context_length": 258400,
     "api_key_env_var": "CHATGPT_OAUTH_API_KEY",
     # Codex CLI version info (for User-Agent header)
     "client_version": "0.144.1",
