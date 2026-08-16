@@ -78,20 +78,23 @@ did to your config are two separate actions.
 
 ### Bounding oversized tool results with `spill`
 
-The builtin `spill` plugin saves oversized top-level string fields to
-private files and substitutes bounded head/tail previews with retrieval
-guidance. It leaves error-only and non-dict results untouched and skips
-`read_file` by default to avoid a read → spill → read loop.
+The builtin `spill` plugin saves oversized top-level string fields from plain
+dictionaries and Pydantic output models to private files, then substitutes
+bounded head/tail previews with retrieval guidance. It leaves error-only and
+unsupported results such as strings and `ToolReturn` image payloads untouched.
+`read_file` is skipped to avoid a read → spill → read loop; `activate_skill` is
+skipped because its instructions are intentionally consumed as one unit.
 
 | `puppy.cfg` key | Default | Meaning |
 |-----------------|---------|---------|
 | `spill_max_inline_bytes` | `32768` | Aggregate inline string-byte cap; `0` or negative disables spilling |
 | `spill_preview_bytes` | `4096` | Head-plus-tail source-byte budget per spilled field |
 | `spill_root` | unset | Storage root override; otherwise use a private OS temp directory |
-| `spill_skip_tools` | `read_file` | Comma-separated tool names that must remain inline |
+| `spill_skip_tools` | `read_file,activate_skill` | Comma-separated tool names that must remain inline |
 
-Storage is best-effort: any spill failure keeps the original successful
-tool result inline.
+Only declared top-level string fields count toward the cap; nested strings are
+not traversed. Storage and in-place model mutation are best-effort: any failure
+keeps the original successful tool result inline.
 
 An individual JSON agent can disable spill while leaving it enabled globally:
 
@@ -122,10 +125,10 @@ An agent can instead leave spill enabled and add exact-name tool skips:
 ```
 
 These names are additive to the effective global `spill_skip_tools` set: agent
-config can only add exemptions, never remove global ones (`read_file` by
-default). Invalid or non-list values are ignored. The executing-agent lookup
-is backed by a `ContextVar`, so concurrent main agents and sub-agents can use different
-settings without leaking state across tasks.
+config can only add exemptions, never remove global ones (`read_file` and
+`activate_skill` by default). Invalid or non-list values are ignored. The
+executing-agent lookup is backed by a `ContextVar`, so concurrent main agents
+and sub-agents can use different settings without leaking state across tasks.
 
 ---
 

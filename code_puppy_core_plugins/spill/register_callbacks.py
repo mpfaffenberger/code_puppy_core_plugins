@@ -1,24 +1,27 @@
-"""Plugin: spill oversized dict-shaped tool results to private files.
+"""Plugin: spill oversized structured tool results to private files.
 
 Ported from DeepSeek Harness's MIT-licensed spill design. See
 ``LICENSE.deepseek`` in this package for its copyright and license notice.
 
-The post-tool hook receives the same dict reference that Code Puppy later
-serializes for the model, so this plugin can replace top-level string fields
-in place. Non-dict results (notably plain strings) cannot be replaced through
-this hook and are deliberately left untouched.
+The post-tool hook receives the same result object that Code Puppy later
+serializes for the model. This plugin can therefore replace top-level string
+fields in plain dictionaries and mutable Pydantic models in place. Other
+results (notably plain strings and ``ToolReturn`` image payloads) cannot be
+replaced through this hook and are deliberately left untouched.
 
 When the combined UTF-8 size of top-level string values exceeds the configured
 cap, fields are considered largest-first. Their full text is saved verbatim,
 then replaced by a bounded byte-sliced head/tail preview and a retrieval notice.
 ``read_file`` is skipped by default to avoid a read -> spill -> read loop.
-Every failure is best-effort: the successful tool result stays available inline.
+``activate_skill`` is also skipped because its instructions are intentionally
+consumed as one semantic unit. Every failure is best-effort: the successful
+tool result stays available inline.
 
 Global config (puppy.cfg, also settable with ``/set``):
     spill_max_inline_bytes = 32768  # 0 or negative disables
     spill_preview_bytes = 4096      # source bytes retained per field
     spill_root =                    # unset uses a private OS temp directory
-    spill_skip_tools = read_file    # comma-separated tool names
+    spill_skip_tools = read_file,activate_skill  # comma-separated tool names
 
 An individual agent can opt out or add exact-name tool skips:
     "tools_config": {"spill": {"enabled": false}}
@@ -32,6 +35,8 @@ import logging
 import math
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel
 
 from code_puppy.callbacks import register_callback, unregister_callback
 
@@ -48,7 +53,7 @@ AGENT_ENABLED_KEY = "enabled"
 AGENT_SKIP_TOOLS_KEY = "skip_tools"
 DEFAULT_MAX_INLINE_BYTES = 32768
 DEFAULT_PREVIEW_BYTES = 4096
-DEFAULT_SKIP_TOOLS = frozenset({"read_file"})
+DEFAULT_SKIP_TOOLS = frozenset({"activate_skill", "read_file"})
 OMISSION_MARKER = "\n\n[...]\n\n"
 
 
@@ -139,6 +144,53 @@ def _is_enabled_for_executing_agent(
     return _is_agent_spill_enabled(effective_config)
 
 
+def _result_items(result: Any) -> list[tuple[Any, Any]] | None:
+    """Return declared top-level result fields for supported mutable shapes."""
+    if isinstance(result, dict):
+        return list(result.items())
+    if isinstance(result, BaseModel):
+        try:
+            return [
+                (field_name, getattr(result, field_name))
+                for field_name in type(result).model_fields
+            ]
+        except Exception:
+            logger.debug("Could not inspect Pydantic tool result", exc_info=True)
+    return None
+
+
+def _apply_replacements(result: Any, replacements: dict[Any, str]) -> bool:
+    """Commit replacements in place, rolling model fields back on failure."""
+    if isinstance(result, dict):
+        result.update(replacements)
+        return True
+    if not isinstance(result, BaseModel):
+        return False
+
+    originals = {field_name: getattr(result, field_name) for field_name in replacements}
+    applied: list[Any] = []
+    try:
+        for field_name, replacement in replacements.items():
+            setattr(result, field_name, replacement)
+            applied.append(field_name)
+    except Exception:
+        logger.warning(
+            "Could not mutate Pydantic tool result; keeping it inline",
+            exc_info=True,
+        )
+        for field_name in reversed(applied):
+            try:
+                setattr(result, field_name, originals[field_name])
+            except Exception:
+                logger.error(
+                    "Could not roll back Pydantic result field %r",
+                    field_name,
+                    exc_info=True,
+                )
+        return False
+    return True
+
+
 def _byte_size(text: str) -> int:
     return len(text.encode("utf-8"))
 
@@ -190,9 +242,7 @@ def _build_replacement(
         budget = max(0, budget - max(1, replacement_bytes - limit))
 
 
-def _spill_result(
-    tool_name: str, result: dict[Any, Any], session_id: str | None = None
-) -> None:
+def _spill_result(tool_name: str, result: Any, session_id: str | None = None) -> None:
     cap = _get_int(MAX_INLINE_KEY, DEFAULT_MAX_INLINE_BYTES)
     if cap <= 0 or tool_name in _get_skip_tools():
         return
@@ -205,9 +255,12 @@ def _spill_result(
         )
         preview_bytes = DEFAULT_PREVIEW_BYTES
 
+    result_items = _result_items(result)
+    if result_items is None:
+        return
     fields = [
         (key, value, _byte_size(value))
-        for key, value in result.items()
+        for key, value in result_items
         if isinstance(value, str)
     ]
     total = sum(size for _, _, size in fields)
@@ -254,7 +307,7 @@ def _spill_result(
     # Commit atomically. A partial preview set that still exceeds the cap is
     # neither bounded nor graceful; keep every original inline in that case.
     if total <= cap:
-        result.update(replacements)
+        _apply_replacements(result, replacements)
 
 
 async def _on_post_tool_call(
@@ -267,7 +320,8 @@ async def _on_post_tool_call(
     """Spill oversized string fields off the event loop without breaking calls."""
     _ = tool_args, duration_ms, context
     try:
-        if not isinstance(result, dict) or set(result) == {"error"}:
+        result_items = _result_items(result)
+        if result_items is None or {key for key, _ in result_items} == {"error"}:
             return
         spill_config = _get_executing_agent_spill_config()
         if not _is_enabled_for_executing_agent(spill_config):
@@ -315,6 +369,7 @@ __all__ = [
     "PREVIEW_KEY",
     "ROOT_KEY",
     "SKIP_TOOLS_KEY",
+    "_apply_replacements",
     "_build_replacement",
     "_get_agent_skip_tools",
     "_get_executing_agent_spill_config",
@@ -324,5 +379,6 @@ __all__ = [
     "_on_post_tool_call",
     "_on_startup",
     "_reset_state",
+    "_result_items",
     "_spill_result",
 ]
