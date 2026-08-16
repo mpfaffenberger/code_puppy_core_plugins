@@ -1,5 +1,9 @@
-"""Async context manager wrapping pydantic_agent.run() with DBOS workflow ID
-and (when needed) MCP toolset injection on the inner pydantic agent."""
+"""Async context manager wrapping pydantic_agent.run() with a DBOS workflow ID.
+
+pydantic-ai 2.31.0's DBOSAgent converts constructor-level MCP toolsets to
+DBOS-safe variants. Runtime private-toolset swaps are intentionally gone;
+``mcp_servers`` remains in the callback signature for host compatibility.
+"""
 
 from __future__ import annotations
 
@@ -21,11 +25,12 @@ def skip_fallback_render(_agent) -> bool:
 
 @asynccontextmanager
 async def dbos_run_context(agent, pydantic_agent, group_id, mcp_servers):
-    """Wrap a run() call with SetWorkflowID and a temporary MCP toolset swap.
+    """Wrap a run() call with SetWorkflowID.
 
     For sub-agent invocations (group_id starting with 'invoke_agent'), append
     an atomic counter to ensure DBOS workflow ID uniqueness across rapid
-    back-to-back calls. For the main agent, use group_id as-is.
+    back-to-back calls. For the main agent, use group_id as-is. MCP toolsets
+    stay constructor-owned by pydantic-ai's DBOSAgent integration.
     """
     from .lifecycle import is_launched
 
@@ -47,19 +52,9 @@ async def dbos_run_context(agent, pydantic_agent, group_id, mcp_servers):
         else group_id
     )
 
-    # The inner pydantic agent under DBOSAgent is exposed via `.wrapped`
-    # (see pydantic_ai.agent.WrapperAgent). Fall back defensively.
-    inner = getattr(pydantic_agent, "wrapped", pydantic_agent)
-
-    original = None
-    swapped = False
-    if mcp_servers:
-        original = getattr(inner, "_toolsets", []) or []
-        inner._toolsets = list(original) + list(mcp_servers)
-        swapped = True
-    try:
-        with SetWorkflowID(workflow_id):
-            yield workflow_id
-    finally:
-        if swapped:
-            inner._toolsets = original
+    # ``mcp_servers`` is intentionally unused: DBOSAgent received the
+    # constructor-level toolsets and converted them before this context runs.
+    # Retain the argument because the core callback ABI supplies it.
+    del agent, pydantic_agent, mcp_servers
+    with SetWorkflowID(workflow_id):
+        yield workflow_id

@@ -8,6 +8,7 @@ list/detail render smoke tests over a representative menu.
 from __future__ import annotations
 
 import pytest
+from pydantic_ai.messages import CompactionPart, ModelRequest, ModelResponse, SpeechPart
 
 from code_puppy_core_plugins.prune.prune_menu import PruneMenu
 from code_puppy_core_plugins.prune.prune_model import (
@@ -36,6 +37,18 @@ from ._helpers import (
 def _flatten(formatted) -> str:
     """Collapse a prompt_toolkit-style [(style, text), ...] list to a string."""
     return "".join(text for _style, text in formatted)
+
+
+def test_prune_preserves_text_from_new_v2_part_kinds():
+    history = [
+        ModelRequest(parts=[CompactionPart(content="compacted context")]),
+        ModelResponse(parts=[SpeechPart(speaker="assistant", transcript="spoken")]),
+    ]
+
+    entries = build_message_entries(history)
+
+    assert entries[0].full_text == "[compaction] compacted context"
+    assert entries[1].full_text == "spoken"
 
 
 # ───────────────────────────────────────────────────────────────────────────

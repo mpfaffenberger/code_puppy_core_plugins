@@ -8,10 +8,9 @@ Three points of contact, all gated by ``config.is_enabled()``:
    strings (old_str / snippet) are left alone so matching doesn't silently
    break.
 
-2. ``startup`` callback — installs a one-time monkey-patch on
-   ``pydantic_ai.messages.TextPart`` / ``TextPartDelta`` to strip emojis from
-   streamed text content. ``ThinkingPart`` / ``ThinkingPartDelta`` are
-   deliberately untouched.
+2. ``stream_event`` callback — strips emojis from the raw ``TextPart`` /
+   ``TextPartDelta`` objects that core exposes at the stream seam.
+   ``ThinkingPart`` / ``ThinkingPartDelta`` are deliberately untouched.
 
 3. ``custom_command`` / ``custom_command_help`` — a tiny ``/emoji-filter``
    slash command so the user can flip the switch without editing puppy.cfg.
@@ -146,49 +145,120 @@ def _on_pre_tool_call(
     }
 
 
-# Streaming patch: patch TextPart/TextPartDelta __init__ exactly once; the patched
-# init checks ``is_enabled()`` at call time so the user can toggle without restart.
+# Streaming filter: mutate only the raw text parts core exposes through its
+# public callback seam. This deliberately avoids patching pydantic-ai classes:
+# message-part constructors and storage details are provider-facing internals,
+# while ``stream_event`` is the core-owned presentation boundary.
 
-_STREAM_PATCH_FLAG = "_emoji_filter_patched"
+_RENDER_WRAPPER_FLAG = "_emoji_filter_renderer_wrapped"
 
 
-def _install_streaming_patch() -> None:
+class _FilteringWriter:
+    """Proxy a terminal writer while removing emoji from rendered text."""
+
+    def __init__(self, target: Any) -> None:
+        self._target = target
+
+    def write(self, text: Any) -> Any:
+        if is_enabled() and isinstance(text, str):
+            text = strip_emojis(text)
+        return self._target.write(text)
+
+    def flush(self) -> Any:
+        return self._target.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._target, name)
+
+
+def _install_render_wrapper() -> None:
+    """Wrap termflow's renderer output without changing model message classes.
+
+    Core currently schedules ``stream_event`` callbacks asynchronously, while
+    its text renderer consumes a delta synchronously. The callback remains
+    useful for raw message/history mutation, but this writer proxy is the
+    deterministic last mile for terminal output.
+    """
     try:
-        from pydantic_ai.messages import TextPart, TextPartDelta
+        import termflow
     except Exception as exc:
-        logger.debug("emoji_filter: pydantic_ai.messages unavailable: %s", exc)
+        logger.debug("emoji_filter: termflow unavailable: %s", exc)
         return
 
-    for cls, attr in ((TextPartDelta, "content_delta"), (TextPart, "content")):
-        if getattr(cls, _STREAM_PATCH_FLAG, False):
-            continue
-        _wrap_init(cls, attr)
+    renderer = getattr(termflow, "Renderer", None)
+    if renderer is None or getattr(renderer, _RENDER_WRAPPER_FLAG, False):
+        return
+
+    class EmojiFilteringRenderer(renderer):
+        _emoji_filter_renderer_wrapped = True
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            if args and args[0] is not None:
+                args = (_FilteringWriter(args[0]), *args[1:])
+            elif kwargs.get("output") is not None:
+                kwargs["output"] = _FilteringWriter(kwargs["output"])
+            super().__init__(*args, **kwargs)
+
+    termflow.Renderer = EmojiFilteringRenderer
 
 
-def _wrap_init(cls: type, content_attr: str) -> None:
-    original_init = cls.__init__
-
-    def patched_init(self, *args, **kwargs):  # noqa: ANN001 - dataclass-y
-        original_init(self, *args, **kwargs)
-        if not is_enabled():
-            return
-        try:
-            current = getattr(self, content_attr, None)
-            if isinstance(current, str) and current:
-                stripped = strip_emojis(current)
-                if stripped != current:
-                    setattr(self, content_attr, stripped)
-        except Exception as exc:  # defensive: never break message construction
-            logger.debug(
-                "emoji_filter stream patch failed on %s: %s", cls.__name__, exc
-            )
-
-    cls.__init__ = patched_init  # type: ignore[method-assign]
-    setattr(cls, _STREAM_PATCH_FLAG, True)
+def _strip_object_field(container: Any, key: str) -> bool:
+    """Strip a string attribute in place, returning whether it changed."""
+    current = getattr(container, key, None)
+    if not isinstance(current, str) or not current:
+        return False
+    stripped = strip_emojis(current)
+    if stripped == current:
+        return False
+    setattr(container, key, stripped)
+    return True
 
 
-def _on_startup() -> None:
-    _install_streaming_patch()
+def _strip_event_field(event_data: dict[str, Any], key: str) -> bool:
+    """Strip a string event field used by core's sub-agent stream path."""
+    current = event_data.get(key)
+    if not isinstance(current, str) or not current:
+        return False
+    stripped = strip_emojis(current)
+    if stripped == current:
+        return False
+    event_data[key] = stripped
+    return True
+
+
+def _on_stream_event(
+    event_type: str,
+    event_data: Any,
+    agent_session_id: Any = None,
+) -> None:
+    """Strip emojis from streamed text parts without touching thinking parts.
+
+    Core's main event handler includes the raw part/delta under ``part`` or
+    ``delta``. Its sub-agent handler exposes the same text as string fields;
+    support both shapes so this callback remains a presentation-only seam.
+    """
+    del agent_session_id
+    if not is_enabled() or not isinstance(event_data, dict):
+        return None
+
+    try:
+        from pydantic_ai.messages import TextPart, TextPartDelta
+
+        if event_type == "part_start":
+            part = event_data.get("part")
+            if isinstance(part, TextPart):
+                _strip_object_field(part, "content")
+            elif event_data.get("part_type") == "TextPart":
+                _strip_event_field(event_data, "content")
+        elif event_type == "part_delta":
+            delta = event_data.get("delta")
+            if isinstance(delta, TextPartDelta):
+                _strip_object_field(delta, "content_delta")
+            elif event_data.get("delta_type") == "TextPartDelta":
+                _strip_event_field(event_data, "content_delta")
+    except Exception as exc:  # never break the stream
+        logger.debug("emoji_filter stream callback failed: %s", exc)
+    return None
 
 
 # --- /emoji-filter slash command --------------------------------------------
@@ -232,7 +302,8 @@ def _handle_command(command: str, name: str):
 
 # --- Registration ------------------------------------------------------------
 
-register_callback("startup", _on_startup)
+register_callback("startup", _install_render_wrapper)
+register_callback("stream_event", _on_stream_event)
 register_callback("pre_tool_call", _on_pre_tool_call)
 register_callback("custom_command_help", _custom_help)
 register_callback("custom_command", _handle_command)

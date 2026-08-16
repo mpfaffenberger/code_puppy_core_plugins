@@ -125,7 +125,6 @@ class TestWrapWithDbosAgent:
 
         agent = MagicMock(name="agent")
         pydantic_agent = MagicMock(name="pyd")
-        pydantic_agent._toolsets = []
         result = wrapper_mod.wrap_with_dbos_agent(agent, pydantic_agent)
         assert result is None
 
@@ -137,7 +136,6 @@ class TestWrapWithDbosAgent:
         monkeypatch.setitem(sys.modules, "pydantic_ai.durable_exec.dbos", None)
         agent = MagicMock(name="agent")
         pydantic_agent = MagicMock(name="pyd")
-        pydantic_agent._toolsets = []
         result = wrapper_mod.wrap_with_dbos_agent(agent, pydantic_agent)
         assert result is None
 
@@ -146,8 +144,7 @@ class TestWrapWithDbosAgent:
 
         agent = MagicMock(name="agent")
         agent.name = "main-agent"
-        pydantic_agent = MagicMock(name="pyd")
-        pydantic_agent._toolsets = ["toolset-1"]
+        pydantic_agent = types.SimpleNamespace(toolsets=["toolset-1"])
         handler = object()
 
         result = wrapper_mod.wrap_with_dbos_agent(
@@ -161,15 +158,15 @@ class TestWrapWithDbosAgent:
         assert isinstance(result, FakeDBOSAgent)
         assert captured["kwargs"]["event_stream_handler"] is handler
         assert captured["kwargs"]["name"].startswith("main-agent-main-")
-        # Toolsets are reset (pickleability fix).
-        assert pydantic_agent._toolsets == []
+        # Constructor-level toolsets are left intact for DBOSAgent to visit.
+        assert pydantic_agent.toolsets == ["toolset-1"]
 
     def test_no_stash_attribute_left_behind(self, monkeypatch):
         """YAGNI cleanup: the dead _dbos_stashed_mcp_toolsets attr must be gone."""
         _install_fake_pydantic_dbos(monkeypatch)
         agent = MagicMock(name="agent")
         agent.name = "x"
-        pydantic_agent = types.SimpleNamespace(_toolsets=["a", "b"])
+        pydantic_agent = types.SimpleNamespace(toolsets=["a", "b"])
         wrapper_mod.wrap_with_dbos_agent(agent, pydantic_agent)
         assert not hasattr(pydantic_agent, "_dbos_stashed_mcp_toolsets")
 
@@ -212,7 +209,7 @@ def _install_fake_dbos(monkeypatch):
 class TestDbosRunContext:
     async def test_no_op_when_dbos_missing(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "dbos", None)
-        inner = types.SimpleNamespace(_toolsets=["original"])
+        inner = types.SimpleNamespace(toolsets=["original"])
         pydantic_agent = types.SimpleNamespace(wrapped=inner)
         async with runtime_mod.dbos_run_context(
             agent=None,
@@ -221,11 +218,11 @@ class TestDbosRunContext:
             mcp_servers=["mcp-1"],
         ):
             # No mutation should occur because dbos is unavailable.
-            assert inner._toolsets == ["original"]
+            assert inner.toolsets == ["original"]
 
     async def test_invoke_agent_appends_counter(self, monkeypatch):
         with _install_fake_dbos(monkeypatch):
-            inner = types.SimpleNamespace(_toolsets=[])
+            inner = types.SimpleNamespace(toolsets=[])
             pydantic_agent = types.SimpleNamespace(wrapped=inner)
             ids = []
             for _ in range(2):
@@ -239,7 +236,7 @@ class TestDbosRunContext:
 
     async def test_main_run_uses_group_id_verbatim(self, monkeypatch):
         with _install_fake_dbos(monkeypatch):
-            inner = types.SimpleNamespace(_toolsets=[])
+            inner = types.SimpleNamespace(toolsets=[])
             pydantic_agent = types.SimpleNamespace(wrapped=inner)
             async with runtime_mod.dbos_run_context(
                 None, pydantic_agent, "main_run_xyz", []
@@ -247,27 +244,29 @@ class TestDbosRunContext:
                 assert wid == "main_run_xyz"
             assert _FakeSetWorkflowID.calls == ["main_run_xyz"]
 
-    async def test_mcp_servers_swap_and_restore_on_success(self, monkeypatch):
+    async def test_mcp_servers_are_constructor_owned(self, monkeypatch):
         with _install_fake_dbos(monkeypatch):
-            inner = types.SimpleNamespace(_toolsets=["orig-a"])
+            inner = types.SimpleNamespace(toolsets=["orig-a"])
             pydantic_agent = types.SimpleNamespace(wrapped=inner)
             async with runtime_mod.dbos_run_context(
                 None, pydantic_agent, "main_run", ["mcp-1", "mcp-2"]
             ):
-                assert inner._toolsets == ["orig-a", "mcp-1", "mcp-2"]
-            assert inner._toolsets == ["orig-a"]
+                # DBOSAgent owns constructor-level toolsets; the context only
+                # establishes workflow identity.
+                assert inner.toolsets == ["orig-a"]
+            assert inner.toolsets == ["orig-a"]
 
-    async def test_mcp_servers_restored_on_exception(self, monkeypatch):
+    async def test_mcp_context_restores_workflow_on_exception(self, monkeypatch):
         with _install_fake_dbos(monkeypatch):
-            inner = types.SimpleNamespace(_toolsets=["orig"])
+            inner = types.SimpleNamespace(toolsets=["orig"])
             pydantic_agent = types.SimpleNamespace(wrapped=inner)
             with pytest.raises(RuntimeError, match="boom"):
                 async with runtime_mod.dbos_run_context(
                     None, pydantic_agent, "main_run", ["mcp-1"]
                 ):
-                    assert inner._toolsets == ["orig", "mcp-1"]
+                    assert inner.toolsets == ["orig"]
                     raise RuntimeError("boom")
-            assert inner._toolsets == ["orig"]
+            assert inner.toolsets == ["orig"]
 
 
 # ─────────────────────── cancel.cancel_workflow ───────────────────────

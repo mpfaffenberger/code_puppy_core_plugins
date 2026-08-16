@@ -96,10 +96,9 @@ def make_fast_mode_wrapper(
 def patch_anthropic_client_fast_mode(client: Any, model_name: str) -> None:
     """Monkey-patch ``messages.create`` (and ``beta.messages.create``).
 
-    Must be called *after* ``patch_anthropic_client_messages`` so our wrapper
-    sits outside the cache-control injector — order of wrappers doesn't matter
-    for correctness here, but keeping fast-mode outermost makes it easy to
-    reason about.
+    Must be called after the Anthropic client is constructed. Keeping
+    fast-mode outermost makes the request-header transform easy to reason
+    about.
     """
     try:
         messages_obj = getattr(client, "messages", None)

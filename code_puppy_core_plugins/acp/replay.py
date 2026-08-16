@@ -77,7 +77,20 @@ def _updates_for_message(message: Any) -> List[Any]:
                 updates.append(update_agent_thought_text(text))
         elif kind == "tool-call":
             updates.append(_tool_call_update(part))
-        # system-prompt / tool-return: model plumbing, not replayed.
+        elif kind in {"system-prompt", "tool-return"}:
+            # Model plumbing, not conversation content.
+            continue
+        else:
+            # New v2 kinds (speech, compaction, tool-availability deltas, and
+            # future additions) must not make replay brittle. Preserve plain
+            # textual content when present; non-text plumbing is safely skipped.
+            text = _text_of(
+                getattr(part, "content", None)
+                if getattr(part, "content", None) is not None
+                else getattr(part, "transcript", None)
+            )
+            if text:
+                updates.append(update_agent_message_text(text))
     return updates
 
 

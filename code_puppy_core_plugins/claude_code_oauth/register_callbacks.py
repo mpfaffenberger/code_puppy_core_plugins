@@ -32,7 +32,7 @@ from .fast_mode import (
     is_fast_mode_enabled,
     patch_anthropic_client_fast_mode,
 )
-from .prompt_handler import is_claude_code_model, prepare_claude_code_prompt
+from .prompt_handler import prepare_claude_code_prompt
 from .utils import (
     OAuthContext,
     add_models_to_extra_config,
@@ -458,17 +458,6 @@ def _handle_custom_command(command: str, name: str) -> Optional[bool]:
     return None
 
 
-def _resolve_cache_ttl(model_name: str) -> Optional[str]:
-    """Prompt-cache TTL for a claude_code-type model.
-
-    ``claude-code-*`` models (OAuth subscription) always get the free 1-hour
-    TTL; anything else falls back to Anthropic's 5-minute default (None).
-    """
-    from code_puppy.claude_cache_client import CACHE_TTL_1H
-
-    return CACHE_TTL_1H if is_claude_code_model(model_name) else None
-
-
 def _create_claude_code_model(model_name: str, model_config: Dict, config: Dict) -> Any:
     """Create a Claude Code model instance.
 
@@ -478,12 +467,13 @@ def _create_claude_code_model(model_name: str, model_config: Dict, config: Dict)
     from anthropic import AsyncAnthropic
     from pydantic_ai.models.anthropic import AnthropicModel
 
-    from code_puppy.claude_cache_client import (
-        ClaudeCacheAsyncClient,
-        patch_anthropic_client_messages,
-    )
+    from code_puppy.claude_cache_client import ClaudeCacheAsyncClient
     from code_puppy.http_utils import get_cert_bundle_path
-    from code_puppy.model_factory import get_custom_config
+    from code_puppy.model_factory import (
+        CONTEXT_1M_BETA,
+        get_custom_config,
+        make_model_settings,
+    )
 
     url, headers, verify, api_key, timeout = get_custom_config(model_config)
 
@@ -529,8 +519,6 @@ def _create_claude_code_model(model_name: str, model_config: Dict, config: Dict)
         headers["anthropic-beta"] = "interleaved-thinking-2025-05-14"
 
     # Add 1M context beta header for long-context models
-    from code_puppy.model_factory import CONTEXT_1M_BETA
-
     if model_config.get("context_length", 0) >= 1_000_000:
         if "anthropic-beta" in headers:
             beta_parts = [p.strip() for p in headers["anthropic-beta"].split(",")]
@@ -543,14 +531,10 @@ def _create_claude_code_model(model_name: str, model_config: Dict, config: Dict)
     # Fast mode: append fast-mode-2026-02-01 beta marker when enabled
     ensure_fast_beta_header(headers, fast_enabled)
 
-    # Use a dedicated client wrapper that injects cache_control on /v1/messages
+    # Use a dedicated client wrapper for OAuth refresh and tool-name transport
+    # transformations; prompt-cache markers are owned by model settings.
     if verify is None:
         verify = get_cert_bundle_path()
-
-    # claude-code-* OAuth models get 1-hour prompt caching free, so they ALWAYS
-    # request the extended TTL; plain anthropic/custom_anthropic models keep the
-    # default 5-minute TTL — deliberately not applied to those.
-    cache_ttl = _resolve_cache_ttl(model_name)
 
     # No HTTP/2 for OAuth: the UnprefixingStream tool-name rewrite breaks under
     # HTTP/2's compression handling, causing zlib decompression errors.
@@ -562,7 +546,6 @@ def _create_claude_code_model(model_name: str, model_config: Dict, config: Dict)
         # Claude Code OAuth requires the ``cp_`` tool-name prefix; the wire
         # format Anthropic's CLI uses won't accept un-prefixed tools.
         apply_claude_code_prefix=True,
-        cache_ttl=cache_ttl,
         oauth_reauthentication_callback=lambda: _reauthenticate_after_expired_oauth(
             model_name
         ),
@@ -581,9 +564,9 @@ def _create_claude_code_model(model_name: str, model_config: Dict, config: Dict)
             custom_endpoint["api_key"] = access_token
 
     client.set_token_update_callback(_update_runtime_token)
-    patch_anthropic_client_messages(anthropic_client, cache_ttl=cache_ttl)
-    # Fast mode wrapper sits outside cache-control injector and re-reads
-    # the setting on every call so /claude-code-fast takes effect live.
+    # Fast mode wrapper re-reads the setting on every call so
+    # /claude-code-fast takes effect live.
+
     patch_anthropic_client_fast_mode(anthropic_client, model_name)
     anthropic_client.api_key = None
     anthropic_client.auth_token = api_key
@@ -591,7 +574,22 @@ def _create_claude_code_model(model_name: str, model_config: Dict, config: Dict)
         resolve_provider_identity(model_name, model_config),
         anthropic_client=anthropic_client,
     )
-    return AnthropicModel(model_name=model_config["name"], provider=provider)
+    # Prompt caching belongs to pydantic-ai's native Anthropic settings, not
+    # the transport shim. OAuth subscription models receive the free one-hour
+    # TTL at all three cache breakpoints.
+    model_settings = make_model_settings(model_name)
+    model_settings.update(
+        {
+            "anthropic_cache_instructions": "1h",
+            "anthropic_cache_tool_definitions": "1h",
+            "anthropic_cache_messages": "1h",
+        }
+    )
+    return AnthropicModel(
+        model_name=model_config["name"],
+        provider=provider,
+        settings=model_settings,
+    )
 
 
 def _register_model_types() -> List[Dict[str, Any]]:

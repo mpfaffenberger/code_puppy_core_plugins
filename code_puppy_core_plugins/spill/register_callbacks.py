@@ -21,8 +21,7 @@ budget. Full text is saved verbatim, then replaced by a bounded byte-sliced
 head/tail preview and a retrieval notice.
 ``read_file`` is skipped by default to avoid a read -> spill -> read loop.
 ``activate_skill`` is also skipped because its instructions are intentionally
-consumed as one semantic unit. Every failure is best-effort: the successful
-tool result stays available inline.
+consumed as one semantic unit. Spill failures leave successful results inline.
 
 Global config (puppy.cfg, also settable with ``/set``):
     spill_max_inline_bytes = 32768  # 0 or negative disables

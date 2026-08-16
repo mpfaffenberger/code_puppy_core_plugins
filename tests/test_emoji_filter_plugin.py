@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import io
 from unittest.mock import patch
 
 import pytest
@@ -224,67 +225,112 @@ def test_pre_tool_call_context_message_for_edit_file_payload():
 
 
 # ---------------------------------------------------------------------------
-# Streaming patch (TextPart / TextPartDelta) — DOES NOT touch ThinkingPart
+# Streaming callback — DOES NOT touch ThinkingPart
 # ---------------------------------------------------------------------------
 
 
-def test_streaming_patch_strips_text_part_delta():
+def test_stream_event_strips_text_part():
     module = _plugin_module()
-    module._install_streaming_patch()
-
-    from pydantic_ai.messages import TextPartDelta
-
-    with patch.object(module, "is_enabled", return_value=True):
-        delta = TextPartDelta(content_delta="hello 🐶 world")
-    assert delta.content_delta == "hello  world"
-
-
-def test_streaming_patch_strips_text_part():
-    module = _plugin_module()
-    module._install_streaming_patch()
-
     from pydantic_ai.messages import TextPart
 
+    part = TextPart(content="hi \U0001f436 there")
     with patch.object(module, "is_enabled", return_value=True):
-        part = TextPart(content="hi 🚀 there")
+        module._on_stream_event(
+            "part_start",
+            {"part_type": "TextPart", "part": part},
+        )
     assert part.content == "hi  there"
 
 
-def test_streaming_patch_leaves_thinking_alone():
+def test_stream_event_strips_text_part_delta():
+    module = _plugin_module()
+    from pydantic_ai.messages import TextPartDelta
+
+    delta = TextPartDelta(content_delta="hello \U0001f389 world")
+    with patch.object(module, "is_enabled", return_value=True):
+        module._on_stream_event(
+            "part_delta",
+            {"delta_type": "TextPartDelta", "delta": delta},
+        )
+    assert delta.content_delta == "hello  world"
+
+
+def test_stream_event_leaves_thinking_alone():
     """Thinking output must NEVER be touched."""
     module = _plugin_module()
-    module._install_streaming_patch()
-
     from pydantic_ai.messages import ThinkingPart, ThinkingPartDelta
 
+    part = ThinkingPart(content="thinking \U0001f914 hard")
+    delta = ThinkingPartDelta(content_delta="more \U0001f4ad thoughts")
     with patch.object(module, "is_enabled", return_value=True):
-        tp = ThinkingPart(content="thinking 🤔 hard")
-        td = ThinkingPartDelta(content_delta="more 💭 thoughts")
+        module._on_stream_event(
+            "part_start",
+            {"part_type": "ThinkingPart", "part": part},
+        )
+        module._on_stream_event(
+            "part_delta",
+            {"delta_type": "ThinkingPartDelta", "delta": delta},
+        )
 
-    assert tp.content == "thinking 🤔 hard"
-    assert td.content_delta == "more 💭 thoughts"
+    assert part.content == "thinking \U0001f914 hard"
+    assert delta.content_delta == "more \U0001f4ad thoughts"
 
 
-def test_streaming_patch_respects_disabled_flag():
+def test_stream_event_supports_string_fallback_shape():
     module = _plugin_module()
-    module._install_streaming_patch()
+    event_data = {"part_type": "TextPart", "content": "keep \U0001f436"}
+    delta_data = {"delta_type": "TextPartDelta", "content_delta": "keep \U0001f389"}
+    with patch.object(module, "is_enabled", return_value=True):
+        module._on_stream_event("part_start", event_data)
+        module._on_stream_event("part_delta", delta_data)
+    assert event_data["content"] == "keep "
+    assert delta_data["content_delta"] == "keep "
 
+
+def test_stream_event_respects_disabled_flag():
+    module = _plugin_module()
     from pydantic_ai.messages import TextPartDelta
 
+    delta = TextPartDelta(content_delta="keep \U0001f436 me")
     with patch.object(module, "is_enabled", return_value=False):
-        delta = TextPartDelta(content_delta="keep 🐶 me")
-    assert delta.content_delta == "keep 🐶 me"
+        module._on_stream_event(
+            "part_delta",
+            {"delta_type": "TextPartDelta", "delta": delta},
+        )
+    assert delta.content_delta == "keep \U0001f436 me"
 
 
-def test_streaming_patch_is_idempotent():
+def test_stream_event_does_not_patch_pydantic_constructor():
+    """The plugin must not replace pydantic-ai message constructors."""
     module = _plugin_module()
-    from pydantic_ai.messages import TextPartDelta
+    from pydantic_ai.messages import TextPart
 
-    module._install_streaming_patch()
-    first_init = TextPartDelta.__init__
-    module._install_streaming_patch()
-    second_init = TextPartDelta.__init__
-    assert first_init is second_init
+    original_init = TextPart.__init__
+    module._on_stream_event("part_start", {})
+    assert TextPart.__init__ is original_init
+
+
+def test_render_wrapper_filters_terminal_output():
+    module = _plugin_module()
+    module._install_render_wrapper()
+
+    import termflow
+
+    target = io.StringIO()
+    renderer = termflow.Renderer(output=target)
+    with patch.object(module, "is_enabled", return_value=True):
+        renderer.output.write("hello \U0001f436 world")
+        renderer.output.flush()
+
+    assert target.getvalue() == "hello  world"
+
+    disabled_target = io.StringIO()
+    disabled_renderer = termflow.Renderer(output=disabled_target)
+    with patch.object(module, "is_enabled", return_value=False):
+        disabled_renderer.output.write("hello \U0001f436 world")
+        disabled_renderer.output.flush()
+    assert disabled_target.getvalue() == "hello \U0001f436 world"
+    assert getattr(termflow.Renderer, module._RENDER_WRAPPER_FLAG) is True
 
 
 # ---------------------------------------------------------------------------

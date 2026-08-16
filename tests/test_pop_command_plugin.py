@@ -11,6 +11,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ToolAvailabilityDeltaPart,
     ToolCallPart,
     ToolReturnPart,
 )
@@ -58,6 +59,16 @@ def test_prune_dangling_tool_fragments_removes_orphan_return_tail():
 
     assert cleaned == [system, reply]
     assert extra == 1
+
+
+def test_pop_leaves_unknown_v2_part_kind_in_history():
+    system = ModelRequest(parts=[TextPart(content="system")])
+    unknown = ModelRequest(parts=[ToolAvailabilityDeltaPart(tools_added=["new-tool"])])
+
+    cleaned, extra = _plugin_module()._prune_dangling_tool_fragments([system, unknown])
+
+    assert cleaned == [system, unknown]
+    assert extra == 0
 
 
 def test_prune_dangling_tool_fragments_removes_orphan_call_then_orphan_return():

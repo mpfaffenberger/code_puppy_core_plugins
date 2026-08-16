@@ -193,6 +193,14 @@ def short_args(args: dict, limit: int = 80) -> str:
     return joined
 
 
+def _unknown_part_text(part: Any) -> str:
+    """Extract display text from a part kind this plugin does not classify."""
+    content = getattr(part, "content", None)
+    if content is None:
+        content = getattr(part, "transcript", None)
+    return content if isinstance(content, str) else ""
+
+
 # ── pydantic-ai introspection ──────────────────────────────────────────────
 
 
@@ -234,6 +242,7 @@ def _extract_message(message: Any) -> Optional[MessageEntry]:
         saw_user = False
         saw_tool_return = False
         saw_system = False
+        saw_other = False
         tool_return_ids: List[str] = []
 
         for part in parts:
@@ -271,8 +280,14 @@ def _extract_message(message: Any) -> Optional[MessageEntry]:
                 content_str = str(part.content) if part.content is not None else ""
                 tool_name = getattr(part, "tool_name", "?")
                 text_fragments.append(f"[retry-prompt: {tool_name}] {content_str}")
+            else:
+                unknown_text = _unknown_part_text(part)
+                if unknown_text:
+                    saw_other = True
+                    kind = getattr(part, "part_kind", "part")
+                    text_fragments.append(f"[{kind}] {unknown_text}")
 
-        if saw_system and not (saw_user or saw_tool_return):
+        if saw_system and not (saw_user or saw_tool_return or saw_other):
             return None  # system-only prompt — never show, never prunable
 
         # System > user > tool-return: bundled system+user requests stay locked
@@ -330,6 +345,10 @@ def _extract_message(message: Any) -> Optional[MessageEntry]:
                         icon=classify_tool(part.tool_name),
                     )
                 )
+            else:
+                unknown_text = _unknown_part_text(part)
+                if unknown_text:
+                    text_fragments.append(unknown_text)
 
         text = "\n".join(text_fragments).strip()
         if not text and tool_calls:

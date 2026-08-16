@@ -1,18 +1,19 @@
 """Persist ACP session history so ``session/load`` and ``session/resume``
 rehydrate real turns across process restarts.
 
-Each session's pydantic-ai message history is pickled under a dedicated
-directory keyed by the ACP session id, reusing code-puppy's existing
-``session_storage`` layer. We keep it separate from the user's autosaves
+Each session's pydantic-ai message history is saved through code-puppy's
+versioned JSON ``session_storage`` envelope under a dedicated directory keyed
+by the ACP session id. A legacy pickle twin may exist while older core
+versions are supported; JSON is always preferred and pickle is only a
+fallback. We keep the directory separate from the user's autosaves
 (``AUTOSAVE_DIR/acp``) so ACP threads never pollute the ``/resume`` picker.
 
-Alongside the pickle we write a small ACP metadata sidecar (``*_acp.json``)
-recording the session's own ``cwd`` + ``additional_directories``. This is what
-lets ``list_persisted`` surface revivable sessions after a
-restart *with the ``cwd`` that ACP's ``SessionInfo`` requires* -- the pickle
-alone can't answer "where did this thread live?", and ``session_storage``'s
-own ``_meta.json`` records the *process* cwd, which is wrong for per-session
-ACP threads.
+Alongside the session envelope we write a small ACP metadata sidecar
+(``*_acp.json``) recording the session's own ``cwd`` +
+``additional_directories``. This is what lets ``list_persisted`` surface
+revivable sessions after a restart *with the ``cwd`` that ACP's
+``SessionInfo`` requires* -- the core session metadata records the process
+cwd, which is wrong for per-session ACP threads.
 
 Every public entry point takes an optional ``base_dir``: production callers
 omit it (it defaults to ``AUTOSAVE_DIR/acp``), while tests pass an explicit
@@ -57,7 +58,7 @@ def _resolve_base(base_dir: Optional[Path]) -> Path:
 
 
 def _safe_name(session_id: str) -> str:
-    """Sanitise a session id into a filesystem-safe pickle stem."""
+    """Sanitise a session id into a filesystem-safe session stem."""
     return "".join(c if (c.isalnum() or c in "-_") else "_" for c in session_id)
 
 
@@ -145,12 +146,24 @@ def load_history(
         return None
 
 
+def _session_file_exists(base: Path, session_id: str) -> bool:
+    """Return whether the JSON session or legacy pickle is available.
+
+    The JSON envelope is the source of truth. The pickle check is retained
+    only so an ACP session written by an older core/plugin can still be
+    listed and lazily migrated by ``load_session``.
+    """
+    stem = _safe_name(session_id)
+    return (base / f"{stem}.json").exists() or (base / f"{stem}.pkl").exists()
+
+
 def list_persisted(base_dir: Optional[Path] = None) -> List[PersistedSession]:
     """Return every ACP session persisted on disk (newest first).
 
     Reads the ACP metadata sidecars so revivable sessions survive process
-    restarts. A session whose pickle vanished (only the sidecar remains) is
-    skipped -- there is nothing left to rehydrate.
+    restarts. A session whose JSON envelope and legacy pickle both vanished
+    (only the sidecar remains) is skipped -- there is nothing left to
+    rehydrate.
     """
     base = _resolve_base(base_dir)
     if not base.exists():
@@ -162,7 +175,7 @@ def list_persisted(base_dir: Optional[Path] = None) -> List[PersistedSession]:
             session_id = data.get("session_id")
             if not session_id:
                 continue
-            if not (base / f"{_safe_name(session_id)}.pkl").exists():
+            if not _session_file_exists(base, session_id):
                 continue
             records.append(
                 PersistedSession(
@@ -179,7 +192,7 @@ def list_persisted(base_dir: Optional[Path] = None) -> List[PersistedSession]:
 
 
 def delete(session_id: str, base_dir: Optional[Path] = None) -> None:
-    """Remove a persisted session's pickle + sidecars (best-effort).
+    """Remove a persisted session's JSON/pickle files + sidecars (best-effort).
 
     Called when a client explicitly closes a session so a deliberate close
     doesn't leave a ghost that reappears in the next ``list_sessions``.
@@ -188,6 +201,7 @@ def delete(session_id: str, base_dir: Optional[Path] = None) -> None:
         base = _resolve_base(base_dir)
         stem = _safe_name(session_id)
         for path in (
+            base / f"{stem}.json",
             base / f"{stem}.pkl",
             base / f"{stem}_meta.json",
             _acp_meta_path(base, session_id),

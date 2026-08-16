@@ -23,7 +23,7 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/mpfaffenberger/code_puppy.git@main"
+          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@026fd30ff8df3e8e1f66cb2dec02bac7f080c6ce"
           uv pip install -e . --group dev
       - name: Quality
         run: |
@@ -46,7 +46,7 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/mpfaffenberger/code_puppy.git@757db1cf33138dcf34ea58a7888f4a16f4f4ca1c"
+          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@026fd30ff8df3e8e1f66cb2dec02bac7f080c6ce"
           uv pip install -e . --group dev
           uv pip install "pydantic>=2.11,<2.12"
       - name: Minimum-version spill contract
@@ -68,7 +68,7 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@dcb6618454a6ba22ccf7077a20f12c92d82fc847"
+          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@c5421a346bb9ee68f1afac231eadec8e1886cf38"
           uv pip install -e . --group dev
       - name: Coordinated spill contract
         env:
