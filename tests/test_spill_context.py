@@ -7,6 +7,7 @@ import json
 import pytest
 from pydantic import BaseModel, Field, field_serializer
 from pydantic_ai import Agent
+from pydantic_ai._agent_graph import CallToolsNode
 from pydantic_ai.tool_manager import ToolManager
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
@@ -16,8 +17,9 @@ from code_puppy.pydantic_patches import patch_tool_call_callbacks
 from code_puppy_core_plugins.spill import register_callbacks as spill
 
 pytestmark = pytest.mark.skipif(
-    not hasattr(callbacks, "on_final_tool_result"),
-    reason="requires coordinated Code Puppy final-result phase",
+    not hasattr(callbacks, "on_final_tool_result")
+    or not hasattr(callbacks, "_register_terminal_callback"),
+    reason="requires coordinated final-result and terminal callback phases",
 )
 
 _NOTICE = "Full output stored at:"
@@ -73,6 +75,8 @@ async def _run_tool(output, hook_context: str) -> str:
     original_execute_tool_call = ToolManager.execute_tool_call
     original_get_tool_def = ToolManager.get_tool_def
     original_validate_tool_call = ToolManager.validate_tool_call
+    original_validate_output_tool_call = ToolManager.validate_output_tool_call
+    original_handle_tool_calls = CallToolsNode._handle_tool_calls
     callbacks.register_callback("pre_tool_call", add_context)
     patch_tool_call_callbacks()
     try:
@@ -87,6 +91,8 @@ async def _run_tool(output, hook_context: str) -> str:
         ToolManager.execute_tool_call = original_execute_tool_call
         ToolManager.get_tool_def = original_get_tool_def
         ToolManager.validate_tool_call = original_validate_tool_call
+        ToolManager.validate_output_tool_call = original_validate_output_tool_call
+        CallToolsNode._handle_tool_calls = original_handle_tool_calls
         callbacks.unregister_callback("pre_tool_call", add_context)
 
     assert run_result.output == "done"

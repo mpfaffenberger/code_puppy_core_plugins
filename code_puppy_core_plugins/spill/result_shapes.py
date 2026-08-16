@@ -384,15 +384,20 @@ def _model_instance_is_safe(
     )
 
 
+def _contains_string_subclass(mapping: dict[Any, Any]) -> bool:
+    for value in dict.values(mapping):
+        value_type = type(value)
+        if value_type is not str and issubclass(value_type, str):
+            return True
+    return False
+
+
 def model_facing_mapping(result: Any) -> dict[str, Any] | None:
     """Return the safely mutable top-level mapping sent to the model."""
     if type(result) is dict:
         if any(type(key) is not str for key in result):
             return None
-        if any(
-            isinstance(value, str) and type(value) is not str
-            for value in result.values()
-        ):
+        if _contains_string_subclass(result):
             return None
         return dict(result)
     contract = _contract_for_type(type(result))
@@ -435,10 +440,7 @@ def string_snapshot(result: Any) -> dict[str, str] | None:
     if type(result) is dict:
         if any(type(key) is not str for key in result):
             return None
-        if any(
-            isinstance(value, str) and type(value) is not str
-            for value in result.values()
-        ):
+        if _contains_string_subclass(result):
             return None
         return {key: value for key, value in result.items() if type(value) is str}
     contract = _model_contract(result)

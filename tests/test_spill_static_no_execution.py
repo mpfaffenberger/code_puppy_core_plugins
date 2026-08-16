@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from code_puppy.tools.command_runner import ShellCommandOutput
 
-from code_puppy_core_plugins.spill.result_shapes import model_facing_mapping
+from code_puppy_core_plugins.spill.result_shapes import (
+    model_facing_mapping,
+    string_snapshot,
+)
 
 
 def _shell_result() -> ShellCommandOutput:
@@ -53,6 +56,24 @@ def test_hostile_instance_key_is_rejected_without_hashing():
     object.__setattr__(result, "__dict__", raw_values)
 
     assert model_facing_mapping(result) is None
+    assert calls == []
+
+
+def test_exact_dict_metadata_does_not_expose_dynamic_class():
+    calls = []
+
+    class HostileMetadata:
+        @property
+        def __class__(self):
+            calls.append("class")
+            raise AssertionError("metadata __class__ executed")
+
+    result = {"error": "ordinary result", "metadata": HostileMetadata()}
+
+    mapping = model_facing_mapping(result)
+    assert mapping is not None
+    assert mapping["error"] == "ordinary result"
+    assert string_snapshot(result) == {"error": "ordinary result"}
     assert calls == []
 
 

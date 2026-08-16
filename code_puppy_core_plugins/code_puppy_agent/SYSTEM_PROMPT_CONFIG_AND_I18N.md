@@ -103,7 +103,7 @@ skipped because its instructions are intentionally consumed as one unit.
 Only supported top-level string values count toward this decoded-value budget;
 nested strings are not traversed. Spill validates model replacements on a
 fresh schema-validated candidate in a worker and commits replacements together
-only if the live result still matches its snapshot. A result stages at most 128
+only if its eligible top-level string fields still match the captured string snapshot. A result stages at most 128
 of its largest eligible fields to bound file amplification. If satisfying the
 inline budget would require a 129th field, the result remains wholly inline.
 Storage and mutation are best-effort: any validation, persistence, cancellation,

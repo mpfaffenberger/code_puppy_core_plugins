@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pypi-publish
+  group: pypi-publish-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -69,7 +69,7 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@379a1a2b029f44050403529db1327498fd57b96e"
+          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@d56460d7ad16e8ee24e78669e53c9131a22c0403"
           uv pip install -e . --group dev
       - name: Coordinated full suite
         env:

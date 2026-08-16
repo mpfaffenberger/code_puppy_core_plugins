@@ -38,18 +38,24 @@ equal priorities retain registration order.
 | `custom_command` | Unknown `/slash` command | `True` (handled), `str` (message), or `None` (not mine) |
 | `pre_tool_call` | Before tool executes | Can modify args |
 | `post_tool_call` | After tool finishes, before hook context | Observes the original result + duration; can mutate mutable results in place |
-| `final_tool_result` | After hook-context composition | Last public mutable-result phase before the reserved terminal boundary |
+| `final_tool_result` *(coordinated runtimes)* | After hook-context composition | Last public mutable-result phase before the reserved terminal boundary |
 | `run_shell_command` | Before shell exec | Return `{"blocked": True}` to block |
 | `file_permission` | Before file op | `bool` — allow/deny |
 | `agent_run_start` / `agent_run_end` | Agent lifecycle | Observes name, model, session |
 
 The authoritative full hook list is `callbacks.py`'s `PhaseType`.
+`final_tool_result` and the reserved terminal boundary require a coordinated
+Code Puppy runtime that exposes those APIs. Older runtimes expose only
+`post_tool_call`; core spill detects that capability and uses its legacy
+startup-ordering fallback. Third-party plugins supporting both generations
+should feature-detect the phase rather than register it unconditionally.
 
 ### Mutating tool results
 
-The patched runner first awaits `post_tool_call` with the original result. It
-then safely serializes any pre-tool hook context into a mutable envelope and
-awaits `final_tool_result` immediately before returning to pydantic-ai. A
+On a coordinated runtime, the patched runner first awaits `post_tool_call` with
+the original result. It then safely serializes any pre-tool hook context into a
+mutable envelope and awaits `final_tool_result` immediately before returning to
+pydantic-ai. A
 callback can mutate a mutable result object—such as a plain dictionary or a
 supported Pydantic model—in place and the model sees the change. It cannot
 replace a string or other immutable result by rebinding its local argument.
