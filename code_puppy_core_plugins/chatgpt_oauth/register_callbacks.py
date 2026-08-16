@@ -60,7 +60,8 @@ def _handle_chatgpt_status() -> None:
         chatgpt_models = [
             name
             for name, cfg in load_chatgpt_models().items()
-            if cfg.get("oauth_source") == "chatgpt-oauth-plugin"
+            if isinstance(cfg, dict)
+            and cfg.get("oauth_source") == "chatgpt-oauth-plugin"
         ]
         if chatgpt_models:
             emit_info(f"🎯 Configured ChatGPT models: {', '.join(chatgpt_models)}")

@@ -154,6 +154,47 @@ class TestHandleChatgptLogout:
         ):
             _handle_chatgpt_logout()
 
+    def test_logout_reloads_agent_when_authenticated(self):
+        from code_puppy_core_plugins.chatgpt_oauth.register_callbacks import (
+            _handle_chatgpt_logout,
+        )
+
+        mock_path = MagicMock()
+        mock_path.exists.return_value = True
+
+        with (
+            patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.get_token_storage_path",
+                return_value=mock_path,
+            ),
+            patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.CHATGPT_OAUTH_CONFIG",
+                {"api_key_env_var": "CHATGPT_OAUTH_API_KEY"},
+            ),
+            patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.load_stored_tokens",
+                return_value={"access_token": "at", "account_id": "acc"},
+            ),
+            patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.remove_chatgpt_models",
+                return_value=1,
+            ),
+            patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks._reload_active_agent"
+            ) as reload_agent,
+            patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.refresh_skill_cache"
+            ) as refresh_skills,
+            patch("code_puppy_core_plugins.chatgpt_oauth.register_callbacks.emit_info"),
+            patch(
+                "code_puppy_core_plugins.chatgpt_oauth.register_callbacks.emit_success"
+            ),
+        ):
+            _handle_chatgpt_logout()
+
+        reload_agent.assert_called_once_with()
+        refresh_skills.assert_called_once_with()
+
 
 class TestHandleCustomCommand:
     def test_empty_name(self):

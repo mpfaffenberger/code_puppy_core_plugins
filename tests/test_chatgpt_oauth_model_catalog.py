@@ -310,6 +310,16 @@ class TestModelsConfigBridge:
 
         assert bridged["codex-gpt-5.6-sol"]["context_length"] == 258400
 
+    def test_bridge_registration_is_pinned(self):
+        """If someone deletes the register_callback line, the sanitizer
+        silently re-deads (core falls back to the raw file). Fail loudly."""
+        from code_puppy.callbacks import get_callbacks
+
+        from code_puppy_core_plugins.chatgpt_oauth import register_callbacks
+
+        registered = get_callbacks("load_models_config", include_disabled=True)
+        assert register_callbacks._load_models_config in registered
+
     def test_malformed_entries_do_not_crash_add_or_remove(self, tmp_path):
         models_path = tmp_path / "models.json"
         models_path.write_text(
