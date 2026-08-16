@@ -1,8 +1,9 @@
 """DBOSAgent wrapper, registered via the wrap_pydantic_agent hook.
 
-The DBOS wrapper can't pickle async-generator MCP toolsets, so we stash
-them off the inner pydantic agent before wrapping. They're restored at
-run-time inside :mod:`runtime` so MCP tools remain available during the run.
+pydantic-ai 1.107.5's ``DBOSAgent`` constructor visits the wrapped agent's
+public toolsets and replaces MCP toolsets with DBOS-safe variants. Keep the
+normal constructor-level toolsets intact and let that public integration own
+the lifecycle; older plugin code mutated private ``_toolsets`` fields here.
 """
 
 from __future__ import annotations
@@ -43,10 +44,9 @@ def wrap_with_dbos_agent(
     except ImportError:
         return None
 
-    # Reset toolsets — DBOS can't pickle async-generator MCP toolsets.
-    # The runtime hook re-injects MCP servers from its own arg at run time.
-    pydantic_agent._toolsets = []
-
+    # DBOSAgent 1.107.5 handles MCP toolsets during construction. Do not
+    # mutate private agent state: constructor-level toolsets are the public
+    # integration point and are converted to DBOS-safe variants there.
     name_suffix = next(_reload_count)
     agent_name = getattr(agent, "name", "agent")
     # Sub-agent path historically didn't pass an event stream handler.

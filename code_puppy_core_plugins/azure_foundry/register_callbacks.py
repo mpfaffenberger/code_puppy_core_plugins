@@ -317,9 +317,8 @@ def _create_azure_foundry_model(
         )
         return None
 
-    from code_puppy.claude_cache_client import patch_anthropic_client_messages
     from code_puppy.config import get_effective_model_settings
-    from code_puppy.model_factory import CONTEXT_1M_BETA
+    from code_puppy.model_factory import CONTEXT_1M_BETA, make_model_settings
     from code_puppy.provider_identity import (
         make_anthropic_provider,
         resolve_provider_identity,
@@ -381,9 +380,6 @@ def _create_azure_foundry_model(
             default_headers=default_headers,
         )
 
-        # Patch for cache control injection
-        patch_anthropic_client_messages(anthropic_client)
-
         # Create the pydantic-ai provider and model
         provider_identity = resolve_provider_identity(model_name, model_config)
         provider = make_anthropic_provider(
@@ -391,7 +387,22 @@ def _create_azure_foundry_model(
             anthropic_client=anthropic_client,
         )
 
-        model = AnthropicModel(model_name=deployment_name, provider=provider)
+        # Prompt caching is handled by pydantic-ai's native Anthropic
+        # settings; Foundry's API-key-style models use Anthropic's default
+        # five-minute cache TTL.
+        model_settings = make_model_settings(model_name)
+        model_settings.update(
+            {
+                "anthropic_cache_instructions": True,
+                "anthropic_cache_tool_definitions": True,
+                "anthropic_cache_messages": True,
+            }
+        )
+        model = AnthropicModel(
+            model_name=deployment_name,
+            provider=provider,
+            settings=model_settings,
+        )
         logger.info(
             "Created Azure Foundry model: %s -> %s @ %s",
             model_name,

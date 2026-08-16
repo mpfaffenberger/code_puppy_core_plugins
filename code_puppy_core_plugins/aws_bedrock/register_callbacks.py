@@ -164,9 +164,8 @@ def _create_aws_bedrock_model(model_name: str, model_config: dict, config: dict)
         )
         return None
 
-    from code_puppy.claude_cache_client import patch_anthropic_client_messages
     from code_puppy.config import get_effective_model_settings
-    from code_puppy.model_factory import CONTEXT_1M_BETA
+    from code_puppy.model_factory import CONTEXT_1M_BETA, make_model_settings
     from code_puppy.provider_identity import (
         make_anthropic_provider,
         resolve_provider_identity,
@@ -206,15 +205,27 @@ def _create_aws_bedrock_model(model_name: str, model_config: dict, config: dict)
 
         anthropic_client = AsyncAnthropicBedrock(**client_kwargs)
 
-        patch_anthropic_client_messages(anthropic_client)
-
         provider_identity = resolve_provider_identity(model_name, model_config)
         provider = make_anthropic_provider(
             provider_identity,
             anthropic_client=anthropic_client,
         )
 
-        model = AnthropicModel(model_name=model_id, provider=provider)
+        # Prompt caching is handled by pydantic-ai's native Anthropic
+        # settings at all three cache breakpoints.
+        model_settings = make_model_settings(model_name)
+        model_settings.update(
+            {
+                "anthropic_cache_instructions": True,
+                "anthropic_cache_tool_definitions": True,
+                "anthropic_cache_messages": True,
+            }
+        )
+        model = AnthropicModel(
+            model_name=model_id,
+            provider=provider,
+            settings=model_settings,
+        )
         logger.info(
             "Created Bedrock model: %s -> %s @ %s",
             model_name,

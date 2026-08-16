@@ -306,10 +306,12 @@ def _to_acp_usage(result: Any) -> Optional[Usage]:
     if result is None:
         return None
     try:
-        usage = result.usage()
+        usage = getattr(result, "usage", None)
+        # pydantic-ai 1.107.5 exposes usage as a property. Ignore an older
+        # method-style value rather than invoking its deprecated call path.
     except Exception:  # noqa: BLE001
         return None
-    if usage is None:
+    if usage is None or callable(usage):
         return None
 
     def pick(*names: str) -> Optional[int]:

@@ -101,10 +101,9 @@ def create_ollama_model(
         provider = OpenAIProvider(**provider_args)
 
         actual_model_name = model_config.get("name", model_name)
+        # ``provider`` is exposed by OpenAIChatModel as a read-only property;
+        # passing it to the constructor is the supported way to bind it.
         model = OpenAIChatModel(actual_model_name, provider=provider)
-        model.provider = (
-            provider  # Expose for connection-pooling cleanup (project convention)
-        )
 
         logger.info("Created ollama model: %s -> %s", actual_model_name, url)
         return model

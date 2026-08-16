@@ -13,7 +13,7 @@ On startup we monkeypatch four things:
    redundant.
 
 3. ``_runtime.run_with_mcp`` — wraps the orchestration so that after every
-   successful agent run we extract ``result.usage().input_tokens`` and
+   successful agent run we extract ``result.usage.input_tokens`` and
    the character count of the input, then call
    ``ratios._record_token_ratio()`` to update the running average.
 
@@ -142,7 +142,12 @@ async def _patched_run_with_mcp(
 
     # Try to extract token usage from the result
     try:
-        usage = result.usage()  # AgentRunResult.usage() → RunUsage
+        usage = getattr(result, "usage", None)
+        # pydantic-ai 1.107.5 exposes usage as a property. A callable value
+        # belongs to an older method-style host; ignore it rather than
+        # triggering the deprecated call path.
+        if callable(usage):
+            return result
         input_tokens = getattr(usage, "input_tokens", 0) or getattr(
             usage, "request_tokens", 0
         )

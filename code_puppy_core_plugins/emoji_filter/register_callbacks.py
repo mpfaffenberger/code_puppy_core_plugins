@@ -148,6 +148,8 @@ def _on_pre_tool_call(
 
 # Streaming patch: patch TextPart/TextPartDelta __init__ exactly once; the patched
 # init checks ``is_enabled()`` at call time so the user can toggle without restart.
+# V2 RISK: this relies on mutable dataclass constructors; frozen/slots message
+# parts would require moving filtering to the stream-event callback seam.
 
 _STREAM_PATCH_FLAG = "_emoji_filter_patched"
 

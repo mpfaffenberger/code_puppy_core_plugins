@@ -1,9 +1,9 @@
 """Attach client-injected MCP servers (from ``session/new``) to a session agent.
 
-ACP lets the client pass MCP server specs per session. We translate each into a
-pydantic-ai MCP server and append it to the agent's ``_mcp_servers`` list;
-``run_with_mcp`` starts them for that session's runs. Best-effort: a malformed
-spec is skipped, never fatal.
+ACP lets the client pass MCP server specs per session. We translate each into
+the pydantic-ai 1.x ``MCPToolset`` API and append it to the agent's
+``_mcp_servers`` list; ``run_with_mcp`` starts them for that session's runs.
+Best-effort: a malformed spec is skipped, never fatal.
 """
 
 from __future__ import annotations
@@ -24,29 +24,37 @@ def _kv(items: Any) -> Dict[str, str]:
     return out
 
 
+def _with_prefix(toolset: Any, name: Optional[str]) -> Any:
+    """Prefix tool names through the public toolset wrapper API."""
+    return toolset.prefixed(name) if name else toolset
+
+
 def _translate(spec: Any) -> Optional[Any]:
-    """Map one ACP MCP server spec to a pydantic-ai MCP server instance."""
-    from pydantic_ai.mcp import (
-        MCPServerSSE,
-        MCPServerStdio,
-        MCPServerStreamableHTTP,
+    """Map one ACP MCP server spec to a pydantic-ai MCP toolset."""
+    from fastmcp.client.transports import (
+        SSETransport,
+        StdioTransport,
+        StreamableHttpTransport,
     )
+    from pydantic_ai.mcp import MCPToolset
 
     name = getattr(spec, "name", None) or None
     if getattr(spec, "command", None):
-        return MCPServerStdio(
+        transport = StdioTransport(
             command=spec.command,
             args=list(getattr(spec, "args", None) or []),
             env=_kv(getattr(spec, "env", None)) or None,
-            tool_prefix=name,
         )
+        return _with_prefix(MCPToolset(transport), name)
     url = getattr(spec, "url", None)
     if not url:
         return None
     headers = _kv(getattr(spec, "headers", None)) or None
     if getattr(spec, "type", None) == "sse":
-        return MCPServerSSE(url=url, headers=headers, tool_prefix=name)
-    return MCPServerStreamableHTTP(url=url, headers=headers, tool_prefix=name)
+        transport = SSETransport(url=url, headers=headers)
+    else:
+        transport = StreamableHttpTransport(url=url, headers=headers)
+    return _with_prefix(MCPToolset(transport), name)
 
 
 def attach(agent: Any, specs: List[Any]) -> None:
