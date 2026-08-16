@@ -47,7 +47,7 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@026fd30ff8df3e8e1f66cb2dec02bac7f080c6ce"
+          uv pip install "code-puppy @ git+https://github.com/mpfaffenberger/code_puppy.git@026fd30ff8df3e8e1f66cb2dec02bac7f080c6ce"
           uv pip install -e . --group dev
           uv pip install "pydantic>=2.11,<2.12"
       - name: Minimum-version spill contract
