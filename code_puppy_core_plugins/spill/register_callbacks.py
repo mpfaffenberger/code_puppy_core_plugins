@@ -154,9 +154,19 @@ def _spill_result(
     if total <= cap:
         return
 
+    # Values no larger than the preview never benefit from being spilled: the
+    # retrieval notice would be larger than the original. Keep them fixed and
+    # divide the available cap evenly across fields that actually need a
+    # replacement. This makes the result deterministic even when a long temp
+    # root makes each retrieval notice expensive.
+    spill_threshold = min(preview_bytes, max(1, cap // 2))
+    spillable = [item for item in fields if item[2] > spill_threshold]
+    fixed_bytes = total - sum(size for _, _, size in spillable)
+    per_field_limit = max(0, (cap - fixed_bytes) // len(spillable)) if spillable else 0
+
     replacements: dict[Any, str] = {}
     for key, original, original_bytes in sorted(
-        fields, key=lambda item: item[2], reverse=True
+        spillable, key=lambda item: item[2], reverse=True
     ):
         if total <= cap:
             break
@@ -173,13 +183,11 @@ def _spill_result(
             )
             continue
 
-        other_bytes = total - original_bytes
-        field_limit = cap - other_bytes if other_bytes < cap else None
         replacement = _build_replacement(
             original,
             path,
             preview_bytes,
-            field_limit,
+            per_field_limit,
         )
         if replacement is None:
             logger.warning(
@@ -189,7 +197,7 @@ def _spill_result(
             )
             continue
         replacements[key] = replacement
-        total = other_bytes + _byte_size(replacement)
+        total = total - original_bytes + _byte_size(replacement)
 
     # Commit atomically. A partial preview set that still exceeds the cap is
     # neither bounded nor graceful; keep every original inline in that case.
