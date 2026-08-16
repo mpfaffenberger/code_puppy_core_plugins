@@ -1,7 +1,6 @@
 """Plugin: spill oversized structured tool results to private files.
 
-Ported from DeepSeek Harness's MIT-licensed spill design. See
-``LICENSE.deepseek`` in this package for its copyright and license notice.
+Based on DeepSeek Harness's MIT spill design; see ``LICENSE.deepseek``.
 
 The post-tool hook receives the same result object that Code Puppy later
 serializes for the model. This plugin can therefore replace top-level string
@@ -18,7 +17,8 @@ When the combined decoded UTF-8 size of top-level string values exceeds the
 configured budget, fields are considered largest-first. JSON keys, syntax,
 escaping, provider wire bytes, and tokens are intentionally outside this
 budget. Full text is saved verbatim, then replaced by a bounded byte-sliced
-head/tail preview and a retrieval notice.
+head/tail preview and a retrieval notice. At most 128 largest fields may be
+staged; larger plans and single-key ``{"error": ...}`` dicts remain inline.
 ``read_file`` is skipped by default to avoid a read -> spill -> read loop.
 ``activate_skill`` is also skipped because its instructions are intentionally
 consumed as one semantic unit. Spill failures leave successful results inline.
@@ -416,7 +416,7 @@ def _inspect_and_prepare_spill(
     job: _SpillJob,
     session_id: str | None = None,
 ) -> _SpillPlan | None:
-    """Inspect, size, validate, and persist entirely on a worker thread."""
+    """Prepare a spill, except for exact single-key ``{"error": ...}`` dicts."""
     if job.is_cancelled():
         return None
     mapping = _model_facing_mapping(result)

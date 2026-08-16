@@ -85,8 +85,8 @@ is deliberately conservative: only an audited allowlist of Code Puppy built-in
 scalar output classes is eligible (shell, file-listing, and agent-invocation
 results). Arbitrary/custom Pydantic models—including nested fields, custom
 validators/serializers/schema hooks, aliases, extras, exclusions, computed or
-frozen fields—remain inline. Error-only
-results, plain strings, and `ToolReturn` image payloads remain untouched when
+frozen fields—remain inline. Exact single-key `{"error": ...}` dictionaries,
+plain strings, and `ToolReturn` image payloads remain untouched when
 there is no pre-tool hook context. Hook context creates a safely serialized
 textual dictionary envelope; that envelope may spill regardless of the original
 shape, without exposing excluded Pydantic fields through `str(model)`.
@@ -103,11 +103,15 @@ skipped because its instructions are intentionally consumed as one unit.
 Only supported top-level string values count toward this decoded-value budget;
 nested strings are not traversed. Spill validates model replacements on a
 fresh schema-validated candidate in a worker and commits replacements together
-only if the live result still matches its snapshot. Storage and mutation are
-best-effort: any validation, persistence, cancellation, stale-plan, or commit
-failure keeps the newer/original successful result inline and attempts to
-remove every staged file. Cleanup itself remains best-effort when the operating
-system refuses deletion.
+only if the live result still matches its snapshot. A result stages at most 128
+of its largest eligible fields to bound file amplification. If satisfying the
+inline budget would require a 129th field, the result remains wholly inline.
+Storage and mutation are best-effort: any validation, persistence, cancellation,
+stale-plan, or commit failure keeps the newer/original successful result inline
+and attempts to remove every staged file. Cleanup itself remains best-effort
+when the operating system refuses deletion. Dictionaries with `error` plus
+other result/metadata keys are not part of the single-key error exception and
+remain spill-eligible.
 
 An individual JSON agent can disable spill while leaving it enabled globally:
 

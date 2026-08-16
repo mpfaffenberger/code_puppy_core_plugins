@@ -1,11 +1,12 @@
 name: Test, Build, and Publish
 
 on:
+  pull_request:
   push:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: pypi-publish
@@ -23,7 +24,7 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@026fd30ff8df3e8e1f66cb2dec02bac7f080c6ce"
+          uv pip install "code-puppy @ git+https://github.com/mpfaffenberger/code_puppy.git@96c86d182536b05259b1e63566771729e9524315"
           uv pip install -e . --group dev
       - name: Quality
         run: |
@@ -55,7 +56,7 @@ jobs:
           CODE_PUPPY_TEST_FAST: '1'
         run: |
           uv run --no-sync python -c 'import pydantic; assert pydantic.__version__.startswith("2.11.")'
-          uv run --no-sync pytest -q tests/test_spill.py tests/test_spill_models.py tests/test_spill_static_gate.py
+          uv run --no-sync pytest -q tests/test_spill.py tests/test_spill_models.py tests/test_spill_static_gate.py tests/test_spill_static_no_execution.py tests/test_spill_agent_usage_model.py
 
   coordinated-contract:
     runs-on: ubuntu-latest
@@ -68,16 +69,19 @@ jobs:
         run: |
           pip install uv
           uv venv
-          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@a0386ba823d44b5293570dab37f9e1ea518043cc"
+          uv pip install "code-puppy @ git+https://github.com/thomwebb/code_puppy.git@379a1a2b029f44050403529db1327498fd57b96e"
           uv pip install -e . --group dev
-      - name: Coordinated spill contract
+      - name: Coordinated full suite
         env:
           CI: '1'
           CODE_PUPPY_TEST_FAST: '1'
-        run: uv run pytest -q tests/test_spill.py tests/test_spill_models.py tests/test_spill_context.py tests/test_spill_static_gate.py
+        run: uv run pytest -q
 
   build-publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs: [test, minimum-compatibility, coordinated-contract]
     env:
       HAS_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}

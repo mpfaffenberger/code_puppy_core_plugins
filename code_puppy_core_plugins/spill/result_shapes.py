@@ -31,7 +31,9 @@ class _ModelContract:
     validator: object
     field_types: dict[str, tuple[type, ...]]
     field_objects: dict[str, object]
+    list_fields: dict[str, _ModelContract]
     model_config: dict[str, Any]
+    model_config_values: dict[str, Any]
     decorators: object
     getattribute_method: object
     setattr_method: object
@@ -84,22 +86,52 @@ def _candidate_builtin_models() -> tuple[type[BaseModel], ...]:
     return tuple(candidates)
 
 
+def _field_is_plain(model_field: Any) -> bool:
+    return (
+        model_field.alias is None
+        and model_field.serialization_alias is None
+        and model_field.validation_alias is None
+        and model_field.exclude in (None, False)
+        and getattr(model_field, "exclude_if", None) is None
+        and not model_field.metadata
+    )
+
+
 def _field_runtime_types(model_field: Any) -> tuple[type, ...] | None:
     runtime_types = _annotation_runtime_types(model_field.annotation)
-    if (
-        runtime_types is None
-        or model_field.alias is not None
-        or model_field.serialization_alias is not None
-        or model_field.validation_alias is not None
-        or model_field.exclude not in (None, False)
-        or getattr(model_field, "exclude_if", None) is not None
-        or model_field.metadata
-    ):
+    return (
+        runtime_types
+        if runtime_types is not None and _field_is_plain(model_field)
+        else None
+    )
+
+
+def _optional_list_item_model(model_field: Any) -> type[BaseModel] | None:
+    if not _field_is_plain(model_field) or model_field.is_required():
         return None
-    return runtime_types
+    annotation = model_field.annotation
+    if get_origin(annotation) in (Union, UnionType):
+        members = tuple(item for item in get_args(annotation) if item is not NoneType)
+        if len(members) != 1 or len(members) == len(get_args(annotation)):
+            return None
+        annotation = members[0]
+    if get_origin(annotation) is not list:
+        return None
+    item_args = get_args(annotation)
+    if len(item_args) != 1:
+        return None
+    item_type = item_args[0]
+    if type(item_type) is not type(BaseModel) or not issubclass(item_type, BaseModel):
+        return None
+    return item_type
 
 
-def _build_model_contract(model_type: type[BaseModel]) -> _ModelContract | None:
+def _build_model_contract(
+    model_type: type[BaseModel],
+    *,
+    allow_config: bool = False,
+    allow_lists: bool = True,
+) -> _ModelContract | None:
     if type(model_type) is not type(BaseModel):
         return None
     if (
@@ -108,7 +140,7 @@ def _build_model_contract(model_type: type[BaseModel]) -> _ModelContract | None:
         or model_type.model_dump is not _BASE_MODEL_DUMP
         or model_type.model_validate.__func__ is not _BASE_MODEL_VALIDATE
         or type(model_type.model_config) is not dict
-        or bool(model_type.model_config)
+        or (bool(model_type.model_config) and not allow_config)
     ):
         return None
     decorators = model_type.__pydantic_decorators__
@@ -127,10 +159,26 @@ def _build_model_contract(model_type: type[BaseModel]) -> _ModelContract | None:
         return None
 
     field_types: dict[str, tuple[type, ...]] = {}
+    list_fields: dict[str, _ModelContract] = {}
     for name, model_field in model_type.model_fields.items():
-        runtime_types = _field_runtime_types(model_field)
-        if runtime_types is None or type(name) is not str:
+        if type(name) is not str:
             return None
+        runtime_types = _field_runtime_types(model_field)
+        if runtime_types is None:
+            if not allow_lists:
+                return None
+            item_type = _optional_list_item_model(model_field)
+            if item_type is None:
+                return None
+            item_contract = _build_model_contract(
+                item_type,
+                allow_config=True,
+                allow_lists=False,
+            )
+            if item_contract is None:
+                return None
+            runtime_types = (list, NoneType)
+            list_fields[name] = item_contract
         field_types[name] = runtime_types
 
     return _ModelContract(
@@ -139,7 +187,9 @@ def _build_model_contract(model_type: type[BaseModel]) -> _ModelContract | None:
         validator=model_type.__pydantic_validator__,
         field_types=field_types,
         field_objects=dict(model_type.model_fields),
+        list_fields=list_fields,
         model_config=model_type.model_config,
+        model_config_values=dict.copy(model_type.model_config),
         decorators=decorators,
         getattribute_method=model_type.__getattribute__,
         setattr_method=model_type.__setattr__,
@@ -186,23 +236,55 @@ def _same_field_names(names: tuple[str, ...], contract: _ModelContract) -> bool:
     )
 
 
-def _model_contract(result: BaseModel) -> _ModelContract | None:
-    model_type = type(result)
-    contract = _contract_for_type(model_type)
-    if contract is None:
-        return None
+def _same_model_config(contract: _ModelContract) -> bool:
+    current = contract.model_type.model_config
+    if type(current) is not dict or current is not contract.model_config:
+        return False
+    names = _safe_exact_string_keys(current)
+    if names is None or len(names) != len(contract.model_config_values):
+        return False
+    for name in names:
+        if name not in contract.model_config_values:
+            return False
+        value = dict.__getitem__(current, name)
+        expected = dict.__getitem__(contract.model_config_values, name)
+        if type(value) is not type(expected):
+            return False
+        if type(value) in _SAFE_SCALAR_TYPES + (NoneType,) and value != expected:
+            return False
+        if (
+            type(value) not in _SAFE_SCALAR_TYPES + (NoneType,)
+            and value is not expected
+        ):
+            return False
+    return True
+
+
+def _field_matches_contract(
+    name: str,
+    model_field: Any,
+    contract: _ModelContract,
+) -> bool:
+    nested = contract.list_fields.get(name)
+    if nested is None:
+        return _field_runtime_types(model_field) == contract.field_types[name]
+    return _optional_list_item_model(
+        model_field
+    ) is nested.model_type and _model_type_matches_contract(nested)
+
+
+def _model_type_matches_contract(contract: _ModelContract) -> bool:
+    model_type = contract.model_type
     try:
         model_fields = model_type.model_fields
         if type(model_fields) is not dict:
-            return None
+            return False
         field_names = _safe_exact_string_keys(model_fields)
         if field_names is None:
-            return None
+            return False
         decorators = model_type.__pydantic_decorators__
-        if (
-            type(model_type.model_config) is not dict
-            or model_type.model_config is not contract.model_config
-            or bool(model_type.model_config)
+        return not (
+            not _same_model_config(contract)
             or model_type.__getattribute__ is not contract.getattribute_method
             or model_type.__setattr__ is not contract.setattr_method
             or decorators is not contract.decorators
@@ -216,7 +298,7 @@ def _model_contract(result: BaseModel) -> _ModelContract | None:
                 for name, field in contract.field_objects.items()
             )
             or any(
-                _field_runtime_types(field) != contract.field_types[name]
+                not _field_matches_contract(name, field, contract)
                 for name, field in contract.field_objects.items()
             )
             or any(
@@ -231,18 +313,44 @@ def _model_contract(result: BaseModel) -> _ModelContract | None:
                     "computed_fields",
                 )
             )
-        ):
-            return None
+        )
     except Exception:
-        return None
-    return contract
+        return False
+
+
+def _model_contract(result: BaseModel) -> _ModelContract | None:
+    contract = _contract_for_type(type(result))
+    return (
+        contract
+        if contract is not None and _model_type_matches_contract(contract)
+        else None
+    )
+
+
+def _field_value_is_safe(
+    name: str,
+    value: Any,
+    contract: _ModelContract,
+) -> bool:
+    nested = contract.list_fields.get(name)
+    if nested is None:
+        return type(value) in contract.field_types[name]
+    if value is None:
+        return True
+    return type(value) is list and all(
+        type(item) is nested.model_type
+        and _model_type_matches_contract(nested)
+        and _model_instance_is_safe(item, nested)
+        for item in list.__iter__(value)
+    )
 
 
 def _model_instance_is_safe(
     result: BaseModel,
     contract: _ModelContract | None = None,
 ) -> bool:
-    contract = contract or _model_contract(result)
+    if contract is None:
+        contract = _model_contract(result)
     if contract is None:
         return False
     try:
@@ -267,8 +375,12 @@ def _model_instance_is_safe(
     if raw_names is None or not _same_field_names(raw_names, contract):
         return False
     return all(
-        type(dict.__getitem__(raw_values, name)) in allowed_types
-        for name, allowed_types in contract.field_types.items()
+        _field_value_is_safe(
+            name,
+            dict.__getitem__(raw_values, name),
+            contract,
+        )
+        for name in contract.field_types
     )
 
 
@@ -292,26 +404,11 @@ def model_facing_mapping(result: Any) -> dict[str, Any] | None:
 
     try:
         raw_values = object.__getattribute__(result, "__dict__")
-        serialized = contract.serializer.to_python(
-            result,
-            mode="json",
-            warnings="error",
-        )
-        if type(serialized) is not dict:
-            return None
-        serialized_names = _safe_exact_string_keys(serialized)
-        if serialized_names is None or not _same_field_names(
-            serialized_names,
-            contract,
-        ):
-            return None
-        for field_name, serialized_value in dict.items(serialized):
-            raw_value = dict.__getitem__(raw_values, field_name)
-            if type(serialized_value) is str and (
-                type(raw_value) is not str or raw_value != serialized_value
-            ):
-                return None
-        return serialized
+        return {
+            name: dict.__getitem__(raw_values, name)
+            for name in contract.field_types
+            if name not in contract.list_fields
+        }
     except Exception as exc:
         logger.debug(
             "Cannot inspect built-in Pydantic result %s (%s)",
@@ -356,7 +453,12 @@ def model_validation_spec(result: Any) -> ModelValidationSpec | None:
     if contract is None or not _model_instance_is_safe(result, contract):
         return None
     raw_values = object.__getattribute__(result, "__dict__")
-    return ModelValidationSpec(type(result), dict.copy(raw_values))
+    values = {
+        name: dict.__getitem__(raw_values, name)
+        for name in contract.field_types
+        if name not in contract.list_fields
+    }
+    return ModelValidationSpec(type(result), values)
 
 
 def validate_model_replacements(
