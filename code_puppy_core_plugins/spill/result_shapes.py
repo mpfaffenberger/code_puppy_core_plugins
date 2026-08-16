@@ -32,6 +32,7 @@ class _ModelContract:
     field_types: dict[str, tuple[type, ...]]
     field_objects: dict[str, object]
     model_config: dict[str, Any]
+    decorators: object
     getattribute_method: object
     setattr_method: object
     model_dump_method: object
@@ -139,6 +140,7 @@ def _build_model_contract(model_type: type[BaseModel]) -> _ModelContract | None:
         field_types=field_types,
         field_objects=dict(model_type.model_fields),
         model_config=model_type.model_config,
+        decorators=decorators,
         getattribute_method=model_type.__getattribute__,
         setattr_method=model_type.__setattr__,
         model_dump_method=model_type.model_dump,
@@ -146,40 +148,71 @@ def _build_model_contract(model_type: type[BaseModel]) -> _ModelContract | None:
     )
 
 
-def _load_model_contracts() -> dict[type[BaseModel], _ModelContract]:
-    contracts: dict[type[BaseModel], _ModelContract] = {}
+def _load_model_contracts() -> tuple[_ModelContract, ...]:
+    contracts: list[_ModelContract] = []
     for model_type in _candidate_builtin_models():
         contract = _build_model_contract(model_type)
         if contract is not None:
-            contracts[model_type] = contract
-    return contracts
+            contracts.append(contract)
+    return tuple(contracts)
 
 
 _MODEL_CONTRACTS = _load_model_contracts()
 
 
+def _contract_for_type(model_type: type) -> _ModelContract | None:
+    return next(
+        (
+            contract
+            for contract in _MODEL_CONTRACTS
+            if model_type is contract.model_type
+        ),
+        None,
+    )
+
+
+def _safe_exact_string_keys(mapping: dict) -> tuple[str, ...] | None:
+    keys: list[str] = []
+    for key in dict.__iter__(mapping):
+        if type(key) is not str:
+            return None
+        keys.append(key)
+    return tuple(keys)
+
+
+def _same_field_names(names: tuple[str, ...], contract: _ModelContract) -> bool:
+    return len(names) == len(contract.field_types) and all(
+        name in contract.field_types for name in names
+    )
+
+
 def _model_contract(result: BaseModel) -> _ModelContract | None:
     model_type = type(result)
-    contract = _MODEL_CONTRACTS.get(model_type)
+    contract = _contract_for_type(model_type)
     if contract is None:
         return None
     try:
         model_fields = model_type.model_fields
+        if type(model_fields) is not dict:
+            return None
+        field_names = _safe_exact_string_keys(model_fields)
+        if field_names is None:
+            return None
         decorators = model_type.__pydantic_decorators__
         if (
-            type(model_fields) is not dict
-            or type(model_type.model_config) is not dict
+            type(model_type.model_config) is not dict
             or model_type.model_config is not contract.model_config
             or bool(model_type.model_config)
             or model_type.__getattribute__ is not contract.getattribute_method
             or model_type.__setattr__ is not contract.setattr_method
+            or decorators is not contract.decorators
             or model_type.__pydantic_serializer__ is not contract.serializer
             or model_type.__pydantic_validator__ is not contract.validator
             or model_type.model_dump is not contract.model_dump_method
             or model_type.model_validate.__func__ is not contract.model_validate_method
-            or set(model_fields) != set(contract.field_types)
+            or not _same_field_names(field_names, contract)
             or any(
-                model_fields[name] is not field
+                dict.__getitem__(model_fields, name) is not field
                 for name, field in contract.field_objects.items()
             )
             or any(
@@ -187,7 +220,7 @@ def _model_contract(result: BaseModel) -> _ModelContract | None:
                 for name, field in contract.field_objects.items()
             )
             or any(
-                getattr(decorators, group)
+                getattr(contract.decorators, group)
                 for group in (
                     "validators",
                     "field_validators",
@@ -230,7 +263,8 @@ def _model_instance_is_safe(
         )
     ):
         return False
-    if set(dict.keys(raw_values)) != set(contract.field_types):
+    raw_names = _safe_exact_string_keys(raw_values)
+    if raw_names is None or not _same_field_names(raw_names, contract):
         return False
     return all(
         type(dict.__getitem__(raw_values, name)) in allowed_types
@@ -249,7 +283,8 @@ def model_facing_mapping(result: Any) -> dict[str, Any] | None:
         ):
             return None
         return dict(result)
-    if type(result) not in _MODEL_CONTRACTS:
+    contract = _contract_for_type(type(result))
+    if contract is None:
         return None
     contract = _model_contract(result)
     if contract is None or not _model_instance_is_safe(result, contract):
@@ -264,7 +299,11 @@ def model_facing_mapping(result: Any) -> dict[str, Any] | None:
         )
         if type(serialized) is not dict:
             return None
-        if set(serialized) != set(contract.field_types):
+        serialized_names = _safe_exact_string_keys(serialized)
+        if serialized_names is None or not _same_field_names(
+            serialized_names,
+            contract,
+        ):
             return None
         for field_name, serialized_value in dict.items(serialized):
             raw_value = dict.__getitem__(raw_values, field_name)
@@ -305,14 +344,16 @@ def string_snapshot(result: Any) -> dict[str, str] | None:
         ):
             return None
         return {key: value for key, value in result.items() if type(value) is str}
-    if type(result) not in _MODEL_CONTRACTS or not _model_instance_is_safe(result):
+    contract = _model_contract(result)
+    if contract is None or not _model_instance_is_safe(result, contract):
         return None
     raw_values = object.__getattribute__(result, "__dict__")
     return {key: value for key, value in dict.items(raw_values) if type(value) is str}
 
 
 def model_validation_spec(result: Any) -> ModelValidationSpec | None:
-    if type(result) not in _MODEL_CONTRACTS or not _model_instance_is_safe(result):
+    contract = _model_contract(result)
+    if contract is None or not _model_instance_is_safe(result, contract):
         return None
     raw_values = object.__getattribute__(result, "__dict__")
     return ModelValidationSpec(type(result), dict.copy(raw_values))
@@ -324,7 +365,7 @@ def validate_model_replacements(
     cap: int,
 ) -> bool:
     """Validate a complete isolated candidate without touching the live result."""
-    contract = _MODEL_CONTRACTS.get(spec.model_type)
+    contract = _contract_for_type(spec.model_type)
     if contract is None:
         return False
     try:
@@ -352,7 +393,8 @@ def validate_model_replacements(
 def result_accepts_fields(result: Any, field_names: tuple[str, ...]) -> bool:
     if type(result) is dict:
         return all(type(name) is str for name in field_names)
-    if type(result) not in _MODEL_CONTRACTS:
+    contract = _contract_for_type(type(result))
+    if contract is None:
         return False
     contract = _model_contract(result)
     if contract is None or not _model_instance_is_safe(result, contract):
@@ -384,7 +426,7 @@ def commit_replacements(
         return True
     if (
         not model_validated
-        or type(result) not in _MODEL_CONTRACTS
+        or _contract_for_type(type(result)) is None
         or not result_accepts_fields(result, tuple(replacements))
         or string_snapshot(result) != expected_strings
     ):
