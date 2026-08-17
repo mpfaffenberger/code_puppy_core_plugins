@@ -39,6 +39,11 @@ def _spill_root(tmp_path):
     config.set_value(spill.ROOT_KEY, str(root))
     spill._reset_state()
     yield root
+    # Restore every key this module writes, so the suite cannot leak
+    # `spill_root`/cap/preview values into a real puppy.cfg when config
+    # isolation is unavailable (e.g. running a bare checkout).
+    for key in (spill.ROOT_KEY, spill.MAX_INLINE_KEY, spill.PREVIEW_KEY):
+        config.reset_value(key)
     spill._reset_state()
 
 
