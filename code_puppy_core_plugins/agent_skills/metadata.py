@@ -15,9 +15,14 @@ FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 KEY_VALUE_PATTERN = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*)$", re.MULTILINE)
 LIST_PATTERN = re.compile(r"^\s+-\s+(.+)$", re.MULTILINE)
 
-# Matches a `|`/`>` block-scalar indicator, e.g. `>-`, `|`, `|+2` -- the
+# Matches a `|`/`>` block-scalar indicator, e.g. `>-`, `|`, `|+` -- the
 # real value lives on the indented lines that follow, not this line.
-BLOCK_SCALAR_PATTERN = re.compile(r"^[|>][+-]?[0-9]?$")
+# Deliberately does NOT match an explicit indentation digit (`>2`, `|1-`):
+# that's rare in hand-written SKILL.md files, and a half-implementation
+# risks silently mis-indenting content. Unmatched indicators fall through
+# to the plain-scalar path unchanged (pre-existing, known-limited
+# behavior) rather than being "recognized but wrong".
+BLOCK_SCALAR_PATTERN = re.compile(r"^[|>][+-]?$")
 
 
 @dataclass
@@ -48,7 +53,10 @@ def _consume_block_scalar(
     """Read a `key: |`/`key: >` block's indented lines starting at `start`.
 
     Returns (folded/joined value, index of the first unconsumed line).
-    Covers the common cases, not the full YAML block-scalar spec.
+    Covers the common cases, not the full YAML block-scalar spec: no
+    explicit indentation digit (see BLOCK_SCALAR_PATTERN), and lines
+    indented deeper than the block's base indent inside a folded (`>`)
+    scalar are folded like everything else rather than kept literal.
     """
     style = indicator[0]  # '|' (literal) or '>' (folded)
     chomp = "-" if "-" in indicator else "+" if "+" in indicator else ""
@@ -62,7 +70,10 @@ def _consume_block_scalar(
             block_lines.append("")
             idx += 1
             continue
-        line_indent = len(raw_line) - len(raw_line.lstrip(" "))
+        # strip() (not lstrip(" ")) so tab-indented lines are measured
+        # correctly instead of registering as indent 0 and truncating
+        # the whole block.
+        line_indent = len(raw_line) - len(raw_line.lstrip())
         if indent is None:
             if line_indent == 0:
                 break  # No indented content -- empty block scalar.
@@ -72,8 +83,13 @@ def _consume_block_scalar(
         block_lines.append(raw_line[indent:])
         idx += 1
 
+    # Count trailing blanks separately from the content so "keep"
+    # chomping can restore exactly that many trailing newlines instead of
+    # always collapsing to zero or one.
+    trailing_blanks = 0
     while block_lines and block_lines[-1] == "":
         block_lines.pop()
+        trailing_blanks += 1
 
     if style == ">":
         # Fold single newlines to spaces; blank lines mark a paragraph break.
@@ -89,11 +105,13 @@ def _consume_block_scalar(
     else:
         value = "\n".join(block_lines)
 
+    if not value:
+        return ("\n" * trailing_blanks if chomp == "+" else ""), idx
     if chomp == "+":
-        return value + "\n", idx
+        return value + "\n" * (trailing_blanks + 1), idx
     if chomp == "-":
         return value, idx
-    return (value + "\n" if value else value), idx  # clip (YAML default)
+    return value + "\n", idx  # clip (YAML default)
 
 
 def parse_yaml_frontmatter(content: str) -> dict:
