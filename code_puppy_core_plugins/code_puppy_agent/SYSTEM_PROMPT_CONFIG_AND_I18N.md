@@ -93,6 +93,25 @@ guidance. It leaves error-only and non-dict results untouched and skips
 Storage is best-effort: any spill failure keeps the original successful
 tool result inline.
 
+An individual agent can override spill for itself via `tools_config` (JSON
+agents, or the same shape from `get_tools_config()` in Python agents):
+
+```json
+{
+  "tools_config": {
+    "spill": {
+      "enabled": false,
+      "skip_tools": ["custom_report"]
+    }
+  }
+}
+```
+
+Only the literal boolean `false` disables spill for that agent; malformed
+settings keep the global behavior. `skip_tools` names are additive to the
+global `spill_skip_tools` set (they can add exemptions, never remove them).
+Settings are resolved per executing agent, so concurrent agents may differ.
+
 ---
 
 ## Messaging & UI
