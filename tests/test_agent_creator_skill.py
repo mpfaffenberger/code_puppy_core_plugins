@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from code_puppy.callbacks import get_callbacks, register_callback
+from code_puppy.callbacks import get_callbacks
 from code_puppy_core_plugins.agent_creator_skill.register_callbacks import (
     _register_agent_creator_skill,
 )
@@ -43,16 +43,36 @@ def test_schema_security_and_spill_contracts_are_documented() -> None:
     assert "Only the literal JSON boolean `false` opts that agent out" in body
     assert "`skip_tools` must be a list of non-empty tool-name strings" in body
     assert "Per-agent `skip_tools` is **additive**" in body
-    assert "Globally configuring `spill_skip_tools` replaces the default set" in body
+    assert (
+        "missing, empty, or whitespace-only global value uses the default set" in body
+    )
+    assert "A non-empty global value is comma-split and trimmed" in body
     assert "`true` cannot force Spill on" in body
     assert "concurrent agents may use different Spill policies" in body
     assert "A Spill exemption changes result handling, not tool authorization" in body
     assert "Never place passwords, tokens, cookies, private keys" in body
     assert "Optional `model` omitted unless explicitly selected" in body
+    assert "temporary per-run/runtime override first" in body
+    assert "`/pin_model` does not override a nonblank JSON field" in body
+    assert "report the active precedence layer" in body
     assert "project scope" in body
-    assert "machine bindings override them" in body
+    assert "do not ask the child to write that project file" in body
+    assert "built-in Python agents override JSON agents" in body
+    assert "additive per-server merge" in body
+    assert "only option currently retained" in body
     assert "does **not** fully validate" in body
     assert "real runtime smoke test" in body
+
+
+def test_documented_global_spill_skip_semantics_match_runtime(monkeypatch) -> None:
+    from code_puppy_core_plugins.spill import register_callbacks as spill
+
+    for value in (None, "", "   "):
+        monkeypatch.setattr(spill, "_get_value", lambda _key, value=value: value)
+        assert spill._get_skip_tools() == spill.DEFAULT_SKIP_TOOLS
+
+    monkeypatch.setattr(spill, "_get_value", lambda _key: " alpha, beta ,,")
+    assert spill._get_skip_tools() == frozenset({"alpha", "beta"})
 
 
 def test_built_wheel_loads_and_activates_skill(tmp_path) -> None:
@@ -102,14 +122,35 @@ assert resources.files("code_puppy_core_plugins.agent_creator_skill").joinpath(
     "SKILL.md"
 ).is_file()
 
-from code_puppy_core_plugins.agent_skills import discovery
+import asyncio
+
+from code_puppy.tools.skills_tools import register_activate_skill
+from code_puppy_core_plugins.agent_skills import config
 from code_puppy_core_plugins.agent_skills.provider import AgentSkillsProvider
 
-matches = [s for s in discovery._collect_plugin_skills() if s.name == "agent-creator"]
-assert len(matches) == 1, matches
-content = AgentSkillsProvider().load_skill_content(matches[0].path)
+provider = AgentSkillsProvider()
+path = provider.find_enabled_skill_path("agent-creator")
+assert path is not None
+content = provider.load_skill_content(path)
 assert content is not None
 assert 'invoke_agent(agent_name="agent-creator"' in content
+
+class FakeAgent:
+    def tool(self, function):
+        self.activate_skill = function
+        return function
+
+agent = FakeAgent()
+register_activate_skill(agent)
+result = asyncio.run(agent.activate_skill(None, "agent-creator"))
+assert result.error is None, result
+assert result.skill_name == "agent-creator"
+assert "# Agent Creator Delegation" in result.content
+
+config.get_disabled_skills = lambda: {"agent-creator"}
+disabled = asyncio.run(agent.activate_skill(None, "agent-creator"))
+assert disabled.content == ""
+assert "not found or disabled" in disabled.error
 """
     inherited = (
         "LANG",
@@ -125,8 +166,11 @@ assert 'invoke_agent(agent_name="agent-creator"' in content
     env = {key: os.environ[key] for key in inherited if key in os.environ}
     env.update(
         {
+            "APPDATA": str(tmp_path / "appdata"),
             "HOME": str(tmp_path / "home"),
+            "LOCALAPPDATA": str(tmp_path / "localappdata"),
             "PYTHONPATH": str(install_dir),
+            "USERPROFILE": str(tmp_path / "home"),
             "WHEEL_INSTALL_DIR": str(install_dir),
             "XDG_CACHE_HOME": str(tmp_path / "cache"),
             "XDG_CONFIG_HOME": str(tmp_path / "config"),
@@ -150,22 +194,20 @@ def test_skill_is_discoverable_and_activatable(tmp_path, monkeypatch) -> None:
     from code_puppy_core_plugins.agent_skills import discovery
     from code_puppy_core_plugins.agent_skills.provider import AgentSkillsProvider
 
-    register_callback("register_skills", _register_agent_creator_skill)
-    assert _register_agent_creator_skill in get_callbacks("register_skills")
+    callbacks_before = tuple(get_callbacks("register_skills"))
+    assert _register_agent_creator_skill in callbacks_before
     monkeypatch.setattr(discovery, "_PLUGIN_SKILLS_CACHE_DIR", tmp_path / "skills")
     discovery._plugin_skills_cache = None
     discovery._plugin_skills_signature = None
 
     try:
-        matches = [
-            skill
-            for skill in discovery._collect_plugin_skills()
-            if skill.name == "agent-creator"
-        ]
-        assert len(matches) == 1
-        content = AgentSkillsProvider().load_skill_content(matches[0].path)
+        provider = AgentSkillsProvider()
+        path = provider.find_enabled_skill_path("agent-creator")
+        assert path is not None
+        content = provider.load_skill_content(path)
         assert content is not None
         assert parse_yaml_frontmatter(content)["name"] == "agent-creator"
+        assert tuple(get_callbacks("register_skills")) == callbacks_before
     finally:
         discovery._plugin_skills_cache = None
         discovery._plugin_skills_signature = None

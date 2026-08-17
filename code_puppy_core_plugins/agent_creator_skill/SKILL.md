@@ -12,9 +12,9 @@ tags:
 
 # Agent Creator Delegation
 
-Use the built-in `agent-creator` specialist to turn a concrete capability into a
-validated Code Puppy JSON agent. Do not hand-author a plausible-looking config
-and hope the runtime appreciates the gesture.
+Use the built-in `agent-creator` specialist to design a concrete Code Puppy JSON
+agent and apply the validation it actually supports. Do not hand-author a
+plausible-looking config and hope the runtime appreciates the gesture.
 
 ## Delegate to Agent Creator
 
@@ -56,7 +56,8 @@ Require the specialist to:
    already configured by the user.
 6. Discuss per-agent Spill behavior for tools likely to return large output.
 7. Choose user-global versus project scope before saving, present the exact
-   destination, and avoid overwriting an existing agent without approval.
+   destination, and avoid overwriting an existing agent without approval. For
+   project scope, have the child return a candidate without writing it.
 8. Perform the supported structural checks, clearly identify checks the current
    Agent Creator cannot guarantee, and distinguish them from runtime validation.
 
@@ -70,15 +71,26 @@ Ask before writing:
   repository-specific agent to that project and takes precedence over a
   same-named user definition.
 
-Default repository-specific prompts, tools, and MCP access to project scope.
-Do not silently use the Agent Creator's usual global destination merely because
-it is convenient. Confirm the exact path and overwrite intent.
+The current Agent Creator's system prompt, canonical path helper, and create
+validator support only the user-global directory. Default repository-specific
+prompts, tools, and MCP access to project scope, but **do not ask the child to
+write that project file**: conflicting system guidance may redirect it globally,
+and a project write would bypass its validator. Ask it to return the final
+candidate JSON instead. The parent must validate that candidate, confirm the
+exact destination and overwrite intent, and then write it atomically with normal
+file tools. Do not use replacement tools to bypass validation.
 
 ## JSON Agent Shape
 
 Required fields are `name`, `description`, `system_prompt`, and `tools`.
 `system_prompt` may be a string or a list of strings; `tools` must be a list.
-Use a unique kebab-case name.
+Use a unique kebab-case name. Check the effective agent registry before writing:
+project JSON overrides same-named user JSON by the JSON's internal `name`;
+built-in Python agents override JSON agents; plugin-registered agents are loaded
+later and may replace an existing registry entry; and a filename need not match
+its internal name. A same-named filesystem skill also overrides this bundled
+skill, so verify the activated skill source before trusting its instructions.
+Reject a collision unless the user explicitly understands the observed winner.
 
 Common optional fields are:
 
@@ -88,14 +100,24 @@ Common optional fields are:
 - `tools_config`
 - `mcp_servers`
 
+A nonblank JSON `model` is a persistent JSON-level selection, not an absolute
+pin. Effective model precedence is: temporary per-run/runtime override first,
+then nonblank JSON `model`, then the separately stored per-agent `/pin_model`
+choice, then the global model. Consequently `/pin_model` does not override a
+nonblank JSON field, while a temporary invocation override wins over both.
+Post-load verification must report the active layer and must not call a runtime
+override a mismatch with the candidate. Omit JSON `model` when the user wants
+`/pin_model` or global fallback behavior.
+
 `mcp_servers` accepts either a list of configured server names (each auto-starts)
-or a mapping from server name to options such as `{"auto_start": false}`. Use a
-literal JSON boolean for `auto_start`; the string `"false"` is truthy during
-runtime normalization and would unexpectedly enable auto-start. JSON-declared
-bindings are the lowest-precedence baseline: machine bindings override them,
-and session bindings override both. Verify and report the effective binding
-where possible. Do not invent server names, commands, credentials, or
-environment variables.
+or a mapping from server name to `{"auto_start": false}`. `auto_start` is the
+only option currently retained; unknown fields are silently dropped. Use a
+literal JSON boolean because the string `"false"` becomes truthy during runtime
+normalization. Effective bindings are an additive per-server merge: JSON is the
+baseline, machine bindings replace options only for the same server, and session
+bindings replace same-name options from both; distinct servers from every layer
+remain. Enumerate the final merged servers and options. Do not invent server
+names, commands, credentials, or environment variables.
 
 ## Per-Agent Spill Configuration
 
@@ -126,9 +148,10 @@ Apply these exact semantics:
 - `skip_tools` must be a list of non-empty tool-name strings. Surrounding
   whitespace is stripped, then names are matched exactly.
 - Per-agent `skip_tools` is **additive** to the effective global
-  `spill_skip_tools` set and cannot subtract from it. Globally configuring
-  `spill_skip_tools` replaces the default set, whose initial value includes
-  `read_file`.
+  `spill_skip_tools` set and cannot subtract from it. A missing, empty, or
+  whitespace-only global value uses the default set, which includes `read_file`.
+  A non-empty global value is comma-split and trimmed and replaces that default;
+  there is no empty-string representation for an empty replacement set.
 - Settings are resolved for the executing agent, so concurrent agents may use
   different Spill policies.
 - Prefer inheriting the global policy. Disable Spill only when the user accepts
@@ -174,10 +197,16 @@ Therefore, before saving, manually check and report:
 - MCP names, literal boolean options, and effective binding precedence.
 - Optional `model` omitted unless explicitly selected and configured.
 - Spill values against the exact types and inheritance rules above.
-- Persistence scope, overwrite intent, granted authority, and denied
-  capabilities.
+- Persistence scope, overwrite intent, granted authority, denied capabilities,
+  and collisions against the effective registry.
 
 After saving, reload agent discovery and perform a real runtime smoke test when
-the parent has the required tools and the user approves execution. If that is
-not possible, say exactly which checks remain unverified. Never claim an agent
-works merely because JSON parsing or Agent Creator's shallow validation passed.
+the parent has the required tools and the user approves execution. Verify the
+expected name resolves to a `JSONAgent` loaded from the exact selected path and
+that its effective tools and merged MCP bindings match the candidate. For the
+model, verify and report the active precedence layer; an intentional temporary
+override may differ from the JSON candidate. Builtin or plugin collisions can
+otherwise make a successfully written file
+unrunnable. If those checks are not possible, say exactly what remains
+unverified. Never claim an agent works merely because JSON parsing or Agent
+Creator's shallow validation passed.
