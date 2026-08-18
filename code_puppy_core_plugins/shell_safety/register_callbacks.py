@@ -97,14 +97,17 @@ async def shell_safety_callback(
         None if command is safe to proceed
         Dict with rejection info if command should be blocked
     """
+    # Only check safety in yolo_mode - otherwise the user reviews manually.
+    # This is read FIRST on purpose: with safety off this callback must be
+    # unable to affect the command at all, and every read below it is a way
+    # for a config error to turn into a refusal the user never asked for.
+    yolo_mode = get_yolo_mode()
+    if not yolo_mode:
+        return None
+
     # Skip safety checks for OAuth models - they have their own safety mechanisms
     current_model = get_global_model_name()
     if is_oauth_model(current_model):
-        return None
-
-    # Only check safety in yolo_mode - otherwise user is reviewing manually
-    yolo_mode = get_yolo_mode()
-    if not yolo_mode:
         return None
 
     # Get configured risk threshold

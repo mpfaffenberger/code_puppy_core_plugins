@@ -9,6 +9,11 @@ description = "Official plugin bundle for Code Puppy"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
+    # Plugins call register_callback(..., fail_closed=True), added in 0.0.735.
+    # Without this floor, upgrading the plugin bundle against an older core
+    # raises TypeError during registration — and the loader logs and skips the
+    # plugin, so shell_safety would silently not load at all.
+    "code-puppy>=0.0.735",
     "httpx>=0.24.1,<1",
     "pydantic-ai-slim[openai,anthropic,mcp]>=2.31.0,<3",
 ]
