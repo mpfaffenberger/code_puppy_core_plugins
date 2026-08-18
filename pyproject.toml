@@ -39,6 +39,7 @@ claude_code_hooks = "code_puppy_core_plugins.claude_code_hooks.register_callback
 claude_code_oauth = "code_puppy_core_plugins.claude_code_oauth.register_callbacks"
 code_puppy_agent = "code_puppy_core_plugins.code_puppy_agent.register_callbacks"
 computer_use = "code_puppy_core_plugins.computer_use.register_callbacks"
+completion_notification = "code_puppy_core_plugins.completion_notification.register_callbacks"
 context_indicator = "code_puppy_core_plugins.context_indicator.register_callbacks"
 copilot_auth = "code_puppy_core_plugins.copilot_auth.register_callbacks"
 customizable_commands = "code_puppy_core_plugins.customizable_commands.register_callbacks"

@@ -35,6 +35,32 @@ The package deliberately does not depend on `code-puppy` in its own metadata.
 `code-puppy` depends on this bundle; adding the reverse edge would create a
 packaging dependency cycle. Plugin CI installs the core runtime separately.
 
+## Completion notifications
+
+The `completion_notification` plugin is disabled by default. Enable a native,
+best-effort desktop notification after a successful top-level response with:
+
+```text
+/set completion_notifications=true
+```
+
+Notifications never include response text. When available, the notification
+labels Apple Terminal, iTerm2, or Warp using `TERM_PROGRAM`; unknown terminals
+get a generic message. Sub-agent completions are intentionally silent.
+
+Optional sound configuration is platform-aware:
+
+```text
+/set completion_notification_sound=Frog
+```
+
+On macOS, a simple name selects a system sound (`Frog`, `Glass`, `Ping`, etc.).
+Preview one with `afplay /System/Library/Sounds/Frog.aiff`. On any platform, an
+absolute path to a local sound file is accepted when an available platform
+player can play it. Linux uses `notify-send` for desktop notifications when it
+is installed; Windows uses a best-effort PowerShell toast. No external Python
+dependencies are required.
+
 ## Releases
 
 Pushes to `main` run lint and tests, bump the patch version, build, publish to
