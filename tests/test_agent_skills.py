@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from code_puppy.callbacks import clear_callbacks, register_callback
+from code_puppy.callbacks import clear_callbacks, get_callbacks, register_callback
 from code_puppy_core_plugins.agent_skills.config import (
     add_skill_directory,
     get_disabled_skills,
@@ -144,11 +144,17 @@ class TestSkillDiscovery:
     """Tests for skill discovery module."""
 
     def setup_method(self):
+        # Restore in teardown -- don't leak this class's isolation into other plugins.
+        self._saved_register_skills = get_callbacks(
+            "register_skills", include_disabled=True
+        )
         clear_callbacks("register_skills")
         self._reset_plugin_skills_cache()
 
     def teardown_method(self):
         clear_callbacks("register_skills")
+        for callback in self._saved_register_skills:
+            register_callback("register_skills", callback)
         self._reset_plugin_skills_cache()
 
     @staticmethod
