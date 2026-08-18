@@ -704,7 +704,11 @@ class TestRunOAuthFlow:
 
                 with patch(
                     "code_puppy_core_plugins.chatgpt_oauth.utils.fetch_chatgpt_models",
-                    return_value=["gpt-5.4", "gpt-5.3-instant", "gpt-5.3-codex"],
+                    return_value=[
+                        "gpt-5.4",
+                        "gpt-5.3-codex-spark",
+                        "codex-auto-review",
+                    ],
                 ):
                     with patch("threading.Thread"):
                         with patch("time.sleep"):  # Skip timing loop
