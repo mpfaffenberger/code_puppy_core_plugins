@@ -614,6 +614,107 @@ class TestMetadataParsing:
         # Should return empty dict because it doesn't have proper closing ---
         assert parsed == {}  # No proper frontmatter format
 
+    def test_parse_yaml_frontmatter_folded_block_scalar_strip(self):
+        """`>-` folds lines into one string with no trailing newline."""
+        content = (
+            "---\n"
+            "name: test\n"
+            "description: >-\n"
+            "  This is a long description that\n"
+            "  wraps across several lines.\n"
+            "version: 1.0.0\n"
+            "---\n"
+            "# Content"
+        )
+        parsed = parse_yaml_frontmatter(content)
+        assert parsed == {
+            "name": "test",
+            "description": "This is a long description that wraps across several lines.",
+            "version": "1.0.0",
+        }
+
+    def test_parse_yaml_frontmatter_folded_block_scalar_clip(self):
+        """Bare `>` (clip) keeps exactly one trailing newline."""
+        content = "---\nname: test\ndescription: >\n  Folded text here.\n---\n# Content"
+        parsed = parse_yaml_frontmatter(content)
+        assert parsed == {"name": "test", "description": "Folded text here.\n"}
+
+    def test_parse_yaml_frontmatter_literal_block_scalar(self):
+        """`|-` preserves internal newlines instead of folding to spaces."""
+        content = (
+            "---\nname: test\ndescription: |-\n  Line one.\n  Line two.\n---\n# Content"
+        )
+        parsed = parse_yaml_frontmatter(content)
+        assert parsed == {"name": "test", "description": "Line one.\nLine two."}
+
+    def test_parse_yaml_frontmatter_block_scalar_with_blank_line_paragraph(self):
+        """A blank line inside a folded scalar becomes a paragraph break."""
+        content = (
+            "---\n"
+            "name: test\n"
+            "description: >-\n"
+            "  First paragraph\n"
+            "  continues here.\n"
+            "\n"
+            "  Second paragraph.\n"
+            "---\n"
+            "# Content"
+        )
+        parsed = parse_yaml_frontmatter(content)
+        assert (
+            parsed["description"]
+            == "First paragraph continues here.\nSecond paragraph."
+        )
+
+    def test_parse_yaml_frontmatter_block_scalar_then_tags_list(self):
+        """Block-scalar description followed by a tags list -- the real
+        shape that triggered this bug -- parses both fields correctly."""
+        content = (
+            "---\n"
+            "name: puppyDB\n"
+            "description: >-\n"
+            "  Query the database. Use for schema discovery and\n"
+            "  read-only SQL.\n"
+            "tags:\n"
+            "  - postgresql\n"
+            "  - database\n"
+            "---\n"
+            "# Content"
+        )
+        parsed = parse_yaml_frontmatter(content)
+        assert parsed == {
+            "name": "puppyDB",
+            "description": "Query the database. Use for schema discovery and read-only SQL.",
+            "tags": ["postgresql", "database"],
+        }
+
+    def test_parse_yaml_frontmatter_block_scalar_keep_chomp_preserves_all_blanks(
+        self,
+    ):
+        """`|+` (keep) must preserve every trailing blank line, not just one."""
+        content = "---\nname: test\ndescription: |+\n  line\n\n\n---\n# Content"
+        parsed = parse_yaml_frontmatter(content)
+        assert parsed["description"] == "line\n\n\n"
+
+    def test_parse_yaml_frontmatter_block_scalar_tab_indented(self):
+        """Tab-indented continuation lines must not be measured as
+        dedented (indent 0) and truncate the whole block to empty."""
+        content = "---\nname: test\ndescription: >-\n\tTab-indented line one.\n\tLine two.\n---\n"
+        parsed = parse_yaml_frontmatter(content)
+        assert parsed["description"] == "Tab-indented line one. Line two."
+
+    def test_parse_yaml_frontmatter_block_scalar_explicit_indent_digit_unsupported(
+        self,
+    ):
+        """An explicit indentation digit (`|2-`, `>2`) isn't recognized as a
+        block scalar at all -- it must fall through to the pre-existing
+        plain-scalar path (literal indicator captured) rather than being
+        matched and mis-indented."""
+        content = "---\nname: test\ndescription: |2-\n  content\ntags:\n  - a\n---\n"
+        parsed = parse_yaml_frontmatter(content)
+        assert parsed["description"] == "|2-"
+        assert parsed["tags"] == ["a"]
+
     def test_parse_skill_metadata_valid(self, valid_skill_dir):
         """Test parsing valid skill metadata."""
         metadata = parse_skill_metadata(valid_skill_dir)
