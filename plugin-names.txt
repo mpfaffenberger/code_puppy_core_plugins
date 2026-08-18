@@ -52,6 +52,7 @@ theme
 timestamp_heartbeat
 token_ratio_learner
 universal_constructor
+web_retriever_skill
 wide_completion_menu
 wiggum
 yolo_cli
