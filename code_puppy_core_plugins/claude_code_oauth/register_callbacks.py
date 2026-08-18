@@ -11,8 +11,7 @@ import logging
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from typing import Any, Optional, Tuple
 
 from code_puppy.callbacks import register_callback
 from code_puppy.i18n import t
@@ -66,11 +65,21 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         logger.info("Callback received: path=%s", self.path)
-        parsed = urlparse(self.path)
-        params: Dict[str, List[str]] = parse_qs(parsed.query)
+        try:
+            parsed = parse_oauth_callback_input(self.path)
+        except ValueError:
+            parsed = None
 
-        code = params.get("code", [None])[0]
-        state = params.get("state", [None])[0]
+        code = parsed.code if parsed else None
+        state = parsed.state if parsed else None
+        if code and not state:
+            try:
+                combined = parse_oauth_callback_input(code)
+            except ValueError:
+                combined = None
+            if combined and combined.state:
+                code = combined.code
+                state = combined.state
 
         if code and state:
             self.result.code = code

@@ -64,6 +64,24 @@ class TestCallbackHandler:
         assert event.is_set()
         handler.send_response.assert_called_with(200)
 
+    def test_do_GET_accepts_callback_path_with_encoded_values(self):
+        handler, result, event = self._make_handler(
+            "/callback?code=abc%2B123&state=xyz%2F456"
+        )
+        handler.do_GET()
+        assert result.code == "abc+123"
+        assert result.state == "xyz/456"
+        assert event.is_set()
+        handler.send_response.assert_called_with(200)
+
+    def test_do_GET_accepts_combined_code_and_state(self):
+        handler, result, event = self._make_handler("/callback?code=abc%23xyz")
+        handler.do_GET()
+        assert result.code == "abc"
+        assert result.state == "xyz"
+        assert event.is_set()
+        handler.send_response.assert_called_with(200)
+
     def test_do_GET_missing_params(self):
         handler, result, event = self._make_handler("/?foo=bar")
         handler.do_GET()
