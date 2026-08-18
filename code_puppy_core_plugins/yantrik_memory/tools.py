@@ -182,6 +182,27 @@ def register_yantrik_remember(agent: Any) -> None:
         mem = None
         try:
             mem = _open()
+            # Two writers reach this store: the passive distiller (which
+            # de-duplicates against the facts it was shown) and this tool
+            # (which historically did not). On a turn like "remember X" BOTH
+            # fire, so the same fact landed twice in different phrasings.
+            # Check before writing; reinforce the existing record instead.
+            new_key = mem._dedupe_key(text.strip())
+            existing = next(
+                (
+                    r
+                    for r in mem.list_semantic(limit=100)
+                    if mem._dedupe_key((r or {}).get("text", "")) == new_key
+                ),
+                None,
+            )
+            if existing is not None:
+                return YantrikRememberOutput(
+                    text=text.strip(),
+                    importance=importance,
+                    namespace=mem.ns,
+                    stored=True,
+                )
             mem.remember(
                 text.strip(),
                 kind="semantic",

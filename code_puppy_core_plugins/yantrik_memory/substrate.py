@@ -15,6 +15,8 @@ and the rest of the plugin disables itself.
 
 from __future__ import annotations
 
+import re
+
 import os
 import time
 
@@ -143,13 +145,42 @@ class Memory:
         )
         return (r or {}).get("memories", []) if isinstance(r, dict) else (r or [])
 
+    @staticmethod
+    def _dedupe_key(text: str) -> str:
+        """Normalised form used to collapse restatements of the same fact."""
+        return " ".join(re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower()).split())
+
     def prefs(self, top_n=5):
-        """Always-include the highest-importance durable facts (a 'P0 prefs' band)."""
+        """Highest-importance durable facts (a 'P0 prefs' band), de-duplicated.
+
+        Two writers reach this band — the passive distiller and the agent's own
+        memory tools — and they phrase the same fact differently ("Deploy key
+        for node4 is X" vs "Node4 deploy key is X"). ``think()`` notices the
+        redundancy but only emits an ADVISORY trigger: the originals stay
+        ``active`` with ``consolidated_into`` unset, so there is nothing to
+        filter on. Collapsing here keeps the band readable without depending on
+        a maintenance pass having run.
+
+        A consolidated record concatenates its sources with " | ", so an
+        earlier fact is also dropped when a higher-importance record already
+        contains it verbatim.
+        """
         mems = self.list_semantic(limit=100)
         mems = sorted(
             mems, key=lambda m: (m or {}).get("importance", 0.0), reverse=True
         )
-        return mems[:top_n]
+        out, seen = [], []
+        for m in mems:
+            key = self._dedupe_key((m or {}).get("text", ""))
+            if not key or key in seen:
+                continue
+            if any(key in prior for prior in seen):   # subsumed by a merged record
+                continue
+            seen.append(key)
+            out.append(m)
+            if len(out) >= top_n:
+                break
+        return out
 
     def recall_for_prompt(self, query, top_k=8, n_prefs=5):
         """What the agent actually sees: always-on prefs + query-relevant memories."""

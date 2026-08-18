@@ -21,8 +21,32 @@ from .state import is_enabled
 _EMPTY_RETURN = None  # Returning None tells the callback system "skip me."
 
 
+# Trust signals the engine already computes per hit. Forwarding only `text`
+# throws them away, which leaves the agent unable to reason about a fact it
+# should distrust — the MCP surface sends these, so the plugin should too.
+def _trust_note(m: dict) -> str:
+    """Short parenthetical for a hit the agent should not take at face value."""
+    m = m or {}
+    flags: list[str] = []
+    if m.get("superseded_by"):
+        flags.append("superseded by a newer record")
+    if m.get("disputed_with"):
+        flags.append(f"disputed with {len(m['disputed_with'])} other record(s)")
+    status = m.get("current_status")
+    if status and status != "active":
+        flags.append(str(status))
+    # why_retrieved carries the engine's own staleness language; keep only the
+    # warnings, not the routine "semantically similar"/"recent" reasons.
+    for why in m.get("why_retrieved") or []:
+        w = str(why).lower()
+        if any(k in w for k in ("aged", "rarely confirmed", "stale", "superseded")):
+            flags.append(str(why))
+    return f"  (⚠ {'; '.join(flags)})" if flags else ""
+
+
 def _text_of(m: dict) -> str:
-    return str((m or {}).get("text", "")).strip()
+    text = str((m or {}).get("text", "")).strip()
+    return f"{text}{_trust_note(m)}" if text else text
 
 
 def build_recall_block(user_prompt: str | None = None) -> str | None:
