@@ -30,6 +30,7 @@ Homepage = "https://github.com/mpfaffenberger/code_puppy_core_plugins"
 [project.entry-points."code_puppy.plugins"]
 acp = "code_puppy_core_plugins.acp.register_callbacks"
 agent_skills = "code_puppy_core_plugins.agent_skills.register_callbacks"
+agent_creator_skill = "code_puppy_core_plugins.agent_creator_skill.register_callbacks"
 aws_bedrock = "code_puppy_core_plugins.aws_bedrock.register_callbacks"
 azure_foundry = "code_puppy_core_plugins.azure_foundry.register_callbacks"
 btw = "code_puppy_core_plugins.btw.register_callbacks"
