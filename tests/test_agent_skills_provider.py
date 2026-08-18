@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_puppy.callbacks import clear_callbacks, register_callback
+from code_puppy.callbacks import clear_callbacks, get_callbacks, register_callback
 from code_puppy_core_plugins.agent_skills.provider import AgentSkillsProvider
 
 
@@ -25,6 +25,8 @@ def test_provider_listing_does_not_recurse_through_register_skills(
     )
 
     provider = AgentSkillsProvider()
+    # Restore after, don't leak this test's isolation into other plugins.
+    saved_register_skills = get_callbacks("register_skills", include_disabled=True)
     clear_callbacks("register_skills")
     register_callback("register_skills", lambda: [{"provider": provider}])
     discovery._plugin_skills_cache = None
@@ -58,6 +60,8 @@ def test_provider_listing_does_not_recurse_through_register_skills(
         assert not list((tmp_path / "plugin-cache").rglob("SKILL.md"))
     finally:
         clear_callbacks("register_skills")
+        for callback in saved_register_skills:
+            register_callback("register_skills", callback)
         discovery._plugin_skills_cache = None
         discovery._plugin_skills_signature = None
 
