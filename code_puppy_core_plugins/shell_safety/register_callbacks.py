@@ -196,7 +196,11 @@ async def shell_safety_callback(
 
 def register():
     """Register the shell safety callback."""
-    register_callback("run_shell_command", shell_safety_callback)
+    # fail_closed mirrors this callback's own policy. Its body already returns
+    # a block when the assessment errors; this covers the exceptions raised
+    # before that handler can run — the config reads above the `try`, which
+    # ConfigParser resolves lazily and can therefore fail at read time.
+    register_callback("run_shell_command", shell_safety_callback, fail_closed=True)
 
 
 # Auto-register the callback when this module is imported
