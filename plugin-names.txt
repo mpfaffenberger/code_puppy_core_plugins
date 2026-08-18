@@ -38,6 +38,7 @@ prompt_newline
 prune
 puppy_kennel
 puppy_spinner
+qa_kitten_skill
 quick_resume
 review_pr
 shell_safety
