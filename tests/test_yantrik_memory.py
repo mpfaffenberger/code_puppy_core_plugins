@@ -126,7 +126,24 @@ def run() -> int:
 
 
 def test_yantrik_memory_supersession():
-    """pytest entrypoint."""
+    """pytest entrypoint.
+
+    Reports SKIPPED rather than PASSED when yantrikdb is absent. The plugin is
+    fail-soft by design, so without the dependency every assertion below is
+    vacuous — and a green check that cannot fail is worse than no check,
+    because it reads as coverage the suite does not have. CI for this repo does
+    not install yantrikdb, so this is the normal path there.
+    """
+    import pytest
+
+    # Import ONLY through the bootstrap, which sets YANTRIK_MEMORY_ROOT to a
+    # temp dir FIRST. config.py resolves DB_PATH at import time, so importing
+    # substrate before that silently binds the developer's real store and the
+    # test then accumulates facts across runs instead of starting clean.
+    _root, _recorder, _retriever, _state, substrate = _bootstrap_imports()
+
+    if not substrate.MEMORY_AVAILABLE:
+        pytest.skip(f"yantrikdb not installed: {substrate.IMPORT_ERROR!r}")
     assert run() == 0
 
 

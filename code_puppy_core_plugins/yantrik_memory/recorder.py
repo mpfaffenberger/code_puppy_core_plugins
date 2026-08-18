@@ -112,7 +112,16 @@ def _ingest(mem: "substrate.Memory", fact_map: dict[str, Any], message: str) -> 
                 mem.correct(fact_map[match], f["fact"], importance=f["importance"])
                 fact_map[f["fact"]] = fact_map.pop(match)
                 changed += 1
-            except Exception:
+            except Exception as exc:
+                # Keep the fact rather than lose it, but SAY SO. A silent
+                # fallback here inserts a duplicate instead of superseding,
+                # which looks identical to working memory from the outside —
+                # it is how an engine signature change (correct() gaining a
+                # required `reason`) went unnoticed for two months.
+                emit_debug(
+                    f"[yantrik_memory] correct() failed ({type(exc).__name__}: {exc}); "
+                    f"storing as a new fact, so the superseded value remains visible"
+                )
                 rid = _rid_of(
                     mem.remember(f["fact"], kind="semantic", importance=f["importance"])
                 )

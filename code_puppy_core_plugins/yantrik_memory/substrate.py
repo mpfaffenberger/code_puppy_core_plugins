@@ -85,8 +85,19 @@ class Memory:
         except Exception:
             pass
 
-    def correct(self, rid, new_text, importance=None):
-        self.db.correct(rid, new_text=new_text, new_importance=importance)
+    def correct(self, rid, new_text, importance=None, reason=None):
+        """Supersede a stored fact.
+
+        ``reason`` is REQUIRED by the engine (it is recorded on the correction
+        so the chain explains itself later). Passing it positionally would
+        break again the next time the signature grows, so it is named.
+        """
+        self.db.correct(
+            rid,
+            reason=reason or "superseded by a later user statement",
+            new_text=new_text,
+            new_importance=importance,
+        )
 
     def reinforce(self, rid, outcome):
         self.db.reinforce_procedural(rid, outcome)
