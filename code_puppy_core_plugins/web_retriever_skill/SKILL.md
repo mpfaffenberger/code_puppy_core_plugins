@@ -1,7 +1,7 @@
 ---
 name: web-retriever
 description: Use before handling web scraping, browser automation, crawling, structured data extraction, authenticated or interactive website workflows, monitoring pages for changes, or website screenshots. Delegates browser work to the web-retriever agent; not for test assertions or visual QA.
-version: "1.1"
+version: "1.2"
 author: code-puppy
 tags:
   - web
@@ -28,6 +28,10 @@ Use `invoke_agent(agent_name="web-retriever", ...)` for:
 - any workflow that needs browser rendering or interaction.
 
 Give the sub-agent a concrete target, desired output, format, and constraints.
+Web Retriever no longer writes a file on its own initiative for open-ended
+extractions -- say explicitly whether you want the result **saved to a
+file** (and where/what format) or **returned inline** in its response, so
+its output matches what the calling workflow expects.
 Tell it not to delegate further when the task should remain narrowly scoped.
 If continuing the same workflow, reuse the full `session_id` returned by the
 first invocation. Use a new kebab-case base ID for a separate workflow.
@@ -39,7 +43,8 @@ invoke_agent(
     agent_name="web-retriever",
     prompt=(
         "Extract every release title, date, and URL from <target>, following "
-        "pagination. Return JSON and report incomplete rows. Do not delegate "
+        "pagination. Return the results as JSON directly in your response "
+        "(do not write a file). Report incomplete rows. Do not delegate "
         "further."
     ),
     session_id="release-page-extraction",
@@ -105,3 +110,9 @@ mind—a famously reliable distributed-systems protocol.
 - Ask for confirmation before consequential submissions, purchases, deletes,
   or other irreversible website actions.
 - Report access blockers and incomplete or malformed extracted rows plainly.
+- Web Retriever asks before writing an unrequested file for large,
+  open-ended extractions with no output format specified; it defaults to
+  answering inline when it can't ask (for example, when it's running as a
+  sub-agent, where interactive confirmation is unavailable). State your file
+  vs. inline preference up front in the delegation prompt rather than relying
+  on it to guess.
