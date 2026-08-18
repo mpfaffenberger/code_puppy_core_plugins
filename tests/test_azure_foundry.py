@@ -798,49 +798,42 @@ class TestCreateAzureFoundryModel:
         mock_client._custom_headers = {}
         mock_model = Mock()
 
-        with patch(
-            "code_puppy_core_plugins.azure_foundry.register_callbacks.get_token_provider",
-            return_value=mock_provider,
-        ):
-            # Patch at anthropic module since it's imported inside the function
-            with patch(
+        with (
+            patch(
+                "code_puppy_core_plugins.azure_foundry.register_callbacks.get_token_provider",
+                return_value=mock_provider,
+            ),
+            patch(
                 "anthropic.AsyncAnthropicFoundry", return_value=mock_client
-            ) as mock_azure_class:
-                with patch(
-                    "code_puppy.claude_cache_client.patch_anthropic_client_messages"
-                ):
-                    with patch(
-                        "code_puppy.config.get_effective_model_settings",
-                        return_value={},
-                    ):
-                        with patch(
-                            "code_puppy.provider_identity.resolve_provider_identity",
-                            return_value="identity",
-                        ):
-                            with patch(
-                                "code_puppy.provider_identity.make_anthropic_provider",
-                                return_value=Mock(),
-                            ):
-                                with patch(
-                                    "pydantic_ai.models.anthropic.AnthropicModel",
-                                    return_value=mock_model,
-                                ):
-                                    result = _create_azure_foundry_model(
-                                        model_name="foundry-claude-opus",
-                                        model_config={
-                                            "name": "it-entra-claude-opus-4-6[1m]",
-                                            "foundry_resource": "my-resource",
-                                            "context_length": 1000000,
-                                        },
-                                        config={},
-                                    )
+            ) as mock_azure_class,
+            patch("code_puppy.config.get_effective_model_settings", return_value={}),
+            patch(
+                "code_puppy.provider_identity.resolve_provider_identity",
+                return_value="identity",
+            ),
+            patch(
+                "code_puppy.provider_identity.make_anthropic_provider",
+                return_value=Mock(),
+            ),
+            patch(
+                "pydantic_ai.models.anthropic.AnthropicModel",
+                return_value=mock_model,
+            ),
+        ):
+            result = _create_azure_foundry_model(
+                model_name="foundry-claude-opus",
+                model_config={
+                    "name": "it-entra-claude-opus-4-6[1m]",
+                    "foundry_resource": "my-resource",
+                    "context_length": 1000000,
+                },
+                config={},
+            )
 
-                                    assert result is mock_model
-                                    mock_azure_class.assert_called_once()
-                                    # Verify resource parameter
-                                    call_kwargs = mock_azure_class.call_args.kwargs
-                                    assert "resource" in call_kwargs
-                                    assert call_kwargs["resource"] == "my-resource"
+        assert result is mock_model
+        mock_azure_class.assert_called_once()
+        call_kwargs = mock_azure_class.call_args.kwargs
+        assert call_kwargs["resource"] == "my-resource"
 
 
 # ============================================================================
