@@ -27,6 +27,7 @@ herdr
 hook_creator
 hook_manager
 meta_oauth
+model_switcher
 namespace_skill_search
 no_tools
 obsidian_agent
