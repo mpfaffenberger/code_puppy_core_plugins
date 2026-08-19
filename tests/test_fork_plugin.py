@@ -298,6 +298,25 @@ async def test_fork_reports_result_error_as_failure():
     assert not any("traceback junk" in str(m) for m in errors)
 
 
+async def test_fork_reports_blank_error_without_crashing():
+    errors = []
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=_fake_impl(error="   "),
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork blank error prompt")
+        await _wait_for_forks()
+
+    record = next(iter(rc._forks.values()))
+    assert record.status == "failed"
+    # The failure banner must still be emitted (no IndexError swallowed).
+    assert any("failed" in str(m) for m in errors)
+
+
 async def test_fork_reports_crash_as_failure():
     async def boom(
         context,
