@@ -123,7 +123,7 @@ async def shell_safety_callback(
                 error_msg = (
                     f"🛑 Command blocked (risk {risk_display.upper()} > permission {threshold.upper()}).\n"
                     f"Reason: {concise_reason}\n"
-                    f"Override: /set yolo_mode true or /set safety_permission_level {risk_display}"
+                    f"Override: /set safety_permission_level {risk_display}"
                 )
                 emit_info(error_msg)
                 return {
@@ -164,7 +164,7 @@ async def shell_safety_callback(
             error_msg = (
                 f"🛑 Command blocked (risk {risk_display.upper()} > permission {threshold.upper()}).\n"
                 f"Reason: {concise_reason}\n"
-                f"Override: /set yolo_mode true or /set safety_permission_level {risk_display}"
+                f"Override: /set safety_permission_level {risk_display}"
             )
             emit_info(error_msg)
 
@@ -180,11 +180,15 @@ async def shell_safety_callback(
         return None  # Allow command to proceed
 
     except Exception as e:
-        # On any error, fail safe by blocking the command
+        # On any error, fail safe by blocking the command.
+        # Do NOT suggest raising the permission level here: the assessment
+        # could not run, so there is no measured risk to trade against — and
+        # suggesting an override defeats the fail-closed policy.
         error_msg = (
-            f"🛑 Command blocked (risk HIGH > permission {threshold.upper()}).\n"
+            f"🛑 Command blocked — safety assessment failed, so it cannot be "
+            f"confirmed as safe (fail-closed).\n"
             f"Reason: Safety assessment error: {str(e)}\n"
-            f"Override: /set yolo_mode true or /set safety_permission_level high"
+            f"Override: /set yolo_mode off to review commands manually"
         )
         return {
             "blocked": True,

@@ -279,7 +279,8 @@ def _on_fork_done(fork_id: int, task: asyncio.Task) -> None:
         record.session_id = getattr(result, "session_id", None)
         if getattr(result, "error", None):
             record.status = "failed"
-            first_line = str(result.error).strip().splitlines()[0]
+            error_lines = str(result.error).strip().splitlines()
+            first_line = error_lines[0] if error_lines else str(result.error)
             _emit_error(f"{tag} failed after {record.elapsed:.1f}s: {first_line}")
             return
         record.status = "done"
