@@ -4,6 +4,8 @@ This module registers a callback that intercepts shell commands in yolo_mode
 and assesses their safety risk before execution.
 """
 
+import inspect
+import logging
 from typing import Any, Dict, Optional
 
 from code_puppy.callbacks import register_callback
@@ -18,6 +20,8 @@ from code_puppy_core_plugins.shell_safety.command_cache import (
     get_cached_assessment,
 )
 from code_puppy.tools.command_runner import ShellSafetyAssessment
+
+logger = logging.getLogger(__name__)
 
 # OAuth model prefixes - these models have their own safety mechanisms
 OAUTH_MODEL_PREFIXES = (
@@ -97,20 +101,19 @@ async def shell_safety_callback(
         None if command is safe to proceed
         Dict with rejection info if command should be blocked
     """
-    # Skip safety checks for OAuth models - they have their own safety mechanisms
-    current_model = get_global_model_name()
-    if is_oauth_model(current_model):
-        return None
-
-    # Only check safety in yolo_mode - otherwise user is reviewing manually
-    yolo_mode = get_yolo_mode()
-    if not yolo_mode:
-        return None
-
-    # Get configured risk threshold
-    threshold = get_safety_permission_level()
-
     try:
+        # Only check safety in yolo_mode - otherwise the user reviews manually.
+        # A failure to read this setting must block rather than become approval,
+        # including for OAuth models checked below.
+        if not get_yolo_mode():
+            return None
+
+        # Skip safety checks for OAuth models - they have their own mechanisms.
+        if is_oauth_model(get_global_model_name()):
+            return None
+
+        threshold = get_safety_permission_level()
+
         # Check cache first (fast path - no LLM call)
         cached = get_cached_assessment(command, cwd)
 
@@ -179,28 +182,45 @@ async def shell_safety_callback(
         # Command is within acceptable risk threshold - remain silent
         return None  # Allow command to proceed
 
-    except Exception as e:
-        # On any error, fail safe by blocking the command
+    except Exception as exc:
+        # On any error, fail safe by blocking the command. This includes config
+        # and model reads above the assessment-specific logic.
+        try:
+            logger.warning(
+                "Shell-safety assessment unavailable (%s)", type(exc).__name__
+            )
+        except Exception:
+            pass
         error_msg = (
-            f"🛑 Command blocked (risk HIGH > permission {threshold.upper()}).\n"
-            f"Reason: Safety assessment error: {str(e)}\n"
-            f"Override: /set yolo_mode true or /set safety_permission_level high"
+            "\U0001f6d1 Command blocked because shell-safety configuration or model "
+            "was unavailable.\n"
+            "Reason: Safety assessment was unavailable.\n"
+            "Next step: check logs or run the command manually outside YOLO mode."
         )
         return {
             "blocked": True,
             "risk": "high",
-            "reasoning": f"Safety assessment error: {str(e)}",
+            "reasoning": "Safety assessment was unavailable.",
             "error_message": error_msg,
         }
 
 
 def register():
     """Register the shell safety callback."""
-    # fail_closed mirrors this callback's own policy. Its body already returns
-    # a block when the assessment errors; this covers the exceptions raised
-    # before that handler can run — the config reads above the `try`, which
-    # ConfigParser resolves lazily and can therefore fail at read time.
-    register_callback("run_shell_command", shell_safety_callback, fail_closed=True)
+    try:
+        parameters = inspect.signature(register_callback).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    fail_closed_parameter = parameters.get("fail_closed")
+
+    if fail_closed_parameter is not None:
+        # An explicit parameter is the host's compatibility contract; signature
+        # inspection cannot verify how a wrapper implements it.
+        register_callback("run_shell_command", shell_safety_callback, fail_closed=True)
+    else:
+        # A **kwargs adapter does not prove the host implements fail_closed.
+        register_callback("run_shell_command", shell_safety_callback)
 
 
 # Auto-register the callback when this module is imported
