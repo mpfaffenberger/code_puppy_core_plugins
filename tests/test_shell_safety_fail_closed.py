@@ -184,7 +184,7 @@ def test_the_core_floor_is_declared():
 
     Without the floor, `pip install -U` on the bundle against an older core
     raises TypeError at registration; the loader logs and skips, leaving no
-    shell guard at all.
+    shell guard at all. 0.0.734 is the first published core with the keyword.
     """
     import tomllib
     from pathlib import Path
@@ -195,3 +195,26 @@ def test_the_core_floor_is_declared():
     ]
 
     assert any(d.startswith("code-puppy>=") for d in deps), deps
+
+
+def test_the_installed_core_actually_honors_the_floor():
+    """What the floor exists to guarantee, checked against the real install.
+
+    A declared dependency only helps if the resolver acted on it. This asserts
+    the capability itself, so a wrong floor or a bypassed resolver fails here
+    rather than at a user's registration.
+    """
+    import inspect
+
+    from code_puppy.callbacks import register_callback
+
+    parameter = inspect.signature(register_callback).parameters.get("fail_closed")
+
+    assert parameter is not None, (
+        "the installed code-puppy predates fail_closed; the declared floor did "
+        "not take effect"
+    )
+    assert parameter.default is False, (
+        "fail_closed must stay opt-in; a True default would change every "
+        "existing registration"
+    )
