@@ -76,6 +76,28 @@ def _initialize_engine() -> Optional[HookEngine]:
 _hook_engine = _initialize_engine()
 
 
+def reload_hook_engine() -> None:
+    """Rebuild ``_hook_engine`` from the current on-disk hooks config.
+
+    Called by the ``/hooks trust`` ceremony after accept/revoke so future
+    lifecycle events reflect the fresh trust state without a process
+    restart.
+
+    Intentionally does NOT re-fire ``SessionStart`` — that event's
+    semantics are "agent boot", and auto-firing mid-session would be a
+    surprise side-effect.
+
+    Also intentionally does NOT clear ``_pending_session_context`` on
+    revoke. The buffer only holds stdout produced by hooks that were
+    trusted at the moment they fired; honoring that stdout on the next
+    user prompt reflects the state that existed when the side-effect
+    already happened. The buffer is one-shot per session by design and
+    will drain on the next ``UserPromptSubmit`` regardless.
+    """
+    global _hook_engine
+    _hook_engine = _initialize_engine()
+
+
 def _collect_context_stdout(result: Any) -> List[str]:
     """Pull stdout from non-blocking, exit-0 hook results.
 

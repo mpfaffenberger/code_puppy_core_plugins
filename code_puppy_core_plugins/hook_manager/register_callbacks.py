@@ -7,6 +7,7 @@ Provides:
   /hooks enable    – Enable all hooks (both global and project)
   /hooks disable   – Disable all hooks (both global and project)
   /hooks status    – Show summary counts per event type
+  /hooks trust     – Preview / accept / revoke trust for project hooks
 """
 
 import logging
@@ -32,6 +33,10 @@ def _hooks_command_help() -> List[Tuple[str, str]]:
             "hooks",
             "Manage Claude Code hooks (global + project) – browse, enable/disable, inspect",
         ),
+        (
+            "hooks trust",
+            "Preview / accept / revoke trust for project hooks from .claude/settings.json",
+        ),
         ("hook", "Alias for /hooks"),
     ]
 
@@ -51,6 +56,7 @@ def _handle_hooks_command(command: str, name: str) -> Optional[Any]:
     /hooks enable    Enable every hook (both global and project)
     /hooks disable   Disable every hook (both global and project)
     /hooks status    Show counts per event type
+    /hooks trust     Preview / accept / revoke trust for project hooks
     """
     if name not in (_COMMAND_NAME, *_ALIASES):
         return None  # Not our command – pass through
@@ -68,6 +74,16 @@ def _handle_hooks_command(command: str, name: str) -> Optional[Any]:
 
     tokens = command.split()
     subcommand = tokens[1].lower() if len(tokens) > 1 else ""
+
+    # ----------------------------------------------------------------- trust
+    #
+    # Handled before the load/save-based branches below because the trust
+    # ceremony must work even when the project hooks file is currently
+    # untrusted (that is, in fact, its whole purpose).
+    if subcommand == "trust":
+        from .trust_handler import handle_trust_subcommand
+
+        return handle_trust_subcommand(tokens[2:])
 
     # ------------------------------------------------------------------ list
     if subcommand == "list":
@@ -208,7 +224,7 @@ def _handle_hooks_command(command: str, name: str) -> Optional[Any]:
     # ----------------------------------------------- unknown sub-command
     if subcommand and subcommand not in ("", "tui"):
         emit_error(f"Unknown sub-command: {subcommand}")
-        emit_info("Usage: /hooks [list|enable|disable|status]")
+        emit_info("Usage: /hooks [list|enable|disable|status|trust]")
         return True
     # --------------------------------------------------- default: TUI menu
     from .hooks_menu import show_hooks_menu
