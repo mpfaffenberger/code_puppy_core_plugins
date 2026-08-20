@@ -9,6 +9,7 @@ claude_code_hooks
 claude_code_oauth
 code_puppy_agent
 computer_use
+completion_notification
 context_indicator
 copilot_auth
 customizable_commands
