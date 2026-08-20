@@ -69,7 +69,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
         # Short circuit a favicon.ico request to avoid
         # breaking the OAuth flow.
-        if self.path == '/favicon.ico':
+        if self.path == "/favicon.ico":
             self.send_response(204)  # 204 = "No Content"
             self.end_headers()
             return
