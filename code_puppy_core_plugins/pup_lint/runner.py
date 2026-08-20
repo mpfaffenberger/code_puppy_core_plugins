@@ -42,7 +42,9 @@ async def lint_paths(
     if prefix is None:
         return {
             "success": False,
-            "error": "pup-lint is not installed in the Code Puppy environment or on PATH.",
+            "error": (
+                "pup-lint is not installed in the Code Puppy environment or on PATH."
+            ),
         }
     if line_length is not None and line_length < 1:
         return {"success": False, "error": "line_length must be positive."}
@@ -94,10 +96,13 @@ async def lint_paths(
     try:
         diagnostics = json.loads(stdout.decode())
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        detail = f"pup-lint returned invalid JSON: {error}"
+        if stderr_text:
+            detail = f"{detail}. stderr: {stderr_text}"
         return {
             "success": False,
             "exit_code": process.returncode,
-            "error": f"pup-lint returned invalid JSON: {error}",
+            "error": detail,
         }
     if not isinstance(diagnostics, list):
         return {"success": False, "error": "pup-lint returned a non-list JSON result."}

@@ -152,12 +152,13 @@ async def test_runner_reports_cli_and_json_failures(tmp_path, monkeypatch):
     assert result == {"success": False, "exit_code": 2, "error": "bad config"}
 
     async def invalid_json(*args, **kwargs):
-        return FakeProcess(b"not-json")
+        return FakeProcess(b"not-json", b"interpreter startup failed", returncode=1)
 
     monkeypatch.setattr(runner.asyncio, "create_subprocess_exec", invalid_json)
     result = await runner.lint_paths(["."], cwd=str(tmp_path))
     assert result["success"] is False
     assert "invalid JSON" in result["error"]
+    assert "interpreter startup failed" in result["error"]
 
 
 @pytest.mark.asyncio
