@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import platform
 import re
@@ -10,16 +11,23 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from code_puppy.i18n import add_catalog_dir, t
+
 logger = logging.getLogger(__name__)
 
-_TITLE = "Code Puppy"
 _TIMEOUT_SECONDS = 3
+_CATALOG_DIR = Path(__file__).parent / "locales"
+add_catalog_dir(str(_CATALOG_DIR))
 _MACOS_SOUND_NAME = re.compile(r"^[A-Za-z0-9 _-]+$")
 _TERMINAL_NAMES = {
     "apple_terminal": "Terminal",
     "iterm.app": "iTerm2",
     "warpterminal": "Warp",
 }
+
+
+def _title() -> str:
+    return t("completion_notification.title")
 
 
 def notify_completion(sound: str = "") -> None:
@@ -40,14 +48,16 @@ def notify_completion(sound: str = "") -> None:
 def _completion_message() -> str:
     terminal = _TERMINAL_NAMES.get(os.environ.get("TERM_PROGRAM", "").casefold())
     return (
-        "Response complete."
+        t("completion_notification.response_complete")
         if terminal is None
-        else f"Response complete in {terminal}."
+        else t(
+            "completion_notification.response_complete_in_terminal", terminal=terminal
+        )
     )
 
 
 def _notify_macos(message: str, sound: str) -> None:
-    script = f'display notification "{message}" with title "{_TITLE}"'
+    script = f'display notification "{message}" with title "{_title()}"'
     if _is_macos_sound_name(sound):
         script += f' sound name "{sound}"'
     _run(["/usr/bin/osascript", "-e", script])
@@ -57,7 +67,7 @@ def _notify_macos(message: str, sound: str) -> None:
 def _notify_linux(message: str, sound: str) -> None:
     notify_send = shutil.which("notify-send")
     if notify_send:
-        _run([notify_send, "--app-name", _TITLE, _TITLE, message])
+        _run([notify_send, "--app-name", _title(), _title(), message])
     _play_file(sound, players=(("paplay",), ("aplay",)))
 
 
@@ -68,19 +78,29 @@ def _notify_windows(message: str, sound: str) -> None:
     escaped_message = message.replace("'", "''")
     toast_xml = (
         '<toast><visual><binding template="ToastGeneric">'
-        f"<text>{_TITLE}</text><text>{escaped_message}</text>"
+        f"<text>{_title()}</text><text>{escaped_message}</text>"
         "</binding></visual></toast>"
     )
     script = (
         "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; "
         f"$xml.LoadXml('{toast_xml}'); "
         "[Windows.UI.Notifications.ToastNotificationManager]::"
-        f"CreateToastNotifier('{_TITLE}').Show("
+        f"CreateToastNotifier('{_title()}').Show("
         "[Windows.UI.Notifications.ToastNotification]::new($xml))"
     )
-    _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script])
+    powershell = _powershell_executable()
+    _run([powershell, "-NoProfile", "-NonInteractive", "-Command", script])
     _play_file(
-        sound, players=(("powershell", "-NoProfile", "-NonInteractive", "-Command"),)
+        sound,
+        players=((powershell, "-NoProfile", "-NonInteractive", "-Command"),),
+    )
+
+
+def _powershell_executable() -> str:
+    """Return Windows PowerShell by trusted absolute path, never PATH lookup."""
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    return ntpath.join(
+        system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
     )
 
 
@@ -93,12 +113,15 @@ def _play_file(sound: str, *, players: tuple[tuple[str, ...], ...]) -> None:
     if path is None:
         return
     for player in players:
-        executable = shutil.which(player[0]) or (
-            player[0] if Path(player[0]).is_file() else None
-        )
+        if Path(player[0]).is_absolute() or ntpath.isabs(player[0]):
+            executable = player[0]
+        else:
+            executable = shutil.which(player[0]) or (
+                player[0] if Path(player[0]).is_file() else None
+            )
         if executable is None:
             continue
-        if player[0] == "powershell":
+        if ntpath.basename(player[0]).casefold() == "powershell.exe":
             escaped_path = str(path).replace("'", "''")
             _run(
                 [

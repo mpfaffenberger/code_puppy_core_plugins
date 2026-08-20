@@ -131,32 +131,39 @@ def test_linux_notify_send_uses_argument_vector(monkeypatch):
     ]
 
 
-def test_windows_sound_path_escapes_apostrophes_without_shell(monkeypatch, tmp_path):
+def test_windows_sound_path_uses_trusted_absolute_powershell(monkeypatch, tmp_path):
     sound_file = tmp_path / "pup's-done.wav"
     sound_file.write_bytes(b"sound")
     commands: list[list[str]] = []
-    monkeypatch.setattr(
-        notifier.shutil,
-        "which",
-        lambda name: "powershell.exe" if name == "powershell" else None,
-    )
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
     monkeypatch.setattr(notifier, "_run", lambda command: commands.append(command))
 
-    notifier._play_file(
-        str(sound_file),
-        players=(("powershell", "-NoProfile", "-NonInteractive", "-Command"),),
+    notifier._notify_windows("Response complete.", str(sound_file))
+
+    powershell = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    escaped_path = str(sound_file).replace("'", "''")
+    assert commands[0][0] == powershell
+    assert commands[1] == [
+        powershell,
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        f"(New-Object System.Media.SoundPlayer '{escaped_path}').PlaySync()",
+    ]
+
+
+def test_completion_message_uses_i18n(monkeypatch):
+    monkeypatch.setattr(notifier, "t", lambda key, **kwargs: f"{key}:{kwargs}")
+    monkeypatch.delenv("TERM_PROGRAM", raising=False)
+
+    assert (
+        notifier._completion_message() == "completion_notification.response_complete:{}"
     )
 
-    escaped_path = str(sound_file).replace("'", "''")
-    assert commands == [
-        [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            f"(New-Object System.Media.SoundPlayer '{escaped_path}').PlaySync()",
-        ]
-    ]
+    monkeypatch.setenv("TERM_PROGRAM", "WarpTerminal")
+    assert notifier._completion_message() == (
+        "completion_notification.response_complete_in_terminal:{'terminal': 'Warp'}"
+    )
 
 
 def test_callback_starts_one_daemon_worker_for_successful_top_level_response(
@@ -165,6 +172,7 @@ def test_callback_starts_one_daemon_worker_for_successful_top_level_response(
     thread = Mock()
     thread.start = Mock()
     constructor = Mock(return_value=thread)
+    monkeypatch.setattr(callbacks, "_run_depth", 0)
     monkeypatch.setattr(callbacks, "is_enabled", lambda: True)
     monkeypatch.setattr(callbacks, "_is_subagent", lambda: False)
     monkeypatch.setattr(callbacks, "get_sound", lambda: "Frog")
@@ -172,17 +180,15 @@ def test_callback_starts_one_daemon_worker_for_successful_top_level_response(
 
     callbacks._on_agent_run_end("agent", "model", "session", True, None, "Finished", {})
 
-    constructor.assert_called_once_with(
-        target=callbacks.notify_completion,
-        args=("Frog",),
-        daemon=True,
-        name="code-puppy-completion-notification",
-    )
+    constructor.assert_called_once()
+    assert constructor.call_args.kwargs["daemon"] is True
+    assert constructor.call_args.kwargs["name"] == "code-puppy-completion-notification"
     thread.start.assert_called_once()
 
 
 def test_callback_ignores_disabled_failed_empty_and_subagent_runs(monkeypatch):
     constructor = Mock()
+    monkeypatch.setattr(callbacks, "_run_depth", 0)
     monkeypatch.setattr(callbacks.threading, "Thread", constructor)
     monkeypatch.setattr(callbacks, "is_enabled", lambda: False)
     callbacks._on_agent_run_end(success=True, response_text="Done")
@@ -195,3 +201,31 @@ def test_callback_ignores_disabled_failed_empty_and_subagent_runs(monkeypatch):
     callbacks._on_agent_run_end(success=True, response_text="Done")
 
     constructor.assert_not_called()
+
+
+def test_callback_suppresses_nested_runs_until_the_outer_run_finishes(monkeypatch):
+    constructor = Mock()
+    monkeypatch.setattr(callbacks, "_run_depth", 0)
+    monkeypatch.setattr(callbacks, "is_enabled", lambda: True)
+    monkeypatch.setattr(callbacks, "_is_subagent", lambda: False)
+    monkeypatch.setattr(callbacks.threading, "Thread", constructor)
+
+    callbacks._on_agent_run_start()
+    callbacks._on_agent_run_start()
+    callbacks._on_agent_run_end(success=True, response_text="Inner response")
+
+    constructor.assert_not_called()
+
+    callbacks._on_agent_run_end(success=True, response_text="Outer response")
+
+    constructor.assert_called_once()
+
+
+def test_shutdown_drains_notification_workers(monkeypatch):
+    worker = Mock()
+    monkeypatch.setattr(callbacks, "_workers", {worker})
+
+    callbacks._drain_workers()
+
+    worker.join.assert_called_once_with(timeout=callbacks._WORKER_JOIN_TIMEOUT_SECONDS)
+    assert callbacks._workers == set()
