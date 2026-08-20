@@ -6,6 +6,7 @@ and assesses their safety risk before execution.
 
 import inspect
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from code_puppy.callbacks import register_callback
@@ -58,6 +59,42 @@ RISK_LEVELS: Dict[str, int] = {
     "critical": 4,
 }
 
+_COMMAND_BOUNDARY = r"(?:^|&&|;|\|\||\n)\s*\(*\s*"
+_WORKTREE_ADD = re.compile(_COMMAND_BOUNDARY + r"git\s+worktree\s+add\b")
+_CHAIN_SEPARATOR = re.compile(r"&&|;|\|\||\n")
+_GIT_MUTATION = re.compile(
+    _COMMAND_BOUNDARY
+    + r"git\s+(?:add|checkout|cherry-pick|commit|merge|rebase|reset|restore|switch)\b"
+)
+_EXPLICIT_DIRECTORY_CHANGE = re.compile(_COMMAND_BOUNDARY + r"cd(?:\s|$)")
+
+
+def _worktree_followup_error(command: str) -> str | None:
+    """Explain an unsafe chained mutation after ``git worktree add``."""
+    worktree_add = _WORKTREE_ADD.search(command)
+    if worktree_add is None:
+        return None
+
+    tail = command[worktree_add.end() :]
+    separator = _CHAIN_SEPARATOR.search(tail)
+    if separator is None:
+        return None
+
+    followup = tail[separator.end() :]
+    mutation = _GIT_MUTATION.search(followup)
+    if mutation is None:
+        return None
+
+    before_mutation = followup[: mutation.start()]
+    if _EXPLICIT_DIRECTORY_CHANGE.search(before_mutation):
+        return None
+
+    return (
+        "A chained Git mutation after `git worktree add` still runs in the "
+        "original working directory. Run `git worktree add` first, then use a "
+        "second shell call with `cwd` set to the new worktree (or use `git -C`)."
+    )
+
 
 def compare_risk_levels(assessed_risk: Optional[str], threshold: str) -> bool:
     """Compare assessed risk against threshold.
@@ -102,6 +139,17 @@ async def shell_safety_callback(
         Dict with rejection info if command should be blocked
     """
     try:
+        worktree_error = _worktree_followup_error(command)
+        if worktree_error:
+            error_msg = f"Command blocked.\nReason: {worktree_error}"
+            emit_info(error_msg)
+            return {
+                "blocked": True,
+                "risk": "medium",
+                "reasoning": worktree_error,
+                "error_message": error_msg,
+            }
+
         # Only check safety in yolo_mode - otherwise the user reviews manually.
         # A failure to read this setting must block rather than become approval,
         # including for OAuth models checked below.

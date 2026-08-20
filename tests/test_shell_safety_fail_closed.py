@@ -257,3 +257,46 @@ async def test_manual_mode_does_not_require_model_lookup(monkeypatch):
 
     assert results == [None]
     model_lookup.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git worktree add ../new-tree -b topic main && git cherry-pick abc123",
+        "git worktree add ../new-tree; git reset --hard HEAD",
+        "git worktree add ../new-tree\ngit commit -m followup",
+    ],
+)
+async def test_chained_worktree_mutation_is_blocked_before_mode_checks(
+    monkeypatch, command
+):
+    mode_lookup = Mock(side_effect=AssertionError("guard consulted yolo mode"))
+    monkeypatch.setattr(shell_safety, "get_yolo_mode", mode_lookup)
+
+    result = await shell_safety.shell_safety_callback(None, command, None, 60)
+
+    assert result["blocked"] is True
+    assert result["risk"] == "medium"
+    assert "original working directory" in result["reasoning"]
+    assert "cwd" in result["error_message"]
+    mode_lookup.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git worktree add ../new-tree -b topic main",
+        "git worktree add ../new-tree && git status",
+        "git worktree add ../new-tree && cd ../new-tree && git cherry-pick abc123",
+        "git worktree add ../new-tree && git -C ../new-tree cherry-pick abc123",
+        'echo "git worktree add ../new-tree && git cherry-pick abc123"',
+    ],
+)
+async def test_worktree_guard_allows_explicit_or_read_only_followups(
+    monkeypatch, command
+):
+    monkeypatch.setattr(shell_safety, "get_yolo_mode", lambda: False)
+
+    result = await shell_safety.shell_safety_callback(None, command, None, 60)
+
+    assert result is None
