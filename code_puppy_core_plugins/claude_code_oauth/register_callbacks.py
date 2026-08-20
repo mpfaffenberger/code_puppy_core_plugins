@@ -66,6 +66,14 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         logger.info("Callback received: path=%s", self.path)
+
+        # Short circuit a favicon.ico request to avoid
+        # breaking the OAuth flow.
+        if self.path == '/favicon.ico':
+            self.send_response(204)  # 204 = "No Content"
+            self.end_headers()
+            return
+
         parsed = urlparse(self.path)
         params: Dict[str, List[str]] = parse_qs(parsed.query)
 
