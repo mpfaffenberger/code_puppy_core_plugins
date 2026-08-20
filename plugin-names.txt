@@ -55,4 +55,5 @@ universal_constructor
 web_retriever_skill
 wide_completion_menu
 wiggum
+yantrik_memory
 yolo_cli
