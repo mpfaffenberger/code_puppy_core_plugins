@@ -36,6 +36,7 @@ plugin_list
 pop_command
 prompt_newline
 prune
+pup_lint
 puppy_kennel
 puppy_spinner
 qa_kitten_skill
