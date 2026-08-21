@@ -27,6 +27,7 @@ herdr
 hook_creator
 hook_manager
 logfire_oauth
+logfire_sessions
 meta_oauth
 namespace_skill_search
 no_tools
