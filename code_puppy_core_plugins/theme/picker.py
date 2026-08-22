@@ -70,6 +70,14 @@ def _render_preview(theme_name: str, surprise_seed: int) -> str:
     ``surprise_seed`` makes the "Surprise Me" preview stable while highlighted
     (otherwise it would re-roll on every redraw - dizzying).
     """
+    rng = random.Random(surprise_seed) if theme_name == "surprise" else None
+
+    # Paint the preview on the theme's own background so light themes
+    # don't render as floating text on the current (possibly dark) screen.
+    tp = terminal_palette_for(theme_name, rng=rng)
+    bg = (tp or {}).get("bg")
+    fg = (tp or {}).get("fg")
+
     buffer = io.StringIO()
     console = Console(
         file=buffer,
@@ -79,9 +87,8 @@ def _render_preview(theme_name: str, surprise_seed: int) -> str:
         color_system="truecolor",
         no_color=False,
         force_interactive=True,
+        style=f"{fg} on {bg}" if bg and fg else None,
     )
-
-    rng = random.Random(surprise_seed) if theme_name == "surprise" else None
     banner_mapping = colors_for(theme_name, rng=rng)
     content_mapping = content_styles_for(theme_name, rng=rng)
     color_remap = color_remap_for(theme_name, rng=rng)
@@ -96,8 +103,7 @@ def _render_preview(theme_name: str, surprise_seed: int) -> str:
 
     console.print("[bold]" + "=" * 60 + "[/bold]")
     console.print(
-        f"[bold cyan] {theme['icon']} {theme['label']}[/bold cyan]  "
-        f"[dim]- {theme['blurb']}[/dim]"
+        f"[bold cyan] {theme['label']}[/bold cyan]  [dim]- {theme['blurb']}[/dim]"
     )
     console.print("[bold]" + "=" * 60 + "[/bold]")
     console.print()
@@ -141,7 +147,6 @@ def _render_preview(theme_name: str, surprise_seed: int) -> str:
         )
 
     # Terminal-palette note (Level 3 - OSC sequences recolor the whole window)
-    tp = terminal_palette_for(theme_name)
     if tp:
         bg = tp.get("bg", "?")
         fg = tp.get("fg", "?")
@@ -183,7 +188,21 @@ def _render_preview(theme_name: str, surprise_seed: int) -> str:
         console.print(
             "[bold yellow]\u26a1[/bold yellow] [dim]Resets terminal bg/fg/ANSI palette too.[/dim]"
         )
-    return buffer.getvalue()
+    rendered = buffer.getvalue()
+    if not (bg and fg):
+        return rendered
+
+    # Pad each line to the preview width so the background forms a solid
+    # block instead of hugging the text's ragged right edge.
+    from termflow.ansi.utils import visible
+
+    r, g, b = (int(bg[i : i + 2], 16) for i in (1, 3, 5))
+    bg_sgr = f"\x1b[48;2;{r};{g};{b}m"
+    padded = [
+        f"{line}{bg_sgr}{' ' * max(0, PREVIEW_WIDTH - len(visible(line)))}\x1b[0m"
+        for line in rendered.splitlines()
+    ]
+    return "\n".join(padded)
 
 
 def build_theme_menu(**menu_overrides):
@@ -202,7 +221,7 @@ def build_theme_menu(**menu_overrides):
 
     items = [
         MenuItem(
-            f"{theme['icon']} {theme['label']}",
+            theme["label"],
             value=name,
             description=theme["blurb"],
         )
