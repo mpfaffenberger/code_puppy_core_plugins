@@ -216,9 +216,7 @@ def build_theme_menu(**menu_overrides):
         .list_width(LIST_WIDTH)
         .preview(lambda item: _render_preview(item.value, surprise_seed[0]))
         .on_highlight(_on_highlight)
-        .footer_hint(
-            "Up/Down navigate - PgUp/PgDn page - Enter apply - Esc cancel"
-        )
+        .footer_hint("Up/Down navigate - PgUp/PgDn page - Enter apply - Esc cancel")
     )
     for name, value in menu_overrides.items():
         getattr(builder, name)(value)
