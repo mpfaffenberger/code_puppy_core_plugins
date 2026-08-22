@@ -1,9 +1,10 @@
-"""Interactive theme picker TUI.
+"""Interactive theme picker TUI, built on termflow's MenuBuilder.
 
-Reuses prompt_toolkit's full-screen pattern (cribbed from
-``code_puppy.command_line.colors_menu``) but pared down to the curated
-theme choices, with a live preview that shows banners AND content text
-in the theme's body styles.
+The left column lists the curated themes (paged); the right pane shows a
+live preview with banners, content text styles, the inline-markup remap,
+and the terminal palette swatches. Rendering the preview still goes
+through Rich (it is the best ANSI paintbrush we have) -- the menu chrome
+and event loop are pure termflow.
 """
 
 from __future__ import annotations
@@ -11,16 +12,10 @@ from __future__ import annotations
 import asyncio
 import io
 import random
-import sys
 from typing import Optional
 
-from prompt_toolkit import Application
-from prompt_toolkit.formatted_text import ANSI, FormattedText
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Layout, VSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import Frame
 from rich.console import Console
+from termflow.tui import MenuBuilder, MenuItem
 
 from code_puppy.command_line.colors_menu import (
     BANNER_DISPLAY_INFO,
@@ -34,7 +29,10 @@ from .themes import (
     content_styles_for,
     terminal_palette_for,
 )
-from code_puppy.callbacks import on_prompt_toolkit_style
+
+THEMES_PER_PAGE = 5
+LIST_WIDTH = 40
+PREVIEW_WIDTH = 70
 
 # A few representative banners to show in the preview pane (keeps it readable).
 PREVIEW_BANNERS = [
@@ -59,8 +57,6 @@ CONTENT_SAMPLES = [
 
 # Inline-markup samples to demonstrate the Level 2 color remap.
 # These mirror the kind of hardcoded tags scattered through the renderer.
-THEMES_PER_PAGE = 5
-
 INLINE_MARKUP_SAMPLES = [
     "[bold cyan]bold cyan headline[/bold cyan]",
     "[dim cyan]dim cyan detail[/dim cyan]",
@@ -69,8 +65,8 @@ INLINE_MARKUP_SAMPLES = [
 ]
 
 
-def _render_preview(theme_name: str, surprise_seed: int) -> ANSI:
-    """Render a full-color preview of the theme using Rich -> ANSI.
+def _render_preview(theme_name: str, surprise_seed: int) -> str:
+    """Render a full-color ANSI preview of the theme via Rich.
 
     ``surprise_seed`` makes the "Surprise Me" preview stable while highlighted
     (otherwise it would re-roll on every redraw - dizzying).
@@ -79,7 +75,7 @@ def _render_preview(theme_name: str, surprise_seed: int) -> ANSI:
     console = Console(
         file=buffer,
         force_terminal=True,
-        width=70,
+        width=PREVIEW_WIDTH,
         legacy_windows=False,
         color_system="truecolor",
         no_color=False,
@@ -123,7 +119,7 @@ def _render_preview(theme_name: str, surprise_seed: int) -> ANSI:
             console.print(f"    [dim]{first_line}[/dim]")
         console.print()
 
-    # Content text samples (the new bit - Level 1 theming)
+    # Content text samples (Level 1 theming)
     console.print("[bold]" + "-" * 60 + "[/bold]")
     console.print("[bold dim]content text styles:[/bold dim]")
     for key, text in CONTENT_SAMPLES:
@@ -188,56 +184,45 @@ def _render_preview(theme_name: str, surprise_seed: int) -> ANSI:
         console.print(
             "[bold yellow]\u26a1[/bold yellow] [dim]Resets terminal bg/fg/ANSI palette too.[/dim]"
         )
-    return ANSI(buffer.getvalue())
+    return buffer.getvalue()
 
 
-def _total_pages() -> int:
-    return max(1, (len(MENU) + THEMES_PER_PAGE - 1) // THEMES_PER_PAGE)
+def build_theme_menu(**menu_overrides):
+    """Build the termflow Menu for the theme catalog.
 
+    ``menu_overrides`` forward to the builder (``key_source``, ``output``,
+    ``size``, ``alt_screen``) so tests can drive the menu headlessly.
+    """
+    # Stable seed for "Surprise Me" preview per highlight; bumps on each focus
+    # so re-highlighting rolls fresh colors without flickering mid-highlight.
+    surprise_seed = [random.randint(0, 1_000_000)]
 
-def _page_for_index(selected_index: int) -> int:
-    return selected_index // THEMES_PER_PAGE
+    def _on_highlight(item: MenuItem) -> None:
+        if item.value == "surprise":
+            surprise_seed[0] = random.randint(0, 1_000_000)
 
-
-def _move_page(selected_index: int, delta: int) -> int:
-    """Move one page while retaining the selected row where possible."""
-    return max(0, min(selected_index + delta * THEMES_PER_PAGE, len(MENU) - 1))
-
-
-def _format_menu(selected_index: int) -> FormattedText:
-    """Build the current page of the left-hand menu."""
-    page = _page_for_index(selected_index)
-    page_start = page * THEMES_PER_PAGE
-    page_end = min(page_start + THEMES_PER_PAGE, len(MENU))
-    lines: list[tuple[str, str]] = [
-        ("class:tui.header", "Pick a Theme"),
-        ("class:tui.muted", f"  Page {page + 1}/{_total_pages()}"),
-        ("", "\n\n"),
+    items = [
+        MenuItem(
+            f"{theme['icon']} {theme['label']}",
+            value=name,
+            description=theme["blurb"],
+        )
+        for name, theme in MENU
     ]
-    for i in range(page_start, page_end):
-        _, theme = MENU[i]
-        prefix = "> " if i == selected_index else "  "
-        style = "class:tui.selected" if i == selected_index else "class:tui.body"
-        line = f"{prefix}{i + 1}. {theme['icon']} {theme['label']}"
-        lines.append((style, line))
-        lines.append(("", "\n"))
-        lines.append(("class:tui.muted", f"     {theme['blurb']}"))
-        lines.append(("", "\n\n"))
-
-    lines.append(("", "\n"))
-    lines.extend(
-        [
-            ("class:tui.help-key", "Up/Down"),
-            ("class:tui.help", " Navigate  |  "),
-            ("class:tui.help-key", "PgUp/PgDn"),
-            ("class:tui.help", " Page\n"),
-            ("class:tui.help-key", "Enter"),
-            ("class:tui.help", " Apply  |  "),
-            ("class:tui.help-key", "Esc / Ctrl-C"),
-            ("class:tui.help", " Cancel"),
-        ]
+    builder = (
+        MenuBuilder("Pick a Theme")
+        .items(items)
+        .page_size(THEMES_PER_PAGE)
+        .list_width(LIST_WIDTH)
+        .preview(lambda item: _render_preview(item.value, surprise_seed[0]))
+        .on_highlight(_on_highlight)
+        .footer_hint(
+            "Up/Down navigate - PgUp/PgDn page - Enter apply - Esc cancel"
+        )
     )
-    return FormattedText(lines)
+    for name, value in menu_overrides.items():
+        getattr(builder, name)(value)
+    return builder.build()
 
 
 async def interactive_theme_picker() -> Optional[str]:
@@ -248,111 +233,12 @@ async def interactive_theme_picker() -> Optional[str]:
     """
     from code_puppy.tools.command_runner import set_awaiting_user_input
 
-    selected = [0]
-    result: list[Optional[str]] = [None]
-    # Stable seed for "Surprise Me" preview per highlight; bumps on each focus.
-    surprise_seed = [random.randint(0, 1_000_000)]
-
     set_awaiting_user_input(True)
-    sys.stdout.write("\033[?1049h\033[2J\033[H")
-    sys.stdout.flush()
-    await asyncio.sleep(0.05)
-
-    kb = KeyBindings()
-
-    def _refresh_surprise_seed_if_focused() -> None:
-        name, _ = MENU[selected[0]]
-        if name == "surprise":
-            surprise_seed[0] = random.randint(0, 1_000_000)
-
-    @kb.add("up")
-    @kb.add("c-p")
-    def _(event):
-        selected[0] = (selected[0] - 1) % len(MENU)
-        _refresh_surprise_seed_if_focused()
-        event.app.invalidate()
-
-    @kb.add("down")
-    @kb.add("c-n")
-    def _(event):
-        selected[0] = (selected[0] + 1) % len(MENU)
-        _refresh_surprise_seed_if_focused()
-        event.app.invalidate()
-
-    @kb.add("pageup")
-    def _(event):
-        selected[0] = _move_page(selected[0], -1)
-        _refresh_surprise_seed_if_focused()
-        event.app.invalidate()
-
-    @kb.add("pagedown")
-    def _(event):
-        selected[0] = _move_page(selected[0], 1)
-        _refresh_surprise_seed_if_focused()
-        event.app.invalidate()
-
-    @kb.add("enter")
-    def _(event):
-        result[0] = MENU[selected[0]][0]
-        event.app.exit()
-
-    @kb.add("escape")
-    @kb.add("c-c")
-    def _(event):
-        result[0] = None
-        event.app.exit()
-
-    def _current_preview_style() -> str:
-        """Dynamic prompt_toolkit style for the preview pane.
-
-        Paints the WHOLE right pane background with the selected theme's bg,
-        and picks a readable fg, so the user instantly sees the new color.
-        Updates every render via prompt_toolkit's dynamic-style support.
-        """
-        name, _ = MENU[selected[0]]
-        try:
-            tp = terminal_palette_for(name)
-        except Exception:
-            tp = None
-        if not tp:
-            return ""
-        bg = tp.get("bg")
-        fg = tp.get("fg", "")
-        parts = []
-        if bg:
-            parts.append(f"bg:{bg}")
-        if fg:
-            parts.append(f"fg:{fg}")
-        return " ".join(parts)
-
-    left = Window(
-        content=FormattedTextControl(lambda: _format_menu(selected[0])),
-        width=40,
-    )
-    right = Window(
-        content=FormattedTextControl(
-            lambda: _render_preview(MENU[selected[0]][0], surprise_seed[0])
-        ),
-        style=_current_preview_style,
-    )
-
-    layout = Layout(
-        VSplit([Frame(left, title="Themes"), Frame(right, title="Live Preview")])
-    )
-    app = Application(
-        layout=layout,
-        key_bindings=kb,
-        full_screen=False,
-        mouse_support=False,
-        color_depth="DEPTH_24_BIT",
-        style=on_prompt_toolkit_style(),
-    )
-
     try:
-        await app.run_async()
+        # The menu blocks on raw stdin reads; keep the event loop breathing.
+        result = await asyncio.to_thread(build_theme_menu().run)
     finally:
         set_awaiting_user_input(False)
-        sys.stdout.write("\033[?1049l")
-        sys.stdout.flush()
-
-    return result[0]
+    if result.cancelled or result.item is None:
+        return None
+    return result.item.value
