@@ -38,7 +38,6 @@ from code_puppy_core_plugins.theme.bundled_palettes import (
     VAPORWAVE,
 )
 from code_puppy_core_plugins.theme.picker import (
-    THEMES_PER_PAGE,
     build_theme_menu,
 )
 from code_puppy_core_plugins.theme.rich_themes import (
@@ -269,7 +268,7 @@ class TestResolveThemeArg:
 # ---------------------------------------------------------------------------
 # picker.py
 # ---------------------------------------------------------------------------
-def _drive_picker(keys):
+def _drive_picker(keys, rows=40):
     """Run the theme menu headlessly with a scripted key sequence."""
     from io import StringIO
 
@@ -278,16 +277,20 @@ def _drive_picker(keys):
     menu = build_theme_menu(
         key_source=lambda: next(script),
         output=out,
-        size=lambda: (140, 40),
+        size=lambda: (140, rows),
         alt_screen=False,
     )
     return menu.run(), out.getvalue()
 
 
 class TestThemePicker:
-    def test_catalog_is_split_into_pages(self):
-        assert THEMES_PER_PAGE == 5
-        assert len(MENU) == 16  # 4 pages of 5/5/5/1
+    def test_tall_terminal_shows_whole_catalog(self):
+        from termflow.ansi.utils import visible
+
+        assert len(MENU) == 16
+        _, screen = _drive_picker(["escape"], rows=40)
+        rendered = visible(screen)
+        assert all(theme["label"] in rendered for _, theme in MENU)
 
     def test_enter_selects_first_theme(self):
         result, _ = _drive_picker(["enter"])
@@ -302,17 +305,18 @@ class TestThemePicker:
         result, _ = _drive_picker(["down", "enter"])
         assert result.item.value == MENU[1][0]
 
-    def test_page_down_reaches_second_page(self):
-        result, _ = _drive_picker(["page-down", "enter"])
-        assert result.item.value == MENU[THEMES_PER_PAGE][0]
+    def test_page_down_reaches_second_page_on_short_terminal(self):
+        # 12 rows -> 8 themes per page (12 - 4 chrome overhead).
+        result, _ = _drive_picker(["page-down", "enter"], rows=12)
+        assert result.item.value == MENU[8][0]
 
-    def test_menu_only_renders_the_selected_page(self):
+    def test_short_terminal_only_renders_the_selected_page(self):
         from termflow.ansi.utils import visible
 
-        _, screen = _drive_picker(["page-down", "escape"])
+        _, screen = _drive_picker(["page-down", "escape"], rows=12)
         rendered = visible(screen.split("\x1b[H")[-1])  # final frame
-        page_two = [theme["label"] for _, theme in MENU[5:10]]
-        page_one = [theme["label"] for _, theme in MENU[:5]]
+        page_two = [theme["label"] for _, theme in MENU[8:16]]
+        page_one = [theme["label"] for _, theme in MENU[:8]]
         assert all(label in rendered for label in page_two)
         assert not any(label in rendered for label in page_one)
 

@@ -30,7 +30,6 @@ from .themes import (
     terminal_palette_for,
 )
 
-THEMES_PER_PAGE = 5
 LIST_WIDTH = 40
 PREVIEW_WIDTH = 70
 
@@ -212,7 +211,6 @@ def build_theme_menu(**menu_overrides):
     builder = (
         MenuBuilder("Pick a Theme")
         .items(items)
-        .page_size(THEMES_PER_PAGE)
         .list_width(LIST_WIDTH)
         .preview(lambda item: _render_preview(item.value, surprise_seed[0]))
         .on_highlight(_on_highlight)
