@@ -1,20 +1,15 @@
-"""Terminal-level palette swap via OSC escape sequences.
+"""Terminal palette swap: Code Puppy persistence over termflow's OSC engine.
 
-This module reaches *past* Code Puppy and recolors the whole terminal window
-(bg, fg, ANSI palette slots) using widely-supported xterm OSC sequences:
+The escape-sequence machinery (OSC 4/10/11 builders, palette
+application, reset) lives in ``termflow.themes.osc``. This module adds
+what is Code Puppy's business alone:
 
-    OSC 10 ; spec BEL    -> set default foreground
-    OSC 11 ; spec BEL    -> set default background
-    OSC  4 ; N ; spec BEL -> set ANSI palette slot N (0..15)
-    OSC 110 BEL          -> reset foreground
-    OSC 111 BEL          -> reset background
-    OSC 104 BEL          -> reset whole palette
+* persisting the applied palette to config so the next session replays it
+* re-firing the persisted palette on plugin load
+* an atexit restore so the terminal never stays stuck in a theme
 
-Supported by iTerm2, Terminal.app, Alacritty, kitty, VS Code, GNOME
-Terminal, Windows Terminal. Unsupported terminals silently ignore them.
-
-We always register an atexit handler so the terminal is restored when
-Code Puppy quits, even if the user forgets to /theme default first.
+Emission is routed through the local :func:`_emit` (which tests patch)
+via a callback stream handed to termflow.
 """
 
 from __future__ import annotations
@@ -22,18 +17,18 @@ from __future__ import annotations
 import atexit
 import json
 import sys
-from typing import Optional, Sequence
+from typing import Optional
+
+from termflow.themes import osc as tf_osc
+from termflow.themes.osc import BEL, ESC, _osc  # noqa: F401  (re-exported API)
 
 from code_puppy.config import get_value, set_config_value
-
-BEL = "\007"
-ESC = "\033"
 
 _CONFIG_KEY = "osc_palette_json"
 _atexit_registered = False
 
 
-# --- Low-level emit ---------------------------------------------------------
+# --- Emission ---------------------------------------------------------------
 def _emit(seq: str) -> None:
     """Write an escape sequence to stdout, ignoring failures (closed tty etc.)."""
     try:
@@ -43,37 +38,31 @@ def _emit(seq: str) -> None:
         pass
 
 
-def _osc(code: str, *args: str) -> str:
-    """Build an OSC escape: ESC ] code ; args... BEL"""
-    payload = ";".join((code,) + args)
-    return f"{ESC}]{payload}{BEL}"
+class _EmitStream:
+    """File-like shim routing termflow's writes through :func:`_emit`.
+
+    Looks up the module global at call time so test patches of ``_emit``
+    keep working.
+    """
+
+    def write(self, seq: str) -> int:
+        _emit(seq)
+        return len(seq)
+
+    def flush(self) -> None:
+        pass
 
 
-# --- Public escape builders -------------------------------------------------
 def set_bg(color: str) -> None:
-    _emit(_osc("11", color))
+    tf_osc.set_bg(color, _EmitStream())
 
 
 def set_fg(color: str) -> None:
-    _emit(_osc("10", color))
+    tf_osc.set_fg(color, _EmitStream())
 
 
 def set_ansi_slot(slot: int, color: str) -> None:
-    if not 0 <= slot <= 15:
-        return
-    _emit(_osc("4", str(slot), color))
-
-
-def reset_bg() -> None:
-    _emit(_osc("111"))
-
-
-def reset_fg() -> None:
-    _emit(_osc("110"))
-
-
-def reset_ansi() -> None:
-    _emit(_osc("104"))
+    tf_osc.set_ansi_slot(slot, color, _EmitStream())
 
 
 # --- High-level API ---------------------------------------------------------
@@ -82,13 +71,6 @@ def apply_palette(
 ) -> None:
     """Apply a palette dict to the live terminal.
 
-    Palette shape:
-        {
-            "bg":   "#rrggbb",                 # optional
-            "fg":   "#rrggbb",                 # optional
-            "ansi": ["#rrggbb", ...]           # optional, 0..16 entries
-        }
-
     `persist=True` writes the palette to config so the next Code Puppy
     session can replay it. `register_reset=True` ensures we always
     restore the terminal at process exit.
@@ -96,17 +78,7 @@ def apply_palette(
     if not isinstance(palette, dict):
         return
 
-    bg = palette.get("bg")
-    fg = palette.get("fg")
-    ansi: Sequence[str] = palette.get("ansi") or []
-
-    if bg:
-        set_bg(bg)
-    if fg:
-        set_fg(fg)
-    for i, color in enumerate(ansi[:16]):
-        if color:
-            set_ansi_slot(i, color)
+    tf_osc.apply_palette(palette, output=_EmitStream(), register_reset=False)
 
     if persist:
         try:
@@ -120,9 +92,7 @@ def apply_palette(
 
 def reset_palette(persist: bool = True) -> None:
     """Restore the terminal's original bg/fg/ANSI palette."""
-    reset_ansi()
-    reset_bg()
-    reset_fg()
+    tf_osc.reset_palette(output=_EmitStream())
     if persist:
         try:
             set_config_value(_CONFIG_KEY, "")
@@ -160,9 +130,7 @@ def _at_exit_reset() -> None:
     doesn't stay stuck in a weird color after Code Puppy dies.
     """
     try:
-        reset_ansi()
-        reset_bg()
-        reset_fg()
+        reset_palette(persist=False)
     except Exception:
         pass
 
