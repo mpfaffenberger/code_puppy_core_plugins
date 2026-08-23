@@ -400,8 +400,20 @@ def warn_untrusted_project_hooks(
         return
     _WARNED.add(key)
 
+    # We import from ``code_puppy.messaging.bus`` (not the legacy
+    # ``code_puppy.messaging.message_queue``) on purpose. This function is
+    # called from ``load_hooks_config()`` which itself runs at plugin
+    # **import time** — the module-level ``_hook_engine = _initialize_engine()``
+    # in ``register_callbacks.py`` fires before the rich_renderer has
+    # started. The legacy ``message_queue._startup_buffer`` has no drainer
+    # (its public ``get_buffered_startup_messages`` helper is defined but
+    # never called anywhere) so a warning emitted through it silently
+    # evaporates. The bus's startup buffer, in contrast, is drained by
+    # ``rich_renderer._consume_loop_sync`` when the renderer boots — which
+    # is exactly the ordering we need for a pre-renderer emit to survive
+    # and render.
     try:
-        from code_puppy.messaging.message_queue import emit_warning
+        from code_puppy.messaging.bus import emit_warning
     except Exception:  # pragma: no cover - defensive during early boot
         return
 
@@ -422,3 +434,43 @@ def warn_untrusted_project_hooks(
 def _reset_warning_cache() -> None:
     """Clear the warn-once cache. Test hook only."""
     _WARNED.clear()
+
+
+def emit_untrusted_project_hooks_warning_if_any(
+    project_root: Optional[Path] = None,
+) -> None:
+    """Re-derive project-hooks trust state and emit the warning if untrusted.
+
+    Intended to be wired into the ``startup`` plugin callback so the warning
+    fires **after** the ASCII-art banner and boot output have rendered —
+    same visibility-maximising trick the truecolor warning uses (see
+    ``cli_runner.py``: ``# Truecolor warning moved to interactive_mode() so
+    it prints last — max visibility.``).
+
+    Emitting from :func:`~.config.load_hooks_config` directly would fire at
+    **plugin-import time**, before the renderer has drawn anything — the
+    warning then scrolls off the top of the screen the instant the logo
+    prints and the user never spots it.
+
+    This function is a pure side-effect wrapper: it recomputes the same
+    trust check ``load_hooks_config`` did (which is cheap — one JSON read
+    plus one SHA-256) and, if the current state is anything other than
+    :data:`TRUSTED`, emits the warn-once message. If the project has no
+    ``.claude/settings.json``, no hooks subtree, or an empty hooks subtree,
+    it does nothing.
+    """
+    root = _resolved_root(project_root)
+    settings_file = get_project_hooks_settings_file(root)
+    if settings_file is None:
+        return
+
+    subtree = _extract_hooks_subtree(settings_file)
+    if subtree is None or not _has_effective_hooks(subtree):
+        return
+
+    current_hash = hash_subtree(subtree)
+    status = get_trust_status_for_hash(root, current_hash)
+    if status == TRUSTED:
+        return
+
+    warn_untrusted_project_hooks(root, settings_file, status)

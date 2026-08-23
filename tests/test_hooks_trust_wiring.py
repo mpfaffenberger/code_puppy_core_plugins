@@ -139,6 +139,31 @@ class TestEngineReload:
 
         assert cch_callbacks._pending_session_context == []
 
+    def test_startup_warning_callback_is_registered(self, project: Path) -> None:
+        # The warn-visibility fix hinges on ``on_startup_emit_untrusted_warning``
+        # being wired into the ``startup`` phase so it fires *after* the
+        # banner. If someone removes the registration line, the warning goes
+        # silent again (config.py no longer emits directly). Catch that with
+        # a wiring assertion.
+        from code_puppy.callbacks import get_callbacks
+
+        registered = get_callbacks("startup")
+        assert cch_callbacks.on_startup_emit_untrusted_warning in registered
+
+    def test_startup_warning_callback_emits_when_untrusted(self, project: Path) -> None:
+        # End-to-end coverage of the deferred emit: run the actual callback
+        # against an untrusted .claude/settings.json and confirm it fires
+        # through the bus (the pipeline the rich_renderer drains).
+        import asyncio
+
+        _write_project_hooks(project, "echo hi")
+        trust._reset_warning_cache()
+        with patch("code_puppy.messaging.bus.emit_warning") as emit:
+            asyncio.run(cch_callbacks.on_startup_emit_untrusted_warning())
+        assert emit.called
+        (msg,), _ = emit.call_args
+        assert "NOT trusted" in msg
+
 
 # ---------- /hooks trust slash command --------------------------------------
 
