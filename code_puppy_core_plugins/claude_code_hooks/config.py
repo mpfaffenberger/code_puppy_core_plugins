@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from . import trust as _trust
+
 logger = logging.getLogger(__name__)
 
 PROJECT_HOOKS_FILE = ".claude/settings.json"
@@ -94,23 +96,24 @@ def load_hooks_config() -> Optional[Dict[str, Any]]:
         except Exception as e:
             logger.error(f"Failed to load {GLOBAL_HOOKS_FILE}: {e}", exc_info=True)
 
-    # Load and merge project-level hooks
-    project_config_path = Path(os.getcwd()) / PROJECT_HOOKS_FILE
+    # Hash the already-parsed subtree rather than re-reading the file — a
+    # second read is a TOCTOU foothold where an attacker could swap benign
+    # bytes for malicious ones between check and merge.
+    project_root = Path(os.getcwd())
+    project_settings_path = _trust.get_project_hooks_settings_file(project_root)
 
-    if project_config_path.exists():
-        try:
-            with open(project_config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-            hooks_config = config.get("hooks")
-            if hooks_config:
-                logger.info(f"Merging hooks configuration from {project_config_path}")
-                merged_config = _deep_merge_hooks(merged_config, hooks_config)
-            else:
-                logger.debug(f"No 'hooks' section found in {project_config_path}")
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in {project_config_path}: {e}")
-        except Exception as e:
-            logger.error(f"Failed to load {project_config_path}: {e}", exc_info=True)
+    if project_settings_path is not None:
+        project_subtree = _trust._extract_hooks_subtree(project_settings_path)
+        if project_subtree is not None and _trust._has_effective_hooks(project_subtree):
+            current_hash = _trust.hash_subtree(project_subtree)
+            status = _trust.get_trust_status_for_hash(project_root, current_hash)
+            if status == _trust.TRUSTED:
+                logger.info(
+                    f"Merging trusted hooks configuration from {project_settings_path}"
+                )
+                merged_config = _deep_merge_hooks(merged_config, project_subtree)
+            # The untrusted warning fires from the `startup` callback so it
+            # renders after boot rather than scrolling past above the banner.
 
     if not merged_config:
         logger.debug("No hooks configuration found")
