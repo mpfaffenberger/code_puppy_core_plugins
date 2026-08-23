@@ -247,19 +247,10 @@ register_callback("session_end", on_session_end_hook)
 
 
 async def on_startup_emit_untrusted_warning() -> None:
-    """Plugin ``startup`` callback: emit the untrusted-hooks warning late.
-
-    Fires from :func:`code_puppy.callbacks.on_startup`, which runs after
-    the ASCII-art banner and boot info have rendered. Delegating to
-    :func:`._trust.emit_untrusted_project_hooks_warning_if_any` keeps this
-    file a thin wiring layer — all the trust logic (and the docstring
-    explaining why we defer to this callback rather than emitting from
-    :func:`.config.load_hooks_config`) lives in :mod:`.trust`.
-    """
+    """Startup callback: emit the untrusted-hooks warning after boot."""
     try:
         _trust.emit_untrusted_project_hooks_warning_if_any()
     except Exception as e:  # pragma: no cover - defensive
-        # Never let a warn-visibility helper take down startup.
         logger.debug("emit_untrusted_project_hooks_warning_if_any failed: %s", e)
 
 

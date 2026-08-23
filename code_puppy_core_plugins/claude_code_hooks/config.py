@@ -127,16 +127,8 @@ def load_hooks_config() -> Optional[Dict[str, Any]]:
                     f"Merging trusted hooks configuration from {project_settings_path}"
                 )
                 merged_config = _deep_merge_hooks(merged_config, project_subtree)
-            # NOTE: we deliberately do NOT call warn_untrusted_project_hooks()
-            # here even though this is exactly where the check happens. This
-            # function runs at plugin **import time** (via the module-scope
-            # ``_hook_engine = _initialize_engine()`` in register_callbacks),
-            # which is before the banner/boot output has been drawn. A warning
-            # emitted from here scrolls off the top of the screen the moment
-            # the ASCII-art logo prints. Instead, the ``startup`` plugin
-            # callback in register_callbacks re-derives trust state and emits
-            # the warning after all boot output, immediately above the first
-            # user prompt — same convention the truecolor warning uses.
+            # Untrusted-hooks warning is emitted from the `startup` plugin
+            # callback (not here) so it renders after boot, not at import time.
 
     if not merged_config:
         logger.debug("No hooks configuration found")

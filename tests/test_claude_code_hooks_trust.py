@@ -411,9 +411,6 @@ class TestLoaderTrustGate:
         assert trust._extract_hooks_subtree(settings_dir / "settings.json") is None
 
     def test_untrusted_file_emits_warning(self, project: Path) -> None:
-        # Loader no longer emits at import time (would scroll off above the
-        # banner). The warn now fires from the ``startup`` plugin callback,
-        # driven by ``emit_untrusted_project_hooks_warning_if_any``.
         _write_settings(project, _hooks_payload())
         warnings: List[str] = []
         trust._reset_warning_cache()
@@ -442,10 +439,6 @@ class TestLoaderTrustGate:
         assert "CHANGED" in warnings[0]
 
     def test_loader_does_not_emit_warnings_directly(self, project: Path) -> None:
-        # Regression: warnings emitted from ``load_hooks_config`` fire at
-        # plugin-import time (before the banner renders) and scroll off the
-        # top of the terminal. The loader must stay silent — warning duty
-        # lives on the startup callback.
         _write_settings(project, _hooks_payload())
         with patch("code_puppy.messaging.bus.emit_warning") as emit:
             hooks_config.load_hooks_config()
@@ -458,8 +451,6 @@ class TestLoaderTrustGate:
         emit.assert_not_called()
 
     def test_startup_helper_silent_when_hooks_empty(self, project: Path) -> None:
-        # A settings.json with ``{"hooks": {}}`` is not a threat surface —
-        # nothing would execute. The startup helper must not nag.
         _write_settings(project, {"hooks": {}})
         trust._reset_warning_cache()
         with patch("code_puppy.messaging.bus.emit_warning") as emit:
