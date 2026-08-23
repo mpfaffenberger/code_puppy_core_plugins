@@ -24,13 +24,13 @@ HookSource = Literal["project", "global"]
 
 
 def _find_settings_path() -> Path:
-    """Return the path to .claude/settings.json, searching from cwd upward."""
-    cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        candidate = parent / _SETTINGS_FILENAME
-        if candidate.exists():
-            return candidate
-    return cwd / _SETTINGS_FILENAME
+    """Return the CWD's ``.claude/settings.json`` path.
+
+    Deliberately does not search ancestors. The executor only ever loads and
+    trust-gates the CWD's file, so returning a parent's settings here would
+    let the menu display and toggle hooks that can never actually run.
+    """
+    return Path.cwd() / _SETTINGS_FILENAME
 
 
 def _load_global_hooks_config() -> Dict[str, Any]:
