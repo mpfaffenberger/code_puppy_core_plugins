@@ -1,17 +1,6 @@
 """`/hooks trust` — accept, inspect, or revoke project-level hook trust.
 
-Project ``.claude/settings.json`` files can define hooks that execute
-arbitrary shell commands at Code Puppy lifecycle events, so they are
-ignored until the user explicitly trusts them. This handler drives that
-trust ceremony:
-
-* ``/hooks trust``          → preview the project hooks + trust status.
-* ``/hooks trust accept``   → record trust and reload the running engine.
-* ``/hooks trust revoke``   → drop trust for this project and reload.
-* ``/hooks trust status``   → alias for the bare preview.
-
-Trust is subtree-content-hashed and stored user-side; see
-:mod:`code_puppy_core_plugins.claude_code_hooks.trust`.
+See :mod:`code_puppy_core_plugins.claude_code_hooks.trust`.
 """
 
 from __future__ import annotations
@@ -23,11 +12,9 @@ from typing import Any, Dict, List, Optional
 
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
 
-# SECURITY: use the executor-side, CWD-only discovery helper. Do NOT use
-# hook_manager.config._find_settings_path — that walks ancestor directories
-# and would silently widen the trust ceremony beyond the user's current
-# project, re-introducing exactly the "hostile parent dir" attack surface
-# this feature exists to eliminate.
+# SECURITY: CWD-only discovery. Do NOT swap in
+# hook_manager.config._find_settings_path — it walks ancestors, which would
+# widen the ceremony to a hostile parent directory.
 from code_puppy_core_plugins.claude_code_hooks import trust as _trust
 from code_puppy_core_plugins.claude_code_hooks.register_callbacks import (
     reload_hook_engine,
@@ -39,10 +26,8 @@ logger = logging.getLogger(__name__)
 def handle_trust_subcommand(args: List[str]) -> bool:
     """Dispatch ``/hooks trust [accept|revoke|status]``.
 
-    Args are the tokens AFTER the ``trust`` verb. Returns ``True`` to
-    signal the slash-command router that the command was handled (even
-    for the "unknown action" case — the user gets a helpful error rather
-    than a bare-fallthrough TUI launch).
+    Always returns ``True`` so the router treats even an unknown action as
+    handled.
     """
     action = args[0].lower() if args else "preview"
 
@@ -69,7 +54,6 @@ def handle_trust_subcommand(args: List[str]) -> bool:
 
 
 def _preview(project_root: Path, settings_file: Optional[Path]) -> None:
-    """Show the project hooks file, its declared hooks, and trust status."""
     if settings_file is None:
         emit_info(
             "No project hooks file found. Create '.claude/settings.json' in "
@@ -127,8 +111,6 @@ def _accept(project_root: Path, settings_file: Optional[Path]) -> None:
         )
         return
     if _trust.trust_project_hooks(project_root):
-        # Rebuild the running engine so future lifecycle events pick up the
-        # newly trusted project hooks without needing a process restart.
         reload_hook_engine()
         emit_success(
             f"Trusted {settings_file}. Project hooks will run on the next "
@@ -143,13 +125,19 @@ def _accept(project_root: Path, settings_file: Optional[Path]) -> None:
 
 
 def _revoke(project_root: Path, settings_file: Optional[Path]) -> None:
-    if _trust.revoke_project_hooks(project_root):
-        # Rebuild the running engine so already-registered project hooks
-        # stop firing on subsequent lifecycle events.
+    outcome = _trust.revoke_project_hooks(project_root)
+    target = settings_file if settings_file is not None else project_root
+
+    if outcome == _trust.REVOKED:
         reload_hook_engine()
-        target = settings_file if settings_file is not None else project_root
         emit_success(
             f"Revoked trust for project hooks at {target}. They will no longer run."
+        )
+    elif outcome == _trust.REVOKE_FAILED:
+        emit_error(
+            f"Could not write the trust store, so project hooks at {target} are "
+            "STILL TRUSTED and will keep running. Check permissions on "
+            f"{_trust.TRUST_STORE_FILE} and try again."
         )
     else:
         emit_info("This project's hooks were not trusted. Nothing to revoke.")
@@ -167,13 +155,7 @@ def _status_label(status: str) -> str:
 
 
 def _iter_hook_summary(subtree: Dict[str, Any]):
-    """Yield ``(event_type, hook_count, [command_lines])`` per event.
-
-    Renders the Claude Code hook schema (each event maps to a list of
-    hook groups, each group has a ``hooks`` list of ``{type, command}``
-    dicts). Non-conforming entries are surfaced as ``<opaque>`` so a
-    user preview never crashes on unexpected shapes.
-    """
+    """Yield ``(event_type, hook_count, [command_lines])`` per event."""
     for event_type in sorted(k for k in subtree if not k.startswith("_")):
         groups = subtree.get(event_type)
         if not isinstance(groups, list):

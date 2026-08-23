@@ -96,24 +96,9 @@ def load_hooks_config() -> Optional[Dict[str, Any]]:
         except Exception as e:
             logger.error(f"Failed to load {GLOBAL_HOOKS_FILE}: {e}", exc_info=True)
 
-    # Load and merge project-level hooks — TRUST-GATED.
-    #
-    # A hostile repo can drop a .claude/settings.json whose SessionStart
-    # hooks execute arbitrary shell commands at Code Puppy boot, before the
-    # user has typed anything. We refuse to merge the project block unless
-    # its ``hooks`` subtree has been explicitly accepted by the user (via
-    # the /hooks trust ceremony) at its current canonicalized hash. Any
-    # change to the subtree flips trust to CHANGED and skips the merge
-    # again until re-accepted. See :mod:`.trust`.
-    #
-    # We deliberately hash the **already-parsed** subtree and compare it
-    # to the stored hash via :func:`_trust.get_trust_status_for_hash`
-    # (rather than calling :func:`_trust.get_trust_status`, which would
-    # re-open the file). Any second read is a TOCTOU foothold — an
-    # attacker who can flip the file's contents between the check-read
-    # and the merge-read could present benign bytes on one read and
-    # malicious bytes on the other. Same bytes end-to-end closes that
-    # window.
+    # Hash the already-parsed subtree rather than re-reading the file — a
+    # second read is a TOCTOU foothold where an attacker could swap benign
+    # bytes for malicious ones between check and merge.
     project_root = Path(os.getcwd())
     project_settings_path = _trust.get_project_hooks_settings_file(project_root)
 
@@ -127,8 +112,8 @@ def load_hooks_config() -> Optional[Dict[str, Any]]:
                     f"Merging trusted hooks configuration from {project_settings_path}"
                 )
                 merged_config = _deep_merge_hooks(merged_config, project_subtree)
-            # Untrusted-hooks warning is emitted from the `startup` plugin
-            # callback (not here) so it renders after boot, not at import time.
+            # The untrusted warning fires from the `startup` callback so it
+            # renders after boot rather than scrolling past above the banner.
 
     if not merged_config:
         logger.debug("No hooks configuration found")
