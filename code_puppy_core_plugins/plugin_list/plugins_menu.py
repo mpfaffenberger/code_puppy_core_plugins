@@ -1,7 +1,7 @@
 """Interactive TUI for managing plugins.
 
 Launch with ``/plugins`` to browse and toggle plugins on/off.
-Built with prompt_toolkit, following the same pattern as the skills menu.
+Built on termflow, following the same pattern as the skills menu.
 
 This module is the *controller*: terminal sizing, key bindings, app lifecycle,
 and plugin state mutation. All rendering (fragment construction, padding,
@@ -12,21 +12,7 @@ reason to change.
 from __future__ import annotations
 
 import shutil
-import sys
-import time
 from typing import List, Optional, Tuple
-
-from prompt_toolkit.application import Application
-from prompt_toolkit.application.current import get_app
-from prompt_toolkit.filters import Condition
-from prompt_toolkit.layout import Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import TextArea
-
-from code_puppy_core_plugins.plugin_list.plugins_menu_layout import (
-    build_key_bindings,
-    build_layout,
-)
 
 from code_puppy.command_line.pagination import (
     ensure_visible_page,
@@ -43,7 +29,14 @@ from code_puppy_core_plugins.plugin_list.plugins_menu_render import (
     render_list,
 )
 from code_puppy.tools.command_runner import set_awaiting_user_input
-from code_puppy.callbacks import on_prompt_toolkit_style
+
+
+class _TrustInput:
+    """Minimal stand-in for the old TextArea: just a text buffer."""
+
+    def __init__(self) -> None:
+        self.text = ""
+
 
 PAGE_SIZE = 20
 
@@ -97,10 +90,7 @@ class PluginsMenu:
         self.trust_target: Optional[_PluginEntry] = None
         self.trust_error: str = ""
         self.trust_feedback: str = ""
-        self.trust_input: TextArea = TextArea(
-            multiline=False, height=1, accept_handler=self._accept_trust
-        )
-        self._modal_open = Condition(lambda: self.trust_target is not None)
+        self.trust_input = _TrustInput()
 
         self.selected_idx = 0
         self.current_page = 0
@@ -118,10 +108,6 @@ class PluginsMenu:
         self._detail_cols = 60
         self._pane_rows = 20
         self._last_size: Tuple[int, int] = (0, 0)
-
-        self.menu_control: Optional[FormattedTextControl] = None
-        self.detail_control: Optional[FormattedTextControl] = None
-        self.detail_window: Optional[Window] = None
 
         self._refresh_data()
 
@@ -225,20 +211,12 @@ class PluginsMenu:
         self.trust_target = entry
         self.trust_error = ""
         self.trust_input.text = ""
-        try:
-            get_app().layout.focus(self.trust_input)
-        except Exception:
-            pass  # no running app (tests) — state alone drives the logic
         self.update_display()
 
     def _close_trust_modal(self) -> None:
         self.trust_target = None
         self.trust_error = ""
         self.trust_input.text = ""
-        try:
-            get_app().layout.focus(self.menu_control)
-        except Exception:
-            pass
         self.update_display()
 
     def _accept_trust(self, buff) -> bool:
@@ -277,24 +255,13 @@ class PluginsMenu:
     # -- display update ----------------------------------------------------
 
     def update_display(self) -> None:
-        # fill_pane writes every cell of every row — see its docstring for
-        # the stale-glyph rationale.
-        if self.menu_control:
-            self.menu_control.text = fill_pane(
-                render_list(self), self._menu_cols, self._pane_rows
-            )
-        if self.detail_control:
-            sliced = drop_leading_lines(render_detail(self), self.detail_scroll)
-            self.detail_control.text = fill_pane(
-                sliced, self._detail_cols, self._pane_rows
-            )
+        # Rendering is pulled fresh in _render(); nothing cached here.
+        pass
 
     def _max_detail_scroll(self) -> int:
         """Topmost line we may scroll to, keeping a screenful visible."""
         total = count_lines(render_detail(self))
-        visible = 1
-        if self.detail_window is not None and self.detail_window.render_info:
-            visible = max(1, self.detail_window.render_info.window_height)
+        visible = max(1, self._pane_rows)
         return max(0, total - visible)
 
     def _scroll_detail(self, delta: int) -> None:
@@ -370,67 +337,89 @@ class PluginsMenu:
         self.current_page = new_page
         self._set_selection(self.current_page * PAGE_SIZE)
 
-    def run(self) -> Optional[str]:
-        self.menu_control = FormattedTextControl(text="", focusable=True)
-        self.detail_control = FormattedTextControl(text="")
+    def _render(self) -> list:
+        from code_puppy_core_plugins.termflow_tui import fragments_to_lines
 
         self._recompute_dimensions()
-
-        layout = build_layout(self)
-        if self.trust_target is not None:
-            # Popup pre-opened (focus_plugin ceremony): focus its input now
-            # that the layout exists — _open_trust_modal ran before any app.
-            try:
-                layout.focus(self.trust_input)
-            except Exception:
-                pass
-        kb = build_key_bindings(self)
-
-        app = Application(
-            layout=layout,
-            key_bindings=kb,
-            full_screen=False,
-            mouse_support=False,
-            style=on_prompt_toolkit_style(),
+        lines = []
+        left = fragments_to_lines(
+            fill_pane(render_list(self), self._menu_cols, self._pane_rows)
         )
+        sliced = drop_leading_lines(render_detail(self), self.detail_scroll)
+        right = fragments_to_lines(
+            fill_pane(sliced, self._detail_cols, self._pane_rows)
+        )
+        from termflow.tui.layout import two_columns
 
-        # Recompute fixed-width wrapping before each render so SIGWINCH updates
-        # dimensions and content; the helper is a no-op when size is unchanged.
-        def _on_before_render(_app: Application) -> None:
-            if self._recompute_dimensions():
-                self.update_display()
+        cols, _rows = self._measure_terminal()
+        lines += two_columns(left, right, self._menu_cols + 1, max(40, cols - 1))
+        if self.trust_target is not None:
+            lines.append("")
+            lines += fragments_to_lines(self._render_trust_prompt())
+        return lines
 
-        app.before_render += _on_before_render
+    def _render_trust_prompt(self) -> Fragments:
+        from code_puppy_core_plugins.plugin_list.project_trust_flow import ACCEPT_WORD
+
+        fragments: Fragments = [
+            (
+                "class:tui.warning",
+                f" Trust '{self.trust_target.name}'? Type '{ACCEPT_WORD}' and press"
+                " Enter (Esc cancels): ",
+            ),
+            ("class:tui.selected", self.trust_input.text + "_"),
+        ]
+        if self.trust_error:
+            fragments.append(("class:tui.error", f"\n {self.trust_error}"))
+        return fragments
+
+    def _handle_modal_key(self, key: str) -> bool:
+        if key in ("escape", "ctrl-c"):
+            self._close_trust_modal()
+        elif key == "enter":
+            self._accept_trust(self.trust_input)
+        elif key == "backspace":
+            self.trust_input.text = self.trust_input.text[:-1]
+        elif len(key) == 1 and key.isprintable():
+            self.trust_input.text += key
+        return False
+
+    def handle_key(self, key: str) -> bool:
+        """Dispatch one key. True exits the menu."""
+        if self.trust_target is not None:
+            return self._handle_modal_key(key)
+        if key in ("up", "ctrl-p", "j"):
+            self._move_selection(-1)
+        elif key in ("down", "ctrl-n", "k"):
+            self._move_selection(+1)
+        elif key == "page-up":
+            self._change_page(-1)
+        elif key == "page-down":
+            self._change_page(+1)
+        elif key in ("home", "g"):
+            self._set_selection(0)
+        elif key in ("end", "G"):
+            self._set_selection(len(self.plugins) - 1)
+        elif key in ("h", "left"):
+            self._scroll_detail(-1)
+        elif key in ("l", "right"):
+            self._scroll_detail(+1)
+        elif key == "enter":
+            self._toggle_current()
+            self.result = "changed"
+        elif key in ("q", "escape", "ctrl-c"):
+            self.result = "quit"
+            return True
+        return False
+
+    def run(self) -> Optional[str]:
+        from code_puppy_core_plugins.termflow_tui import FragmentTUI
 
         set_awaiting_user_input(True)
-
-        sys.stdout.write("\033[?1049h")  # Enter alternate buffer
-        sys.stdout.write("\033[2J\033[H")  # Clear and home
-        sys.stdout.flush()
-        time.sleep(0.05)
-
         try:
-            self.update_display()
-
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.flush()
-
-            app.run(in_thread=True)
-
+            FragmentTUI(self._render, self.handle_key, use_alt_screen=True).run()
         finally:
-            sys.stdout.write("\033[?1049l")  # Exit alternate buffer
-            sys.stdout.flush()
-
-            try:
-                import termios
-
-                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-            except Exception:
-                pass
-
-            time.sleep(0.1)
             set_awaiting_user_input(False)
-
         return self.result
 
 

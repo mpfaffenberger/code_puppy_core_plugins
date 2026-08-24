@@ -68,8 +68,10 @@ my_plugin/
 ```python
 from code_puppy.callbacks import register_callback
 
+
 def _on_load_prompt():
     return "\n## Project Rules\nAlways use type hints."
+
 
 register_callback("load_prompt", _on_load_prompt)
 ```

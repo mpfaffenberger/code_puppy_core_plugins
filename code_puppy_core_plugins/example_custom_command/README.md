@@ -49,12 +49,14 @@ try:
 except ImportError:
     MarkdownCommandResult = None
 
+
 # 1. Define help entries for your commands
 def _custom_help():
     return [
         ("woof", "Ask the agent for a dog fact (or any prompt you tack on)"),
         ("echo", "Echo back your text (display only)"),
     ]
+
 
 # 2. Define command handler
 def _handle_custom_command(command: str, name: str):
@@ -77,6 +79,7 @@ def _handle_custom_command(command: str, name: str):
         return ""
 
     return None  # Not our command
+
 
 # 3. Register callbacks
 register_callback("custom_command_help", _custom_help)
@@ -166,11 +169,13 @@ touch .code_puppy/plugins/my_plugin/register_callbacks.py
 from code_puppy.callbacks import register_callback
 from code_puppy.messaging import emit_info, emit_success
 
+
 def _custom_help():
     """Provide help text for /help display."""
     return [
         ("mycommand", "Description of my command"),
     ]
+
 
 def _handle_custom_command(command: str, name: str):
     """Handle your custom commands."""
@@ -178,8 +183,9 @@ def _handle_custom_command(command: str, name: str):
         # Your command logic here
         emit_success("My command executed!")
         return True  # Command handled
-    
+
     return None  # Not our command
+
 
 # Register the callbacks
 register_callback("custom_command_help", _custom_help)
@@ -237,10 +243,10 @@ Your `_handle_custom_command` function can return:
 
 ```python
 from code_puppy.messaging import (
-    emit_info,     # Blue info message
+    emit_info,  # Blue info message
     emit_success,  # Green success message
     emit_warning,  # Yellow warning message
-    emit_error,    # Red error message
+    emit_error,  # Red error message
 )
 
 # Examples
@@ -270,9 +276,11 @@ code-puppy
 
 from code_puppy.plugins.my_plugin.register_callbacks import _handle_custom_command
 
+
 def test_my_command():
     result = _handle_custom_command("/mycommand", "mycommand")
     assert result is True
+
 
 def test_unknown_command():
     result = _handle_custom_command("/unknown", "unknown")

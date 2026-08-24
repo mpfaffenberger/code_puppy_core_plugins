@@ -4,19 +4,11 @@ Interactive TUI for managing Claude Code hooks.
 Launch with /hooks to browse, enable/disable, inspect, and delete hooks
 from both global (~/.code_puppy/hooks.json) and project (.claude/settings.json) sources.
 
-Built with prompt_toolkit to match the existing skills_menu aesthetic exactly
-(VSplit, FormattedTextControl, Frame).
+Built on termflow to match the existing skills_menu aesthetic exactly
+(split-pane fragment rendering).
 """
 
-import sys
-import time
 from typing import List, Optional
-
-from prompt_toolkit.application import Application
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Dimension, Layout, VSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import Frame
 
 from code_puppy.messaging import emit_error
 
@@ -30,7 +22,6 @@ from .config import (
     save_hooks_config,
     toggle_hook_enabled,
 )
-from code_puppy.callbacks import on_prompt_toolkit_style
 
 PAGE_SIZE = 12
 
@@ -46,8 +37,6 @@ class HooksMenu:
         self.status_message: str = ""
 
         # prompt_toolkit controls (set during run())
-        self.list_control: Optional[FormattedTextControl] = None
-        self.detail_control: Optional[FormattedTextControl] = None
 
         self._refresh_data()
 
@@ -390,153 +379,86 @@ class HooksMenu:
         return lines
 
     def update_display(self) -> None:
-        """Push freshly rendered text into the prompt_toolkit controls."""
-        if self.list_control:
-            self.list_control.text = self._render_list()
-        if self.detail_control:
-            self.detail_control.text = self._render_detail()
+        """Rendering is pulled fresh each paint; nothing cached here."""
 
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
 
-    def run(self) -> Optional[str]:
-        """Launch the interactive TUI.  Returns the exit reason string."""
-        self.result = None
-
-        self.list_control = FormattedTextControl(text="")
-        self.detail_control = FormattedTextControl(text="")
-
-        list_window = Window(
-            content=self.list_control, wrap_lines=True, width=Dimension(weight=40)
-        )
-        detail_window = Window(
-            content=self.detail_control, wrap_lines=True, width=Dimension(weight=60)
-        )
-
-        list_frame = Frame(list_window, width=Dimension(weight=40), title="Hooks")
-        detail_frame = Frame(detail_window, width=Dimension(weight=60), title="Details")
-
-        root_container = VSplit([list_frame, detail_frame])
-        kb = KeyBindings()
-
-        # --- Navigation ---
-        @kb.add("up")
-        @kb.add("c-p")
-        @kb.add("k")
-        def _move_up(event):
+    def handle_key(self, key: str) -> bool:
+        """Dispatch one key. True exits the menu."""
+        if key in ("up", "ctrl-p", "k"):
             if self.selected_idx > 0:
                 self.selected_idx -= 1
                 self.current_page = self.selected_idx // PAGE_SIZE
-            self.update_display()
-
-        @kb.add("down")
-        @kb.add("c-n")
-        @kb.add("j")
-        def _move_down(event):
+        elif key in ("down", "ctrl-n", "j"):
             if self.selected_idx < len(self.entries) - 1:
                 self.selected_idx += 1
                 self.current_page = self.selected_idx // PAGE_SIZE
-            self.update_display()
-
-        @kb.add("left")
-        def _prev_page(event):
+        elif key == "left":
             if self.current_page > 0:
                 self.current_page -= 1
                 self.selected_idx = self.current_page * PAGE_SIZE
-            self.update_display()
-
-        @kb.add("right")
-        def _next_page(event):
+        elif key == "right":
             total_pages = max(1, (len(self.entries) + PAGE_SIZE - 1) // PAGE_SIZE)
             if self.current_page < total_pages - 1:
                 self.current_page += 1
                 self.selected_idx = self.current_page * PAGE_SIZE
-            self.update_display()
-
-        # --- Actions ---
-        @kb.add("enter")
-        def _toggle(event):
+        elif key == "enter":
             self._toggle_current()
             self.result = "changed"
-
-        @kb.add("d")
-        def _delete(event):
+        elif key == "d":
             self._delete_current()
             self.result = "changed"
-
-        @kb.add("A")  # capital A = enable ALL
-        def _enable_all(event):
+        elif key == "A":  # capital A = enable ALL
             self._enable_all()
             self.result = "changed"
-
-        @kb.add("D")  # capital D = disable ALL
-        def _disable_all(event):
+        elif key == "D":  # capital D = disable ALL
             self._disable_all()
             self.result = "changed"
-
-        @kb.add("r")
-        def _refresh(event):
+        elif key == "r":
             self._refresh_data()
             self.status_message = "Refreshed."
-            self.update_display()
-
-        # --- Exit ---
-        @kb.add("q")
-        @kb.add("escape")
-        def _quit(event):
+        elif key in ("q", "escape", "ctrl-c"):
             self.result = "quit"
-            event.app.exit()
+            return True
+        self.update_display()
+        return False
 
-        @kb.add("c-c")
-        def _quit_ctrl_c(event):
-            self.result = "quit"
-            event.app.exit()
+    def _render(self) -> list:
+        from termflow.tui.terminal import terminal_size
 
-        layout = Layout(root_container)
-        app = Application(
-            layout=layout,
-            key_bindings=kb,
-            full_screen=False,
-            mouse_support=False,
-            style=on_prompt_toolkit_style(),
+        from code_puppy_core_plugins.termflow_tui import two_pane
+
+        width, _ = terminal_size()
+        usable = max(40, width - 1)
+        return two_pane(
+            self._render_list(),
+            self._render_detail(),
+            width=usable,
+            list_width=max(24, int(usable * 0.4)),
         )
 
+    def run(self) -> Optional[str]:
+        """Launch the interactive TUI.  Returns the exit reason string."""
+        from code_puppy_core_plugins.termflow_tui import FragmentTUI
+
+        self.result = None
         try:
             from code_puppy.tools.command_runner import set_awaiting_user_input
 
             set_awaiting_user_input(True)
         except Exception:
             pass
-
-        # Enter alternate screen buffer
-        sys.stdout.write("\033[?1049h")
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
-        time.sleep(0.05)
-
         try:
-            self.update_display()
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.flush()
-            app.run(in_thread=True)
+            FragmentTUI(self._render, self.handle_key, use_alt_screen=True).run()
         finally:
-            sys.stdout.write("\033[?1049l")
-            sys.stdout.flush()
-            try:
-                import termios
-
-                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-            except Exception:
-                pass  # ImportError on Windows, termios.error, or not a tty
-            time.sleep(0.1)
             try:
                 from code_puppy.tools.command_runner import set_awaiting_user_input
 
                 set_awaiting_user_input(False)
             except Exception:
                 pass
-
         return self.result
 
 

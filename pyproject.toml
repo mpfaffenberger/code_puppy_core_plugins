@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
     "httpx>=0.24.1,<1",
-    "prompt-toolkit>=3.0.0,<4",
     "pydantic-ai-slim[openai,anthropic,mcp]>=2.31.0,<3",
 ]
 license = {text = "MIT"}
@@ -87,7 +86,6 @@ timestamp_heartbeat = "code_puppy_core_plugins.timestamp_heartbeat.register_call
 token_ratio_learner = "code_puppy_core_plugins.token_ratio_learner.register_callbacks"
 universal_constructor = "code_puppy_core_plugins.universal_constructor.register_callbacks"
 web_retriever_skill = "code_puppy_core_plugins.web_retriever_skill.register_callbacks"
-wide_completion_menu = "code_puppy_core_plugins.wide_completion_menu.register_callbacks"
 wiggum = "code_puppy_core_plugins.wiggum.register_callbacks"
 yolo_cli = "code_puppy_core_plugins.yolo_cli.register_callbacks"
 
@@ -104,6 +102,8 @@ addopts = "--cov=code_puppy_core_plugins --cov-report=term-missing"
 
 [dependency-groups]
 dev = [
+    # Old-core compat paths (theme merge shim) are still unit-tested.
+    "prompt-toolkit>=3.0.0,<4",
     "pytest>=8.3.4",
     "pytest-cov>=6.1.1",
     "pytest-asyncio>=0.23.1",

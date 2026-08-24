@@ -211,12 +211,8 @@ def _handle_copilot_login(command: str) -> None:
             "   Press Enter to use github.com."
         )
         try:
-            from prompt_toolkit import prompt as pt_prompt
-
-            raw = pt_prompt("GitHub host: ", default="github.com").strip()
+            raw = input("GitHub host [github.com]: ").strip()
             host = raw if raw else "github.com"
-        except ImportError:
-            host = "github.com"
         except (EOFError, KeyboardInterrupt):
             emit_warning("Copilot login cancelled.")
             return

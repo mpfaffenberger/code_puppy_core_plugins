@@ -120,11 +120,16 @@ during agent build. It:
 # 1. Define the tool (adds to TOOL_REGISTRY)
 def _register_tools():
     return [{"name": "my_tool", "register_func": register_my_tool}]
+
+
 register_callback("register_tools", _register_tools)
+
 
 # 2. Advertise it to agents (adds to agent's tool list)
 def _advertise(agent_name=None):
     return ["my_tool"]
+
+
 register_callback("register_agent_tools", _advertise)
 ```
 

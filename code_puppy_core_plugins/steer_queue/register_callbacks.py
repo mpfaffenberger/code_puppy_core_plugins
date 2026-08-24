@@ -17,7 +17,6 @@ supplies the rest of the feature:
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
 
 from code_puppy.callbacks import register_callback
 
@@ -109,7 +108,7 @@ def _on_startup() -> None:
 
 
 # Registration
-def _handle_custom_command(command: str, name: str) -> Optional[bool]:
+def _handle_custom_command(command: str, name: str) -> bool | None:
     if name == _STEER:
         return _handle_steer(command)
     if name == _QUEUE:
@@ -117,7 +116,7 @@ def _handle_custom_command(command: str, name: str) -> Optional[bool]:
     return None
 
 
-def _custom_help() -> List[Tuple[str, str]]:
+def _custom_help() -> list[tuple[str, str]]:
     return [
         (_STEER, "Inject guidance mid-turn while the agent is running"),
         (_QUEUE, "Manage queued prompts in a full-screen TUI"),

@@ -1,10 +1,9 @@
-"""Interactive spinner picker TUI.
+"""Interactive spinner picker TUI, on termflow.
 
-Same full-screen prompt_toolkit pattern as the theme plugin's picker,
-but with a preview pane that actually *animates*: a background asyncio
-task invalidates the app ~20x/sec, and the preview control derives the
-current frame from wall-clock time, so every spinner runs at its own
-configured interval.
+Split-pane fragment renderer with a preview pane that actually
+*animates*: the key-poll heartbeat doubles as the animation tick, and
+the preview derives the current frame from wall-clock time, so every
+spinner runs at its own configured interval.
 
 Navigation follows the plugins-menu convention (same split-pane shape,
 same muscle memory): ``j``/``k`` + arrows move the selection (clamped,
@@ -19,16 +18,8 @@ live while the picker is open.
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
 from typing import List, Optional, Tuple
-
-from prompt_toolkit import Application
-from prompt_toolkit.formatted_text import FormattedText
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Layout, VSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import Frame
 
 from code_puppy.command_line.pagination import (
     ensure_visible_page,
@@ -37,8 +28,11 @@ from code_puppy.command_line.pagination import (
     get_total_pages,
 )
 
+from code_puppy_core_plugins.termflow_tui import FragmentTUI, two_pane
+
 from . import spinners as sp
-from code_puppy.callbacks import on_prompt_toolkit_style
+
+FormattedText = list  # legacy alias: render fns return plain fragment lists
 
 #: Preview invalidation cadence, pinned to MIN_INTERVAL so slowest spinners run
 #: at their true speed.
@@ -201,11 +195,6 @@ async def interactive_spinner_picker() -> Optional[Tuple[str, Optional[float]]]:
     result: list[Optional[Tuple[str, Optional[float]]]] = [None]
     started_at = time.monotonic()
 
-    set_awaiting_user_input(True)
-    sys.stdout.write("\033[?1049h\033[2J\033[H")
-    sys.stdout.flush()
-    await asyncio.sleep(0.05)
-
     def _set_selection(new_idx: int) -> None:
         """Clamp selection and keep its page visible (plugins-menu contract).
 
@@ -242,64 +231,7 @@ async def interactive_spinner_picker() -> Optional[Tuple[str, Optional[float]]]:
         page[0] = new_page
         _set_selection(new_page * PAGE_SIZE)
 
-    kb = KeyBindings()
-
-    # -- Selection (j = up, k = down -- plugins-menu convention) ------------
-    @kb.add("up")
-    @kb.add("c-p")
-    @kb.add("j")
-    def _(event):
-        _set_selection(selected[0] - 1)
-        event.app.invalidate()
-
-    @kb.add("down")
-    @kb.add("c-n")
-    @kb.add("k")
-    def _(event):
-        _set_selection(selected[0] + 1)
-        event.app.invalidate()
-
-    # -- Page through the list ----------------------------------------------
-    @kb.add("pageup")
-    def _(event):
-        _change_page(-1)
-        event.app.invalidate()
-
-    @kb.add("pagedown")
-    def _(event):
-        _change_page(+1)
-        event.app.invalidate()
-
-    # -- Jump to first / last -------------------------------------------------
-    @kb.add("home")
-    @kb.add("g")
-    def _(event):
-        _set_selection(0)
-        event.app.invalidate()
-
-    @kb.add("end")
-    @kb.add("G")
-    def _(event):
-        _set_selection(len(entries) - 1)
-        event.app.invalidate()
-
-    # -- Speed (left/- slower, right/+ faster: interval moves inversely) ----
-    @kb.add("left")
-    @kb.add("-")
-    def _(event):
-        _nudge_speed(+_SPEED_STEP_S)
-        event.app.invalidate()
-
-    @kb.add("right")
-    @kb.add("+")
-    @kb.add("=")  # unshifted + on most layouts
-    def _(event):
-        _nudge_speed(-_SPEED_STEP_S)
-        event.app.invalidate()
-
-    # -- Init the user spinners file (no need to leave the menu) -----------
-    @kb.add("i")
-    def _(event):
+    def _write_starter() -> None:
         try:
             created = sp.write_template()
             notice[0] = (
@@ -310,70 +242,71 @@ async def interactive_spinner_picker() -> Optional[Tuple[str, Optional[float]]]:
         except OSError as exc:
             notice[0] = f"Could not write starter file: {exc}"
         _refresh_entries()
-        event.app.invalidate()
 
-    # -- Actions / exit --------------------------------------------------------
-    @kb.add("enter")
-    def _(event):
-        result[0] = (entries[selected[0]].name, custom_interval[0])
-        event.app.exit()
+    def _render() -> list:
+        from termflow.tui.terminal import terminal_size
 
-    @kb.add("q")
-    @kb.add("escape")
-    @kb.add("c-c")
-    def _(event):
-        result[0] = None
-        event.app.exit()
-
-    left = Window(
-        content=FormattedTextControl(
-            lambda: _format_menu(entries, selected[0], page[0], active)
-        ),
-        width=36,  # widest hint row is 35 cells; don't guillotine the json
-    )
-    right = Window(
-        content=FormattedTextControl(
-            lambda: _format_preview(
+        width, _ = terminal_size()
+        return two_pane(
+            _format_menu(entries, selected[0], page[0], active),
+            _format_preview(
                 entries[selected[0]], started_at, custom_interval[0], notice[0]
-            )
-        ),
-    )
+            ),
+            width=max(40, width - 1),
+            list_width=36,
+        )
 
-    layout = Layout(
-        VSplit([Frame(left, title="Spinners"), Frame(right, title="Live Preview")])
-    )
-    app = Application(
-        layout=layout,
-        key_bindings=kb,
-        full_screen=False,
-        mouse_support=False,
-        style=on_prompt_toolkit_style(),
-    )
+    def _handle_key(key: str) -> bool:
+        if key in ("up", "ctrl-p", "j"):
+            _set_selection(selected[0] - 1)
+        elif key in ("down", "ctrl-n", "k"):
+            _set_selection(selected[0] + 1)
+        elif key == "page-up":
+            _change_page(-1)
+        elif key == "page-down":
+            _change_page(+1)
+        elif key in ("home", "g"):
+            _set_selection(0)
+        elif key in ("end", "G"):
+            _set_selection(len(entries) - 1)
+        elif key in ("left", "-"):
+            _nudge_speed(+_SPEED_STEP_S)
+        elif key in ("right", "+", "="):
+            _nudge_speed(-_SPEED_STEP_S)
+        elif key == "i":
+            _write_starter()
+        elif key == "enter":
+            result[0] = (entries[selected[0]].name, custom_interval[0])
+            return True
+        elif key in ("q", "escape", "ctrl-c"):
+            result[0] = None
+            return True
+        return False
 
-    async def _animate() -> None:
-        """Poke the app awake so the preview frame advances -- and watch
-        spinners.json so external edits reload the menu while it's open
-        (the same mtime signal the tick loop uses).
-        """
-        file_stamp = sp.user_file_stamp()
-        try:
-            while True:
-                await asyncio.sleep(_REFRESH_INTERVAL_S)
-                stamp = sp.user_file_stamp()
-                if stamp != file_stamp:
-                    file_stamp = stamp
-                    _refresh_entries()
-                app.invalidate()
-        except asyncio.CancelledError:
-            pass
+    file_stamp = [sp.user_file_stamp()]
 
-    animator = asyncio.get_running_loop().create_task(_animate())
+    def _tick() -> bool:
+        """Animation heartbeat: reload on external edits, repaint always."""
+        stamp = sp.user_file_stamp()
+        if stamp != file_stamp[0]:
+            file_stamp[0] = stamp
+            _refresh_entries()
+        return True
+
+    from code_puppy.command_line.menu_session import menu_session
+
+    set_awaiting_user_input(True)
     try:
-        await app.run_async()
+        tui = FragmentTUI(
+            _render,
+            _handle_key,
+            on_tick=_tick,
+            poll_s=_REFRESH_INTERVAL_S,
+            use_alt_screen=False,
+        )
+        with menu_session():
+            await asyncio.to_thread(tui.run)
     finally:
-        animator.cancel()
         set_awaiting_user_input(False)
-        sys.stdout.write("\033[?1049l")
-        sys.stdout.flush()
 
     return result[0]

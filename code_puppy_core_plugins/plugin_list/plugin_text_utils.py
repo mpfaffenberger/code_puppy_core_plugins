@@ -2,7 +2,7 @@
 
 Extracted from ``plugins_menu.py`` to keep that file under the 600-line cap and
 because these helpers are pure (no class state, no I/O) and independently
-unit-testable. They all operate on prompt_toolkit's ``(style, text)`` fragment
+unit-testable. They all operate on ``(style, text)`` fragment
 tuples or raw strings.
 """
 
@@ -10,7 +10,17 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from prompt_toolkit.utils import get_cwidth
+try:
+    from wcwidth import wcwidth as _wcwidth
+
+    def get_cwidth(char: str) -> int:
+        width = _wcwidth(char)
+        return width if width and width > 0 else (0 if width == 0 else 1)
+except ImportError:  # pragma: no cover - wcwidth ships with code-puppy
+
+    def get_cwidth(char: str) -> int:
+        return 1
+
 
 Fragments = List[Tuple[str, str]]
 
