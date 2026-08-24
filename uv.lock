@@ -359,17 +359,17 @@ wheels = [
 
 [[package]]
 name = "code-puppy-core-plugins"
-version = "0.0.21"
+version = "0.0.22"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
-    { name = "prompt-toolkit" },
     { name = "pydantic-ai-slim", extra = ["anthropic", "mcp", "openai"] },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pexpect" },
+    { name = "prompt-toolkit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -379,13 +379,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.24.1,<1" },
-    { name = "prompt-toolkit", specifier = ">=3.0.0,<4" },
     { name = "pydantic-ai-slim", extras = ["openai", "anthropic", "mcp"], specifier = ">=2.31.0,<3" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pexpect", specifier = ">=4.9.0" },
+    { name = "prompt-toolkit", specifier = ">=3.0.0,<4" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", specifier = ">=0.23.1" },
     { name = "pytest-cov", specifier = ">=6.1.1" },
