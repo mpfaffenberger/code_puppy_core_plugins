@@ -66,7 +66,7 @@ def test_append_newline_returns_formatted_text_with_trailing_newline():
 
 def test_install_prompt_patch_is_idempotent():
     module = _plugin_module()
-    from code_puppy.command_line import prompt_toolkit_completion as ptc
+    from code_puppy.command_line import completers as ptc
 
     original = ptc.get_prompt_with_active_model
     try:
@@ -85,7 +85,7 @@ def test_install_prompt_patch_is_idempotent():
 
 def test_patched_prompt_appends_newline_only_when_enabled():
     module = _plugin_module()
-    from code_puppy.command_line import prompt_toolkit_completion as ptc
+    from code_puppy.command_line import completers as ptc
 
     original = ptc.get_prompt_with_active_model
     try:

@@ -62,7 +62,10 @@ def _render(formatted_text, base: str):
 
 def install_prompt_patch() -> None:
     """Wrap ``get_prompt_with_active_model`` exactly once."""
-    from code_puppy.command_line import prompt_toolkit_completion as ptc
+    try:  # New cores: the prompt prefix lives in completers.
+        from code_puppy.command_line import completers as ptc
+    except ImportError:  # Older cores: classic prompt_toolkit module.
+        from code_puppy.command_line import prompt_toolkit_completion as ptc
 
     if getattr(ptc, _PATCH_ATTR, None) is not None:
         return  # already patched

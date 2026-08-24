@@ -65,7 +65,10 @@ def _install_prompt_patch() -> None:
 
     Idempotent: re-running won't double-wrap.
     """
-    from code_puppy.command_line import prompt_toolkit_completion as ptc
+    try:  # New cores: the prompt prefix lives in completers.
+        from code_puppy.command_line import completers as ptc
+    except ImportError:  # Older cores: classic prompt_toolkit module.
+        from code_puppy.command_line import prompt_toolkit_completion as ptc
 
     if getattr(ptc, _PATCH_ATTR, None) is not None:
         return  # Already patched
