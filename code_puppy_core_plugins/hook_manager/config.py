@@ -24,13 +24,13 @@ HookSource = Literal["project", "global"]
 
 
 def _find_settings_path() -> Path:
-    """Return the path to .claude/settings.json, searching from cwd upward."""
-    cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        candidate = parent / _SETTINGS_FILENAME
-        if candidate.exists():
-            return candidate
-    return cwd / _SETTINGS_FILENAME
+    """Return the CWD's ``.claude/settings.json`` path.
+
+    Deliberately does not search ancestors. The executor only ever loads and
+    trust-gates the CWD's file, so returning a parent's settings here would
+    let the menu display and toggle hooks that can never actually run.
+    """
+    return Path.cwd() / _SETTINGS_FILENAME
 
 
 def _load_global_hooks_config() -> Dict[str, Any]:
@@ -123,7 +123,31 @@ def save_hooks_config(hooks: Dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
     logger.debug("Saved hooks config to %s", path)
+    _reaccept_trust_after_user_write(path)
     return path
+
+
+def _reaccept_trust_after_user_write(path: Path) -> None:
+    """Re-record trust after a user-initiated write to the project hooks file.
+
+    Menu actions like ``/hooks enable`` rewrite the hashed subtree (adding
+    ``enabled`` keys), which would otherwise flip TRUSTED to CHANGED and
+    silently stop the very hooks the user just toggled. Only re-accepts a
+    project that was already trusted — an untrusted project stays untrusted,
+    so this can never grant trust the user did not give.
+    """
+    from code_puppy_core_plugins.claude_code_hooks import trust as _trust
+
+    try:
+        project_root = Path(os.getcwd()).resolve()
+        if path.resolve() != (project_root / _trust.PROJECT_SETTINGS_RELPATH):
+            return
+        store = _trust._load_store()
+        if _trust._project_key(project_root) not in store["projects"]:
+            return
+        _trust.trust_project_hooks(project_root)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not refresh hooks trust after save: %s", exc)
 
 
 def save_global_hooks_config(hooks: Dict[str, Any]) -> Path:

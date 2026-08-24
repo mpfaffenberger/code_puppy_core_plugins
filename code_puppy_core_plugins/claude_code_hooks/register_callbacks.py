@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 from code_puppy.callbacks import register_callback
 from code_puppy.hook_engine import EventData, HookEngine
 
+from . import trust as _trust
 from .config import load_hooks_config
 
 _SUBAGENT_NAMES = frozenset(
@@ -74,6 +75,28 @@ def _initialize_engine() -> Optional[HookEngine]:
 
 
 _hook_engine = _initialize_engine()
+
+
+def reload_hook_engine() -> None:
+    """Rebuild ``_hook_engine`` from the current on-disk hooks config.
+
+    Called by the ``/hooks trust`` ceremony after accept/revoke so future
+    lifecycle events reflect the fresh trust state without a process
+    restart.
+
+    Intentionally does NOT re-fire ``SessionStart`` — that event's
+    semantics are "agent boot", and auto-firing mid-session would be a
+    surprise side-effect.
+
+    Also intentionally does NOT clear ``_pending_session_context`` on
+    revoke. The buffer only holds stdout produced by hooks that were
+    trusted at the moment they fired; honoring that stdout on the next
+    user prompt reflects the state that existed when the side-effect
+    already happened. The buffer is one-shot per session by design and
+    will drain on the next ``UserPromptSubmit`` regardless.
+    """
+    global _hook_engine
+    _hook_engine = _initialize_engine()
 
 
 def _collect_context_stdout(result: Any) -> List[str]:
@@ -221,6 +244,17 @@ async def on_session_end_hook() -> None:
 
 register_callback("startup", on_startup_hook)
 register_callback("session_end", on_session_end_hook)
+
+
+async def on_startup_emit_untrusted_warning() -> None:
+    """Startup callback: emit the untrusted-hooks warning after boot."""
+    try:
+        _trust.emit_untrusted_project_hooks_warning_if_any()
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug("emit_untrusted_project_hooks_warning_if_any failed: %s", e)
+
+
+register_callback("startup", on_startup_emit_untrusted_warning)
 
 
 # ---------------------------------------------------------------------------

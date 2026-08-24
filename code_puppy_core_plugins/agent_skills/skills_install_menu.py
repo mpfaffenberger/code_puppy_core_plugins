@@ -14,16 +14,9 @@ it shows an empty menu and returns False.
 """
 
 import logging
-import sys
-import time
 from pathlib import Path
 from typing import List, Optional
 
-from prompt_toolkit.application import Application
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Dimension, Layout, VSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import Frame
 
 from code_puppy.command_line.pagination import (
     ensure_visible_page,
@@ -39,7 +32,6 @@ from code_puppy_core_plugins.agent_skills.skill_catalog import (
     catalog,
 )
 from code_puppy.tools.command_runner import set_awaiting_user_input
-from code_puppy.callbacks import on_prompt_toolkit_style
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +114,6 @@ class SkillsInstallMenu:
         self.pending_entry: Optional[SkillCatalogEntry] = None
 
         # UI controls
-        self.menu_control: Optional[FormattedTextControl] = None
-        self.preview_control: Optional[FormattedTextControl] = None
 
         self._initialize_catalog()
 
@@ -407,14 +397,7 @@ class SkillsInstallMenu:
         return lines
 
     def update_display(self) -> None:
-        """Refresh all three panels of the TUI display."""
-
-        if self.view_mode == "categories":
-            self.menu_control.text = self._render_category_list()
-        else:
-            self.menu_control.text = self._render_skill_list()
-
-        self.preview_control.text = self._render_details()
+        """Rendering is pulled fresh each paint; nothing cached here."""
 
     def _enter_category(self) -> None:
         """Enter the currently highlighted category to browse skills."""
@@ -452,37 +435,9 @@ class SkillsInstallMenu:
             self.pending_entry = entry
             self.result = "pending_install"
 
-    def run(self) -> bool:
-        """Run the skills install menu.
-
-        Returns:
-            True if a skill was installed, False otherwise.
-        """
-
-        # Build UI
-        self.menu_control = FormattedTextControl(text="")
-        self.preview_control = FormattedTextControl(text="")
-
-        menu_window = Window(
-            content=self.menu_control, wrap_lines=True, width=Dimension(weight=35)
-        )
-        preview_window = Window(
-            content=self.preview_control, wrap_lines=True, width=Dimension(weight=65)
-        )
-
-        menu_frame = Frame(menu_window, width=Dimension(weight=35), title="Browse")
-        preview_frame = Frame(
-            preview_window, width=Dimension(weight=65), title="Details"
-        )
-
-        root_container = VSplit([menu_frame, preview_frame])
-
-        kb = KeyBindings()
-
-        @kb.add("up")
-        def _(event):
-            """Move cursor up."""
-
+    def handle_key(self, key: str) -> bool:
+        """Dispatch one key. True exits the menu."""
+        if key == "up":
             if self.view_mode == "categories":
                 if self.selected_category_idx > 0:
                     self.selected_category_idx -= 1
@@ -492,21 +447,15 @@ class SkillsInstallMenu:
                         len(self.categories),
                         PAGE_SIZE,
                     )
-            else:
-                if self.selected_skill_idx > 0:
-                    self.selected_skill_idx -= 1
-                    self.current_page = ensure_visible_page(
-                        self.selected_skill_idx,
-                        self.current_page,
-                        len(self.current_skills),
-                        PAGE_SIZE,
-                    )
-            self.update_display()
-
-        @kb.add("down")
-        def _(event):
-            """Move cursor down."""
-
+            elif self.selected_skill_idx > 0:
+                self.selected_skill_idx -= 1
+                self.current_page = ensure_visible_page(
+                    self.selected_skill_idx,
+                    self.current_page,
+                    len(self.current_skills),
+                    PAGE_SIZE,
+                )
+        elif key == "down":
             if self.view_mode == "categories":
                 if self.selected_category_idx < len(self.categories) - 1:
                     self.selected_category_idx += 1
@@ -516,38 +465,27 @@ class SkillsInstallMenu:
                         len(self.categories),
                         PAGE_SIZE,
                     )
-            else:
-                if self.selected_skill_idx < len(self.current_skills) - 1:
-                    self.selected_skill_idx += 1
-                    self.current_page = ensure_visible_page(
-                        self.selected_skill_idx,
-                        self.current_page,
-                        len(self.current_skills),
-                        PAGE_SIZE,
-                    )
-            self.update_display()
-
-        @kb.add("left")
-        def _(event):
-            """Navigate to previous page."""
-
+            elif self.selected_skill_idx < len(self.current_skills) - 1:
+                self.selected_skill_idx += 1
+                self.current_page = ensure_visible_page(
+                    self.selected_skill_idx,
+                    self.current_page,
+                    len(self.current_skills),
+                    PAGE_SIZE,
+                )
+        elif key == "left":
             if self.current_page > 0:
                 self.current_page -= 1
                 if self.view_mode == "categories":
                     self.selected_category_idx = self.current_page * PAGE_SIZE
                 else:
                     self.selected_skill_idx = self.current_page * PAGE_SIZE
-                self.update_display()
-
-        @kb.add("right")
-        def _(event):
-            """Navigate to next page."""
-
-            if self.view_mode == "categories":
-                total_items = len(self.categories)
-            else:
-                total_items = len(self.current_skills)
-
+        elif key == "right":
+            total_items = (
+                len(self.categories)
+                if self.view_mode == "categories"
+                else len(self.current_skills)
+            )
             total_pages = get_total_pages(total_items, PAGE_SIZE)
             if self.current_page < total_pages - 1:
                 self.current_page += 1
@@ -555,83 +493,56 @@ class SkillsInstallMenu:
                     self.selected_category_idx = self.current_page * PAGE_SIZE
                 else:
                     self.selected_skill_idx = self.current_page * PAGE_SIZE
-                self.update_display()
-
-        @kb.add("enter")
-        def _(event):
-            """Select/enter the current item."""
-
+        elif key == "enter":
             if self.view_mode == "categories":
                 self._enter_category()
             else:
                 self._select_current_skill()
-                event.app.exit()
-
-        @kb.add("escape")
-        def _(event):
-            """Go back."""
-
+                return True
+        elif key in ("escape", "backspace"):
             if self.view_mode == "skills":
                 self._go_back_to_categories()
+            elif key == "escape":
+                return True
+        elif key == "ctrl-c":
+            return True
+        self.update_display()
+        return False
 
-        @kb.add("backspace")
-        def _(event):
-            """Go back."""
+    def _render(self) -> list:
+        from termflow.tui.terminal import terminal_size
 
-            if self.view_mode == "skills":
-                self._go_back_to_categories()
+        from code_puppy_core_plugins.termflow_tui import two_pane
 
-        @kb.add("c-c")
-        def _(event):
-            """Quit the menu."""
-
-            event.app.exit()
-
-        layout = Layout(root_container)
-        app = Application(
-            layout=layout,
-            key_bindings=kb,
-            full_screen=False,
-            mouse_support=False,
-            style=on_prompt_toolkit_style(),
+        width, _ = terminal_size()
+        usable = max(40, width - 1)
+        left = (
+            self._render_category_list()
+            if self.view_mode == "categories"
+            else self._render_skill_list()
+        )
+        return two_pane(
+            left,
+            self._render_details(),
+            width=usable,
+            list_width=max(24, int(usable * 0.35)),
         )
 
+    def run(self) -> bool:
+        """Run the skills install menu. True if a skill was installed."""
+        from code_puppy_core_plugins.termflow_tui import FragmentTUI
+
         set_awaiting_user_input(True)
-
-        # Enter alternate screen buffer
-        sys.stdout.write("\033[?1049h")
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
-        time.sleep(0.05)
-
         try:
-            self.update_display()
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.flush()
-
-            app.run(in_thread=True)
-
+            FragmentTUI(self._render, self.handle_key, use_alt_screen=True).run()
         finally:
-            sys.stdout.write("\033[?1049l")
-            sys.stdout.flush()
-
-            # Flush any buffered input to prevent stale keypresses
-            try:
-                import termios
-
-                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-            except Exception:
-                pass  # ImportError on Windows, termios.error, or not a tty
-
-            # Small delay to let terminal settle before any output
-            time.sleep(0.1)
             set_awaiting_user_input(False)
 
-        # Handle install after TUI exits
+        # Handle install after the TUI exits
         if self.result == "pending_install" and self.pending_entry:
             return _prompt_and_install(self.pending_entry)
 
-        emit_info("✓ Exited skills install browser")
+        emit_info("Exited skills install browser")
         return False
 
 

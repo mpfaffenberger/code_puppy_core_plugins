@@ -21,15 +21,7 @@ caller owns the actual mutation.
 from __future__ import annotations
 
 import shutil
-import sys
-import time
 from typing import List, Optional, Set, Tuple
-
-from prompt_toolkit.application import Application
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Dimension, Layout, VSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import Frame
 
 from code_puppy_core_plugins.prune.prune_model import (
     SIDE_EFFECT_ICONS,
@@ -39,11 +31,10 @@ from code_puppy_core_plugins.prune.prune_model import (
     Row,
 )
 from code_puppy_core_plugins.prune.prune_render import render_detail, render_list
-from code_puppy.callbacks import on_prompt_toolkit_style
 
 
 class PruneMenu:
-    """prompt_toolkit split-panel TUI for /prune."""
+    """Termflow split-panel TUI for /prune."""
 
     def __init__(
         self,
@@ -75,10 +66,6 @@ class PruneMenu:
         # size.
         self.viewport_top: int = 0
         self._visible_rows: int = 20
-
-        self.list_control: Optional[FormattedTextControl] = None
-        self.detail_control: Optional[FormattedTextControl] = None
-        self.detail_window: Optional[Window] = None
 
         self._result: Optional[PruneSelection] = None
 
@@ -138,10 +125,6 @@ class PruneMenu:
 
     def _update_display(self) -> None:
         self._scroll_into_view()
-        if self.list_control:
-            self.list_control.text = render_list(self)
-        if self.detail_control:
-            self.detail_control.text = render_detail(self)
 
     # ── main entry ────────────────────────────────────────────────────────
 
@@ -151,73 +134,36 @@ class PruneMenu:
             sel.history_indices_to_drop.add(self.entries[msg_idx].history_index)
         return sel
 
-    def _build_keybindings(self) -> KeyBindings:
-        kb = KeyBindings()
-
-        @kb.add("up")
-        @kb.add("c-p")
-        @kb.add("k")
-        def _up(event):
+    def handle_key(self, key: str) -> bool:
+        """Dispatch one key. True exits the menu."""
+        if key in ("up", "ctrl-p", "k"):
             if self.cursor > 0:
                 self.cursor -= 1
-                self._update_display()
-
-        @kb.add("down")
-        @kb.add("c-n")
-        @kb.add("j")
-        def _down(event):
+        elif key in ("down", "ctrl-n", "j"):
             if self.cursor < len(self.rows) - 1:
                 self.cursor += 1
-                self._update_display()
-
-        @kb.add("pageup")
-        def _pageup(event):
+        elif key == "page-up":
             self.cursor = max(0, self.cursor - self._page_size())
-            self._update_display()
-
-        @kb.add("pagedown")
-        def _pagedown(event):
+        elif key == "page-down":
             self.cursor = min(len(self.rows) - 1, self.cursor + self._page_size())
-            self._update_display()
-
-        @kb.add("home")
-        def _home(event):
+        elif key == "home":
             self.cursor = 0
-            self._update_display()
-
-        @kb.add("end")
-        def _end(event):
+        elif key == "end":
             self.cursor = len(self.rows) - 1
-            self._update_display()
-
-        @kb.add("space")
-        def _toggle(event):
+        elif key == " ":
             self._toggle_current()
-            self._update_display()
-
-        @kb.add("a")
-        def _all(event):
+        elif key == "a":
             self._select_all()
-            self._update_display()
-
-        @kb.add("c")
-        def _clear(event):
+        elif key == "c":
             self._clear_all()
-            self._update_display()
-
-        @kb.add("enter")
-        def _confirm(event):
+        elif key == "enter":
             self._result = self._build_selection()
-            event.app.exit()
-
-        @kb.add("q")
-        @kb.add("escape")
-        @kb.add("c-c")
-        def _quit(event):
+            return True
+        elif key in ("q", "escape", "ctrl-c"):
             self._result = None
-            event.app.exit()
-
-        return kb
+            return True
+        self._update_display()
+        return False
 
     def _measure_terminal(self) -> Tuple[int, int]:
         """Return (cols, rows) of the current terminal, with sane fallbacks."""
@@ -227,46 +173,22 @@ class PruneMenu:
         except Exception:
             return 120, 40
 
-    def run(self) -> Optional[PruneSelection]:
-        self.list_control = FormattedTextControl(text="")
-        self.detail_control = FormattedTextControl(text="")
+    def _render(self) -> list:
+        from code_puppy_core_plugins.termflow_tui import two_pane
 
-        # Fix pane widths to terminal halves to prevent content-driven divider
-        # jitter; allow shrinking for tight terminals.
         cols, rows = self._measure_terminal()
-        # Reserve generous border/padding chrome to avoid "Window too small" errors.
-        usable_cols = max(40, cols - 8)
-        left_cols = usable_cols // 2
-        right_cols = usable_cols - left_cols
-        # Reserve title, budget, legend, indicators, footer, and frame lines;
-        # floor at 5 so tiny terminals still work.
         self._visible_rows = max(5, rows - 12)
-
-        list_width = Dimension(min=20, max=left_cols, preferred=left_cols)
-        detail_width = Dimension(min=20, max=right_cols, preferred=right_cols)
-
-        list_window = Window(
-            content=self.list_control, wrap_lines=False, width=list_width
+        self._update_display()
+        usable = max(40, cols - 3)
+        return two_pane(
+            render_list(self),
+            render_detail(self),
+            width=usable,
+            list_width=usable // 2,
         )
-        detail_window = Window(
-            content=self.detail_control,
-            wrap_lines=True,
-            width=detail_width,
-        )
-        self.detail_window = detail_window
 
-        list_frame = Frame(list_window, title="history")
-        detail_frame = Frame(detail_window, title="detail")
-        root = VSplit([list_frame, detail_frame])
-
-        layout = Layout(root)
-        app = Application(
-            layout=layout,
-            key_bindings=self._build_keybindings(),
-            full_screen=False,
-            mouse_support=False,
-            style=on_prompt_toolkit_style(),
-        )
+    def run(self) -> Optional[PruneSelection]:
+        from code_puppy_core_plugins.termflow_tui import FragmentTUI
 
         try:
             from code_puppy.tools.command_runner import set_awaiting_user_input
@@ -274,34 +196,15 @@ class PruneMenu:
             set_awaiting_user_input(True)
         except Exception:
             pass
-
-        sys.stdout.write("\033[?1049h")
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
-        time.sleep(0.05)
-
         try:
-            self._update_display()
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.flush()
-            app.run(in_thread=True)
+            FragmentTUI(self._render, self.handle_key, use_alt_screen=True).run()
         finally:
-            sys.stdout.write("\033[?1049l")
-            sys.stdout.flush()
-            try:
-                import termios
-
-                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-            except Exception:
-                pass
-            time.sleep(0.1)
             try:
                 from code_puppy.tools.command_runner import set_awaiting_user_input
 
                 set_awaiting_user_input(False)
             except Exception:
                 pass
-
         return self._result
 
 

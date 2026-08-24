@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
-from code_puppy.callbacks import on_prompt_toolkit_style
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +31,11 @@ class QueueMenuState:
     selected: int = 0
     editing: bool = False
     adding: bool = False
-    delete_armed: Optional[int] = None
+    delete_armed: int | None = None
     notice: str = ""
 
     @property
-    def items(self) -> List[str]:
+    def items(self) -> list[str]:
         return self.controller.peek_pending_steer_queued()
 
     @property
@@ -139,89 +137,19 @@ class QueueMenuState:
 
 
 class QueueMenuApp:
-    """Persistent full-screen prompt queue manager."""
+    """Persistent full-screen prompt queue manager, on termflow.
+
+    While editing, a minimal inline buffer handles typing: printable
+    keys append, Backspace deletes, Enter inserts a newline, Ctrl+S
+    saves, Esc cancels.
+    """
 
     def __init__(self, controller):
-        from prompt_toolkit import Application
-        from prompt_toolkit.buffer import Buffer
-        from prompt_toolkit.filters import Condition
-        from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
-        from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
-        from prompt_toolkit.layout.dimension import Dimension
-        from prompt_toolkit.layout.processors import BeforeInput
-        from prompt_toolkit.widgets import Frame
-
         self.state = QueueMenuState(controller)
-        self._list_control = FormattedTextControl(
-            self._render_list, focusable=True, show_cursor=False
-        )
-        self._editor_buffer = Buffer(multiline=True)
-        self._editor_control = BufferControl(
-            buffer=self._editor_buffer,
-            input_processors=[BeforeInput(self._editor_prefix)],
-            focusable=Condition(lambda: self.state.editing),
-        )
-        self._detail_frame = Frame(
-            Window(
-                self._editor_control,
-                wrap_lines=True,
-                always_hide_cursor=Condition(lambda: not self.state.editing),
-            ),
-            title=self._detail_title,
-            style="class:tui.body",
-        )
+        self._editor_text = self.state.selected_text
+        self._exit = False
 
-        body = VSplit(
-            [
-                Frame(
-                    Window(
-                        self._list_control,
-                        wrap_lines=False,
-                        width=Dimension(weight=2),
-                    ),
-                    title="Queued prompts",
-                    style="class:tui.body",
-                ),
-                Window(width=1, char=" "),
-                self._detail_frame,
-            ],
-            padding=0,
-        )
-        root = HSplit(
-            [
-                Window(
-                    FormattedTextControl(self._render_header),
-                    height=2,
-                    style="class:tui.header",
-                ),
-                body,
-                Window(
-                    FormattedTextControl(self._render_notice),
-                    height=1,
-                    style="class:tui.warning",
-                ),
-                Window(
-                    FormattedTextControl(self._render_footer),
-                    height=2,
-                    style="class:tui.help",
-                ),
-            ]
-        )
-
-        self._bindings = KeyBindings()
-        self._register_bindings()
-        self.application = Application(
-            layout=Layout(root, focused_element=self._list_control),
-            key_bindings=self._bindings,
-            full_screen=True,
-            mouse_support=True,
-            style=on_prompt_toolkit_style(),
-        )
-        self._sync_editor()
-
-    def _editor_prefix(self):
-        return [("class:tui.label", "EDIT  " if self.state.editing else "")]
+    # -- rendering ---------------------------------------------------------
 
     def _detail_title(self) -> str:
         if self.state.adding:
@@ -253,19 +181,25 @@ class QueueMenuApp:
                 if index == self.state.selected
                 else "class:tui.body"
             )
-            marker = "▶" if index == self.state.selected else " "
+            marker = ">" if index == self.state.selected else " "
             fragments.extend(
                 [
                     (style, f" {marker} "),
-                    (f"{style} class:tui.muted", f"{index + 1:>2}  "),
+                    ("class:tui.muted", f"{index + 1:>2}  "),
                     (style, _preview(text)),
                     (style, "\n"),
                 ]
             )
         return fragments
 
-    def _render_notice(self):
-        return [("class:tui.warning", f"  {self.state.notice}")]
+    def _render_detail(self):
+        title = self._detail_title()
+        body = self._editor_text if self.state.editing else self.state.selected_text
+        fragments = [("class:tui.label", f" {title}\n\n")]
+        if self.state.editing:
+            fragments.append(("class:tui.label", "EDIT  "))
+        fragments.append(("class:tui.body", body + ("_" if self.state.editing else "")))
+        return fragments
 
     def _render_footer(self):
         if self.state.editing:
@@ -274,11 +208,11 @@ class QueueMenuApp:
                 ("class:tui.help-key", "Ctrl+S"),
                 ("class:tui.help", " save   "),
                 ("class:tui.help-key", "Esc"),
-                ("class:tui.help", " cancel   Multi-line editing enabled"),
+                ("class:tui.help", " cancel   Enter inserts a newline"),
             ]
         return [
             ("class:tui.help", "  "),
-            ("class:tui.help-key", "↑↓/JK"),
+            ("class:tui.help-key", "up/down or j/k"),
             ("class:tui.help", " select   "),
             ("class:tui.help-key", "Enter/E"),
             ("class:tui.help", " edit   "),
@@ -292,127 +226,108 @@ class QueueMenuApp:
             ("class:tui.help", " done"),
         ]
 
-    def _sync_editor(self, text: Optional[str] = None) -> None:
-        value = self.state.selected_text if text is None else text
-        self._editor_buffer.set_document(
-            self._editor_buffer.document.__class__(value, cursor_position=len(value)),
-            bypass_readonly=True,
+    def _render(self) -> list:
+        from termflow.tui.terminal import terminal_size
+
+        from code_puppy_core_plugins.termflow_tui import (
+            fragments_to_lines,
+            two_pane,
         )
 
-    def _refresh(self) -> None:
-        self.application.invalidate()
+        width, _ = terminal_size()
+        lines = fragments_to_lines(self._render_header())
+        lines.append("")
+        lines += two_pane(
+            self._render_list(),
+            self._render_detail(),
+            width=max(40, width - 1),
+            list_width=max(24, (width - 3) // 2),
+        )
+        lines.append("")
+        lines += fragments_to_lines([("class:tui.warning", f"  {self.state.notice}")])
+        lines += fragments_to_lines(self._render_footer())
+        return lines
 
-    def _focus_list(self) -> None:
-        self.application.layout.focus(self._list_control)
+    # -- editing -----------------------------------------------------------
+
+    def _sync_editor(self, text=None) -> None:
+        self._editor_text = self.state.selected_text if text is None else text
 
     def _begin_add(self) -> None:
         self.state.begin_add()
         self._sync_editor("")
-        self.application.layout.focus(self._editor_control)
 
     def _begin_edit(self) -> None:
         if self.state.begin_edit():
             self._sync_editor()
-            self.application.layout.focus(self._editor_control)
 
     def _cancel_edit(self) -> None:
         self.state.cancel_edit()
         self._sync_editor()
-        self._focus_list()
 
     def _save_edit(self) -> None:
-        if self.state.save(self._editor_buffer.text):
+        if self.state.save(self._editor_text):
             self._sync_editor()
-            self._focus_list()
 
     def _move_selection(self, delta: int) -> None:
         self.state.move_selection(delta)
         self._sync_editor()
 
-    def _register_bindings(self) -> None:
-        kb = self._bindings
+    # -- keys --------------------------------------------------------------
 
-        @kb.add("up")
-        @kb.add("k")
-        def _up(event):
-            if not self.state.editing:
-                self._move_selection(-1)
+    def _handle_editing_key(self, key: str) -> bool:
+        if key == "ctrl-s":
+            self._save_edit()
+        elif key in ("escape", "ctrl-c"):
+            self._cancel_edit()
+        elif key == "enter":
+            self._editor_text += "\n"
+        elif key == "backspace":
+            self._editor_text = self._editor_text[:-1]
+        elif key == "tab":
+            self._editor_text += "    "
+        elif key == " " or (len(key) == 1 and key.isprintable()):
+            self._editor_text += key
+        return False
 
-        @kb.add("down")
-        @kb.add("j")
-        def _down(event):
-            if not self.state.editing:
-                self._move_selection(1)
-
-        @kb.add("home")
-        def _home(event):
-            if not self.state.editing:
-                self.state.selected = 0
+    def handle_key(self, key: str) -> bool:
+        """Dispatch one key. True exits the menu."""
+        if self.state.editing:
+            return self._handle_editing_key(key)
+        if key in ("up", "k"):
+            self._move_selection(-1)
+        elif key in ("down", "j"):
+            self._move_selection(1)
+        elif key == "home":
+            self.state.selected = 0
+            self._sync_editor()
+        elif key == "end" and self.state.items:
+            self.state.selected = len(self.state.items) - 1
+            self._sync_editor()
+        elif key == "a":
+            self._begin_add()
+        elif key in ("e", "enter"):
+            self._begin_edit()
+        elif key == "d":
+            if self.state.request_delete():
                 self._sync_editor()
-
-        @kb.add("end")
-        def _end(event):
-            if not self.state.editing and self.state.items:
-                self.state.selected = len(self.state.items) - 1
+        elif key == "[":
+            if self.state.reorder(-1):
                 self._sync_editor()
-
-        @kb.add("a")
-        def _add(event):
-            if not self.state.editing:
-                self._begin_add()
-
-        @kb.add("e")
-        @kb.add("enter")
-        def _edit(event):
-            if not self.state.editing:
-                self._begin_edit()
-            else:
-                self._editor_buffer.insert_text("\n")
-
-        @kb.add("d")
-        def _delete(event):
-            if not self.state.editing:
-                deleted = self.state.request_delete()
-                if deleted:
-                    self._sync_editor()
-                self._refresh()
-
-        @kb.add("[")
-        def _move_up(event):
-            if not self.state.editing and self.state.reorder(-1):
+        elif key == "]":
+            if self.state.reorder(1):
                 self._sync_editor()
-
-        @kb.add("]")
-        def _move_down(event):
-            if not self.state.editing and self.state.reorder(1):
-                self._sync_editor()
-
-        @kb.add("c-s")
-        def _save(event):
-            if self.state.editing:
-                self._save_edit()
-
-        @kb.add("escape")
-        def _escape(event):
-            if self.state.editing:
-                self._cancel_edit()
-            else:
-                event.app.exit()
-
-        @kb.add("q")
-        def _quit(event):
-            if not self.state.editing:
-                event.app.exit()
-
-        @kb.add("c-c")
-        def _ctrl_c(event):
-            if self.state.editing:
-                self._cancel_edit()
-            else:
-                event.app.exit()
+        elif key in ("escape", "q", "ctrl-c"):
+            return True
+        return False
 
     async def run(self) -> None:
-        await self.application.run_async()
+        import asyncio
+
+        from code_puppy_core_plugins.termflow_tui import FragmentTUI
+
+        tui = FragmentTUI(self._render, self.handle_key, use_alt_screen=True)
+        await asyncio.to_thread(tui.run)
 
 
 async def run_queue_menu() -> None:

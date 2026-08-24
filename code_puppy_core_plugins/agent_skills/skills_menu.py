@@ -5,16 +5,9 @@ Built with prompt_toolkit for proper interactive split-panel interface.
 """
 
 import os
-import sys
-import time
 from pathlib import Path
 from typing import List, Optional
 
-from prompt_toolkit.application import Application
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Dimension, Layout, VSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import Frame
 
 from code_puppy.command_line.pagination import (
     ensure_visible_page,
@@ -43,7 +36,6 @@ from code_puppy_core_plugins.agent_skills.metadata import (
     parse_skill_metadata,
 )
 from code_puppy.tools.command_runner import set_awaiting_user_input
-from code_puppy.callbacks import on_prompt_toolkit_style
 
 PAGE_SIZE = 15  # Items per page
 
@@ -64,8 +56,6 @@ class SkillsMenu:
         self.result = None
 
         # UI controls (set during run)
-        self.menu_control: Optional[FormattedTextControl] = None
-        self.preview_control: Optional[FormattedTextControl] = None
 
         # Initialize data
         self._refresh_data()
@@ -315,183 +305,81 @@ class SkillsMenu:
         return lines or [""]
 
     def update_display(self) -> None:
-        """Update the display based on current state."""
-        if self.menu_control:
-            self.menu_control.text = self._render_skill_list()
-        if self.preview_control:
-            self.preview_control.text = self._render_skill_details()
+        """Rendering is pulled fresh each paint; nothing cached here."""
 
-    def run(self) -> bool:
-        """Run the interactive skills browser.
-
-        Returns:
-            True if changes were made, False otherwise.
-        """
-        # Reset per-run state
-        self.result = None
-
-        # Build UI
-        self.menu_control = FormattedTextControl(text="")
-        self.preview_control = FormattedTextControl(text="")
-
-        menu_window = Window(
-            content=self.menu_control, wrap_lines=True, width=Dimension(weight=35)
-        )
-        preview_window = Window(
-            content=self.preview_control, wrap_lines=True, width=Dimension(weight=65)
-        )
-
-        menu_frame = Frame(menu_window, width=Dimension(weight=35), title="Skills")
-        preview_frame = Frame(
-            preview_window, width=Dimension(weight=65), title="Details"
-        )
-
-        root_container = VSplit([menu_frame, preview_frame])
-
-        # Key bindings
-        kb = KeyBindings()
-
-        @kb.add("up")
-        @kb.add("c-p")  # Ctrl+P
-        @kb.add("k")
-        def _(event):
+    def handle_key(self, key: str) -> bool:
+        """Dispatch one key. True exits the menu."""
+        if key in ("up", "ctrl-p", "k"):
             if self.selected_idx > 0:
                 self.selected_idx -= 1
                 self.current_page = ensure_visible_page(
-                    self.selected_idx,
-                    self.current_page,
-                    len(self.skills),
-                    PAGE_SIZE,
+                    self.selected_idx, self.current_page, len(self.skills), PAGE_SIZE
                 )
-            self.update_display()
-
-        @kb.add("down")
-        @kb.add("c-n")  # Ctrl+N
-        @kb.add("j")
-        def _(event):
+        elif key in ("down", "ctrl-n", "j"):
             if self.selected_idx < len(self.skills) - 1:
                 self.selected_idx += 1
                 self.current_page = ensure_visible_page(
-                    self.selected_idx,
-                    self.current_page,
-                    len(self.skills),
-                    PAGE_SIZE,
+                    self.selected_idx, self.current_page, len(self.skills), PAGE_SIZE
                 )
-            self.update_display()
-
-        @kb.add("left")
-        def _(event):
-            """Previous page."""
+        elif key == "left":
             if self.current_page > 0:
                 self.current_page -= 1
                 self.selected_idx = self.current_page * PAGE_SIZE
-                self.update_display()
-
-        @kb.add("right")
-        def _(event):
-            """Next page."""
+        elif key == "right":
             total_pages = get_total_pages(len(self.skills), PAGE_SIZE)
             if self.current_page < total_pages - 1:
                 self.current_page += 1
                 self.selected_idx = self.current_page * PAGE_SIZE
-                self.update_display()
-
-        @kb.add("enter")
-        def _(event):
-            """Toggle skill enabled/disabled."""
+        elif key == "enter":
             self._toggle_current_skill()
             self.result = "changed"
-
-        @kb.add("t")
-        def _(event):
-            """Toggle skills system on/off."""
+        elif key == "t":
             new_state = not self.skills_enabled
             set_skills_enabled(new_state)
             self.skills_enabled = new_state
             self.result = "changed"
-            self.update_display()
-
-        @kb.add("r")
-        def _(event):
-            """Refresh skills."""
+        elif key == "r":
             refresh_skill_cache()
             self._refresh_data()
-            self.update_display()
-
-        @kb.add("c-a")
-        def _(event):
-            """Add a skill directory."""
+        elif key == "ctrl-a":
             self.result = "add_directory"
-            event.app.exit()
-
-        @kb.add("c-d")
-        def _(event):
-            """Show/manage directories."""
+            return True
+        elif key == "ctrl-d":
             self.result = "show_directories"
-            event.app.exit()
-
-        @kb.add("i")
-        def _(event):
-            """Install skills from catalog."""
+            return True
+        elif key == "i":
             self.result = "install"
-            event.app.exit()
-
-        @kb.add("q")
-        @kb.add("escape")
-        def _(event):
+            return True
+        elif key in ("q", "escape", "ctrl-c"):
             self.result = "quit"
-            event.app.exit()
+            return True
+        self.update_display()
+        return False
 
-        @kb.add("c-c")
-        def _(event):
-            self.result = "quit"
-            event.app.exit()
+    def _render(self) -> list:
+        from termflow.tui.terminal import terminal_size
 
-        layout = Layout(root_container)
-        app = Application(
-            layout=layout,
-            key_bindings=kb,
-            full_screen=False,
-            mouse_support=False,
-            style=on_prompt_toolkit_style(),
+        from code_puppy_core_plugins.termflow_tui import two_pane
+
+        width, _ = terminal_size()
+        usable = max(40, width - 1)
+        return two_pane(
+            self._render_skill_list(),
+            self._render_skill_details(),
+            width=usable,
+            list_width=max(24, int(usable * 0.35)),
         )
 
+    def run(self) -> bool:
+        """Run the interactive skills browser. Returns the exit reason."""
+        from code_puppy_core_plugins.termflow_tui import FragmentTUI
+
+        self.result = None
         set_awaiting_user_input(True)
-
-        # Enter alternate screen buffer
-        sys.stdout.write("\033[?1049h")  # Enter alternate buffer
-        sys.stdout.write("\033[2J\033[H")  # Clear and home
-        sys.stdout.flush()
-        time.sleep(0.05)
-
         try:
-            # Initial display
-            self.update_display()
-
-            # Clear the buffer
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.flush()
-
-            # Run application in a background thread to avoid event loop conflicts
-            app.run(in_thread=True)
-
+            FragmentTUI(self._render, self.handle_key, use_alt_screen=True).run()
         finally:
-            # Exit alternate screen buffer
-            sys.stdout.write("\033[?1049l")
-            sys.stdout.flush()
-
-            # Flush any buffered input to prevent stale keypresses
-            try:
-                import termios
-
-                termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-            except Exception:
-                pass  # ImportError on Windows, termios.error, or not a tty
-
-            # Small delay to let terminal settle before any output
-            time.sleep(0.1)
             set_awaiting_user_input(False)
-
         return self.result
 
 

@@ -123,6 +123,7 @@ directly:
 
 ```python
 from code_puppy.messaging import emit_info, emit_success, emit_warning, emit_error
+
 emit_info("Something happened")
 ```
 
@@ -149,9 +150,10 @@ doc.
 
 ```python
 from code_puppy.i18n import t, ngettext, lazy
-emit_info(t("startup.welcome", name=owner))     # simple, interpolated
-emit_info(ngettext("files.deleted", count=n))   # plural-aware
-emit_info(lazy("startup.ready"))                 # resolved at render time
+
+emit_info(t("startup.welcome", name=owner))  # simple, interpolated
+emit_info(ngettext("files.deleted", count=n))  # plural-aware
+emit_info(lazy("startup.ready"))  # resolved at render time
 ```
 
 - Keys are dotted IDs; **interpolation uses `{name}` only** — no f-strings,

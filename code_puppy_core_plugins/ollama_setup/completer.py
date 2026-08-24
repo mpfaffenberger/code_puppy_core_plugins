@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.document import Document
+from termflow.tui.completion import Completer, Completion, Document
 
 from code_puppy_core_plugins.ollama_setup.register_callbacks import CLOUD_MODELS
 

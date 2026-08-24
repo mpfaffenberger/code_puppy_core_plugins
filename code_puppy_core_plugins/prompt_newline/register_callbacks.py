@@ -45,16 +45,14 @@ def _emit_success(message: str) -> None:
 
 
 def _append_newline(formatted_text):
-    """Return a new FormattedText with a trailing newline tuple.
+    """Return prompt fragments with a trailing newline tuple.
 
-    ``FormattedText`` is a ``list`` subclass of ``(style, text)`` tuples, so we
-    rebuild it rather than mutating in place — the upstream caller may cache
-    or reuse the returned object.
+    FormattedText was always just a ``list`` subclass of (style, text)
+    tuples, so a plain list works on both old and new cores. Rebuild
+    rather than mutate -- the upstream caller may cache the object.
     """
-    from prompt_toolkit.formatted_text import FormattedText
-
     try:
-        return FormattedText(list(formatted_text) + [("", "\n")])
+        return list(formatted_text) + [("", "\n")]
     except Exception:
         # Defensive: never break the prompt if the upstream shape changes.
         return formatted_text
@@ -65,7 +63,10 @@ def _install_prompt_patch() -> None:
 
     Idempotent: re-running won't double-wrap.
     """
-    from code_puppy.command_line import prompt_toolkit_completion as ptc
+    try:  # New cores: the prompt prefix lives in completers.
+        from code_puppy.command_line import completers as ptc
+    except ImportError:  # Older cores: classic prompt_toolkit module.
+        from code_puppy.command_line import prompt_toolkit_completion as ptc
 
     if getattr(ptc, _PATCH_ATTR, None) is not None:
         return  # Already patched
