@@ -57,12 +57,6 @@ def _append_newline(formatted_text):
         # Defensive: never break the prompt if the upstream shape changes.
         return formatted_text
 
-    try:
-        return FormattedText(list(formatted_text) + [("", "\n")])
-    except Exception:
-        # Defensive: never break the prompt if the upstream shape changes.
-        return formatted_text
-
 
 def _install_prompt_patch() -> None:
     """Monkey-patch ``get_prompt_with_active_model`` to honor ``is_enabled()``.
