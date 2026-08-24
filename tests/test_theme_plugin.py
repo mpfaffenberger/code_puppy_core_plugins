@@ -645,6 +645,12 @@ class TestRegisterCallbacks:
             assert _termflow_style(default) is default
 
     def test_prompt_toolkit_style_shim_delegates_to_merge(self):
+        import pytest
+
+        pytest.importorskip(
+            "prompt_toolkit",
+            reason="old-core compat shim; not a runtime dep anymore",
+        )
         """The lazy shim must forward its argument to merge_with_active_style.
 
         Regression guard: an earlier version used ``*args, **kwargs`` which

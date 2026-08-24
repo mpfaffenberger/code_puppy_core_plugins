@@ -31,15 +31,31 @@ _PATCH_ATTR = "_statusline_original_prompt_fn"
 _DEFAULT_ARROW = ">>> "
 
 
-def _render(formatted_text, base: str):
-    from prompt_toolkit.formatted_text import ANSI, FormattedText, to_formatted_text
+_ANSI_RE = __import__("re").compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
+
+def _status_fragments(text: str):
+    """Parse the status text into (style, text) fragments.
+
+    Old cores (prompt_toolkit installed) keep ANSI colors via ``ANSI``;
+    new cores strip the escapes -- the raw bottom bar sanitizes in-band
+    escapes anyway, so plain text is what would have rendered.
+    """
+    try:
+        from prompt_toolkit.formatted_text import ANSI, to_formatted_text
+
+        return list(to_formatted_text(ANSI(text)))
+    except ImportError:
+        return [("", _ANSI_RE.sub("", text))]
+
+
+def _render(formatted_text, base: str):
     text = get_status_text()
     if not text:
         return formatted_text
 
     try:
-        status_fragments = list(to_formatted_text(ANSI(text)))
+        status_fragments = _status_fragments(text)
     except Exception:
         logger.debug("statusline: failed to parse status text", exc_info=True)
         return formatted_text
@@ -48,16 +64,16 @@ def _render(formatted_text, base: str):
 
     if mode == "above":
         # Status line on its own line, default prompt unchanged below it.
-        return FormattedText(status_fragments + [("", "\n")] + list(formatted_text))
+        return status_fragments + [("", "\n")] + list(formatted_text)
 
     if mode == "newline":
         # Status line on its own line, arrow on the next line.
         arrow = base if base else _DEFAULT_ARROW
-        return FormattedText(status_fragments + [("", "\n"), ("class:arrow", arrow)])
+        return status_fragments + [("", "\n"), ("class:arrow", arrow)]
 
     # replace mode (default): status line + trailing arrow on same line.
     arrow = base if base else _DEFAULT_ARROW
-    return FormattedText(status_fragments + [("class:arrow", " " + arrow)])
+    return status_fragments + [("class:arrow", " " + arrow)]
 
 
 def install_prompt_patch() -> None:

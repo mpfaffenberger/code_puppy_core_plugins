@@ -53,12 +53,11 @@ def test_parse_toggle_arg_rejects_garbage():
 
 
 def test_append_newline_returns_formatted_text_with_trailing_newline():
-    from prompt_toolkit.formatted_text import FormattedText
 
-    original = FormattedText([("class:arrow", ">>> ")])
+    original = list([("class:arrow", ">>> ")])
     result = _plugin_module()._append_newline(original)
 
-    assert isinstance(result, FormattedText)
+    assert isinstance(result, list)
     assert list(result)[-1] == ("", "\n")
     # original must not be mutated
     assert ("", "\n") not in list(original)

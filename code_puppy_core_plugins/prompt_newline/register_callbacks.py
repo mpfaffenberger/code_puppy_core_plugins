@@ -45,13 +45,14 @@ def _emit_success(message: str) -> None:
 
 
 def _append_newline(formatted_text):
-    """Return a new FormattedText with a trailing newline tuple.
+    """Return prompt fragments with a trailing newline tuple.
 
-    ``FormattedText`` is a ``list`` subclass of ``(style, text)`` tuples, so we
-    rebuild it rather than mutating in place — the upstream caller may cache
-    or reuse the returned object.
-    """
-    from prompt_toolkit.formatted_text import FormattedText
+    FormattedText was always just a list subclass of (style, text)
+    tuples; plain lists work on both old and new cores."""
+    try:
+        return list(formatted_text) + [("", "\n")]
+    except Exception:
+        return formatted_text
 
     try:
         return FormattedText(list(formatted_text) + [("", "\n")])

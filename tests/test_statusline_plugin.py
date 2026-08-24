@@ -187,9 +187,7 @@ class TestRender:
 
     def _make_formatted_text(self, text=">>> "):
         """Return a minimal FormattedText-like list for the default prompt."""
-        from prompt_toolkit.formatted_text import FormattedText
-
-        return FormattedText([("class:arrow", text)])
+        return [("class:arrow", text)]
 
     def test_render_returns_default_when_no_status_text(self):
         from code_puppy_core_plugins.statusline.prompt_patch import _render
@@ -280,7 +278,7 @@ class TestRender:
                 return_value="replace",
             ),
             patch(
-                "prompt_toolkit.formatted_text.to_formatted_text",
+                "code_puppy_core_plugins.statusline.prompt_patch._status_fragments",
                 side_effect=ValueError("bad ansi"),
             ),
         ):
