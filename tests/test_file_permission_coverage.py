@@ -124,6 +124,53 @@ class TestPreviewReplaceInFile:
         )
         assert result is None
 
+    def test_ambiguous_match_previews_engine_refusal(self, tmp_path):
+        """Preview must mirror the engine: ambiguous edits are refused, so
+        there is nothing truthful to preview (engine-parity cores only)."""
+        from code_puppy_core_plugins.file_permission_handler import (
+            register_callbacks as rc,
+        )
+
+        if rc.apply_replacements_to_content is None:
+            return  # legacy core: fuzzy fallback semantics apply instead
+
+        f = tmp_path / "f.txt"
+        f.write_text("spam a spam b spam")
+        result = rc._preview_replace_in_file(
+            str(f), [{"old_str": "spam", "new_str": "eggs"}]
+        )
+        assert result is None
+
+    def test_replace_all_previews_every_occurrence(self, tmp_path):
+        from code_puppy_core_plugins.file_permission_handler import (
+            register_callbacks as rc,
+        )
+
+        if rc.apply_replacements_to_content is None:
+            return  # legacy core
+
+        f = tmp_path / "f.txt"
+        f.write_text("spam a spam\n")
+        result = rc._preview_replace_in_file(
+            str(f), [{"old_str": "spam", "new_str": "eggs", "replace_all": True}]
+        )
+        assert result is not None
+        assert result.count("eggs") >= 2
+
+    def test_legacy_fuzzy_preview_helper_still_works(self):
+        """The fallback path for older cores keeps the historical behavior."""
+        from code_puppy_core_plugins.file_permission_handler import (
+            register_callbacks as rc,
+        )
+
+        if rc._find_best_window is None:
+            return  # future core without the legacy helper
+
+        modified = rc._legacy_fuzzy_preview(
+            "hello world", [{"old_str": "hello", "new_str": "hi"}]
+        )
+        assert modified == "hi world"
+
     def test_fuzzy_match_failure(self, tmp_path):
         from code_puppy_core_plugins.file_permission_handler.register_callbacks import (
             _preview_replace_in_file,
