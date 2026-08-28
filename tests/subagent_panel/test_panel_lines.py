@@ -70,6 +70,33 @@ def test_single_agent_renders_one_styled_line():
     assert any(span.style for span in line.spans)  # styling present
 
 
+def test_fork_agent_renders_fork_badge_instead_of_invoke_agent():
+    state.register("sid-1", "qa-kitten", "claude-4-8-opus", is_fork=True)
+    plain = _plain(rc._panel_lines()[0])
+    assert "FORK" in plain
+    assert "INVOKE AGENT" not in plain
+    assert "qa-kitten" in plain
+
+
+def test_non_fork_agent_still_renders_invoke_agent_badge():
+    state.register("sid-1", "qa-kitten", "claude-4-8-opus", is_fork=False)
+    plain = _plain(rc._panel_lines()[0])
+    assert "INVOKE AGENT" in plain
+    assert "FORK" not in plain
+
+
+def test_nested_fork_child_keeps_tree_elbow_not_fork_badge():
+    state.register("root", "parent-agent", "gpt-5.4", is_fork=True)
+    state.register("kid", "child-agent", "gpt-5.4-mini", parent="root")
+    lines = rc._panel_lines()
+    assert "FORK" in _plain(lines[0])
+    # Only the root row carries a badge; nested rows always use the elbow,
+    # regardless of the root's is_fork flag.
+    assert "\u2514\u2500" in _plain(lines[1])
+    assert "FORK" not in _plain(lines[1])
+    assert "INVOKE AGENT" not in _plain(lines[1])
+
+
 def test_nested_child_renders_tree_elbow():
     state.register("root", "parent-agent", "gpt-5.4")
     state.register("kid", "child-agent", "gpt-5.4-mini", parent="root")

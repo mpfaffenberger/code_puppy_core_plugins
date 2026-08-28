@@ -301,7 +301,12 @@ def _install_emit_hook() -> None:
                 model = _resolve_model(
                     message.agent_name, getattr(message, "model_name", None)
                 )
-                state.register(message.session_id, message.agent_name, model, parent)
+                # ``is_fork`` is core-optional (added after this plugin existed);
+                # default False keeps old-core rows rendering exactly as before.
+                is_fork = getattr(message, "is_fork", False)
+                state.register(
+                    message.session_id, message.agent_name, model, parent, is_fork
+                )
                 _push_panel(force=True)
                 _start_ticker()  # keeps mm:ss advancing through silence
         except Exception:

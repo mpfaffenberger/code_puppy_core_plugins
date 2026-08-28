@@ -33,6 +33,7 @@ includes forked runs — cancelling the agent takes forks down with it.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import itertools
 import time
 from dataclasses import dataclass, field
@@ -220,6 +221,19 @@ def _seed_fork_session(agent_name: str, prompt: str) -> Optional[str]:
         return None
 
 
+def _invoke_impl_supports_is_fork(impl) -> bool:
+    """Feature-detect the optional ``is_fork`` kwarg on ``_invoke_agent_impl``.
+
+    ``/fork`` calls that core-private function directly (no stable public
+    hook exists for this), so core and this plugin can drift independently
+    in either direction. An older core build won't accept ``is_fork`` at
+    all -- passing it unconditionally would raise ``TypeError`` and take
+    ``/fork`` down entirely. Detect support at call time instead of pinning
+    a version.
+    """
+    return "is_fork" in inspect.signature(impl).parameters
+
+
 async def _run_fork(
     agent_name: str,
     prompt: str,
@@ -232,16 +246,19 @@ async def _run_fork(
 
     started_at = time.monotonic()
     result = None
-    try:
+    invoke_kwargs = dict(
         # ``context`` is unused by the implementation; forks have no RunContext.
-        result = await _invoke_agent_impl(
-            context=None,
-            agent_name=agent_name,
-            prompt=prompt,
-            session_id=session_id,
-            model_name=model_name,
-            emit_response_message=False,
-        )
+        context=None,
+        agent_name=agent_name,
+        prompt=prompt,
+        session_id=session_id,
+        model_name=model_name,
+        emit_response_message=False,
+    )
+    if _invoke_impl_supports_is_fork(_invoke_agent_impl):
+        invoke_kwargs["is_fork"] = True
+    try:
+        result = await _invoke_agent_impl(**invoke_kwargs)
         return result
     finally:
         # /fork calls the shared implementation directly (not via pydantic-ai's tool
