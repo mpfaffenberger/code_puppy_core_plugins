@@ -37,7 +37,7 @@ import inspect
 import itertools
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from code_puppy.callbacks import register_callback
 
@@ -221,7 +221,7 @@ def _seed_fork_session(agent_name: str, prompt: str) -> Optional[str]:
         return None
 
 
-def _invoke_impl_supports_is_fork(impl) -> bool:
+def _invoke_impl_supports_is_fork(impl: Callable[..., Any]) -> bool:
     """Feature-detect the optional ``is_fork`` kwarg on ``_invoke_agent_impl``.
 
     ``/fork`` calls that core-private function directly (no stable public
@@ -230,8 +230,16 @@ def _invoke_impl_supports_is_fork(impl) -> bool:
     all -- passing it unconditionally would raise ``TypeError`` and take
     ``/fork`` down entirely. Detect support at call time instead of pinning
     a version.
+
+    ``inspect.signature`` itself can raise (``TypeError``/``ValueError``) for
+    a handful of non-introspectable callables (e.g. some C builtins); core's
+    ``_invoke_agent_impl`` is always a plain ``async def`` so this never fires
+    in practice, but fail closed (assume unsupported) rather than crash.
     """
-    return "is_fork" in inspect.signature(impl).parameters
+    try:
+        return "is_fork" in inspect.signature(impl).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 async def _run_fork(

@@ -305,7 +305,11 @@ def _install_emit_hook() -> None:
                 # default False keeps old-core rows rendering exactly as before.
                 is_fork = getattr(message, "is_fork", False)
                 state.register(
-                    message.session_id, message.agent_name, model, parent, is_fork
+                    message.session_id,
+                    message.agent_name,
+                    model,
+                    parent=parent,
+                    is_fork=is_fork,
                 )
                 _push_panel(force=True)
                 _start_ticker()  # keeps mm:ss advancing through silence
