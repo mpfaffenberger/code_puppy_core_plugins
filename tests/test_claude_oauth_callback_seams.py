@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import importlib
 import json
 import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
 from code_puppy import callbacks
@@ -18,6 +18,15 @@ from code_puppy.claude_cache_client import ClaudeCacheAsyncClient
 from code_puppy.model_factory import ModelFactory
 
 PLUGIN_NAME = "claude_code_oauth"
+
+# code_puppy's client may subclass httpx.AsyncClient or the vendored
+# httpx2.AsyncClient depending on the installed build. Resolve the actual
+# base class and its module so monkeypatching and request construction hit
+# the same httpx flavor the client uses internally.
+CLIENT_BASE = next(
+    cls for cls in ClaudeCacheAsyncClient.__mro__[1:] if cls.__name__ == "AsyncClient"
+)
+client_httpx = importlib.import_module(CLIENT_BASE.__module__.split(".")[0])
 
 
 @pytest.fixture
@@ -331,11 +340,11 @@ async def test_real_send_awaits_async_oauth_providers_without_runtime_warning(
 
     async def fake_send(self, request, *args, **kwargs):
         captured["authorization"] = request.headers.get("Authorization")
-        return httpx.Response(200, request=request, json={})
+        return client_httpx.Response(200, request=request, json={})
 
-    monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
+    monkeypatch.setattr(CLIENT_BASE, "send", fake_send)
     client = ClaudeCacheAsyncClient(headers={"Authorization": "Bearer old-token"})
-    request = httpx.Request(
+    request = client_httpx.Request(
         "GET",
         "https://api.anthropic.com/health",
         headers={"Authorization": "Bearer old-token"},

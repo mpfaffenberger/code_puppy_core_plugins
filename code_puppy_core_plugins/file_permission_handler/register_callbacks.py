@@ -17,10 +17,25 @@ from code_puppy.tools.file_permission_state import (
     register_file_permission_state_provider,
 )
 from code_puppy.tools.common import (
-    _find_best_window,
     get_user_approval,
     get_user_approval_async,
 )
+
+try:
+    # Preferred: the edit engine's own pure replacement function, so the
+    # permission preview shows exactly what the engine will do (including
+    # refusing ambiguous or unmatched edits). Available on code-puppy
+    # versions with Claude Code-parity edit semantics.
+    from code_puppy.tools.file_modifications import apply_replacements_to_content
+except ImportError:  # pragma: no cover - older code-puppy versions
+    apply_replacements_to_content = None
+
+try:
+    # Legacy fuzzy matcher, only used for previews on older code-puppy
+    # versions whose engine still fuzzy-matches.
+    from code_puppy.tools.common import _find_best_window
+except ImportError:  # pragma: no cover - future code-puppy versions
+    _find_best_window = None
 
 # NOTE: module-level ``_FILE_CONFIRMATION_LOCK`` removed — queueing of parallel
 # approvals now lives inside ``get_user_approval`` (they line up, never auto-rejected).
@@ -148,35 +163,19 @@ def _preview_replace_in_file(
         except (UnicodeEncodeError, UnicodeDecodeError):
             pass
 
-        modified = original
-        for rep in replacements:
-            old_snippet = rep.get("old_str", "")
-            new_snippet = rep.get("new_str", "")
-
-            if old_snippet and old_snippet in modified:
-                modified = modified.replace(old_snippet, new_snippet)
-                continue
-
-            # Use the same logic as file_modifications for fuzzy matching
-            orig_lines = modified.splitlines()
-            loc, score = _find_best_window(orig_lines, old_snippet)
-
-            if score < 0.95 or loc is None:
+        if apply_replacements_to_content is not None:
+            # Single source of truth: run the engine's own pure replacement
+            # logic. If the engine would refuse (not found / ambiguous /
+            # no-op), there is nothing truthful to preview.
+            engine_result = apply_replacements_to_content(original, replacements)
+            if "error" in engine_result:
                 return None
-
-            start, end = loc
-            had_trailing_newline = modified.endswith("\n")
-            prefix = "\n".join(orig_lines[:start])
-            suffix = "\n".join(orig_lines[end:])
-            parts = []
-            if prefix:
-                parts.append(prefix)
-            parts.append(new_snippet.rstrip("\n"))
-            if suffix:
-                parts.append(suffix)
-            modified = "\n".join(parts)
-            if had_trailing_newline and not modified.endswith("\n"):
-                modified += "\n"
+            modified = engine_result["content"]
+        else:
+            legacy = _legacy_fuzzy_preview(original, replacements)
+            if legacy is None:
+                return None
+            modified = legacy
 
         if modified == original:
             return None
@@ -193,6 +192,44 @@ def _preview_replace_in_file(
         return diff_text
     except Exception:
         return None
+
+
+def _legacy_fuzzy_preview(
+    original: str, replacements: list[dict[str, str]]
+) -> str | None:
+    """Mirror the pre-Claude-parity engine (exact-then-fuzzy) for old cores."""
+    if _find_best_window is None:
+        return None
+    modified = original
+    for rep in replacements:
+        old_snippet = rep.get("old_str", "")
+        new_snippet = rep.get("new_str", "")
+
+        if old_snippet and old_snippet in modified:
+            modified = modified.replace(old_snippet, new_snippet)
+            continue
+
+        # Same logic as the legacy file_modifications fuzzy matcher
+        orig_lines = modified.splitlines()
+        loc, score = _find_best_window(orig_lines, old_snippet)
+
+        if score < 0.95 or loc is None:
+            return None
+
+        start, end = loc
+        had_trailing_newline = modified.endswith("\n")
+        prefix = "\n".join(orig_lines[:start])
+        suffix = "\n".join(orig_lines[end:])
+        parts = []
+        if prefix:
+            parts.append(prefix)
+        parts.append(new_snippet.rstrip("\n"))
+        if suffix:
+            parts.append(suffix)
+        modified = "\n".join(parts)
+        if had_trailing_newline and not modified.endswith("\n"):
+            modified += "\n"
+    return modified
 
 
 def _preview_delete_file(file_path: str) -> str | None:
