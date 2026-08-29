@@ -147,6 +147,13 @@ class TestShellSafetyAgent:
             assert "safety" in agent.description.lower()
             assert "Risk Levels" in agent.get_system_prompt()
             assert agent.get_available_tools() == []
+            assert agent.get_model_settings_overrides() == {
+                "reasoning_effort": "none",
+                "extended_thinking": "off",
+                "interleaved_thinking": False,
+                "thinking_type": "disabled",
+                "thinking_enabled": False,
+            }
 
 
 # ============================================================

@@ -12,6 +12,14 @@ from code_puppy.agents.base_agent import BaseAgent
 if TYPE_CHECKING:
     pass
 
+_NON_THINKING_OVERRIDES = {
+    "reasoning_effort": "none",
+    "extended_thinking": "off",
+    "interleaved_thinking": False,
+    "thinking_type": "disabled",
+    "thinking_enabled": False,
+}
+
 
 class ShellSafetyAgent(BaseAgent):
     """Lightweight agent for assessing shell command safety risks.
@@ -65,5 +73,9 @@ class ShellSafetyAgent(BaseAgent):
 **Output:** Risk level + reasoning (max 1 sentence)."""
 
     def get_available_tools(self) -> List[str]:
-        """This agent uses no tools - pure reasoning only."""
+        """This agent uses no tools."""
         return []
+
+    def get_model_settings_overrides(self) -> dict[str, object]:
+        """Disable provider-specific thinking for this latency-sensitive check."""
+        return dict(_NON_THINKING_OVERRIDES)
