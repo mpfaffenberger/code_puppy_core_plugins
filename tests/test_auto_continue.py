@@ -30,9 +30,7 @@ async def test_returns_approved_continuation(approval: str):
             agent_name="auto-continue",
         )
     )
-    with patch(
-        "code_puppy.tools.subagent_invocation._invoke_agent_impl", invocation
-    ):
+    with patch("code_puppy.tools.subagent_invocation._invoke_agent_impl", invocation):
         result = await _on_interactive_turn_end(object(), "do it", _Result())
 
     assert result == {"prompt": approval}
@@ -44,9 +42,7 @@ async def test_ignores_rejection_and_failed_runs():
     invocation = AsyncMock(
         return_value=AgentInvokeOutput(response="NO", agent_name="auto-continue")
     )
-    with patch(
-        "code_puppy.tools.subagent_invocation._invoke_agent_impl", invocation
-    ):
+    with patch("code_puppy.tools.subagent_invocation._invoke_agent_impl", invocation):
         rejected = await _on_interactive_turn_end(object(), "do it", _Result())
         failed = await _on_interactive_turn_end(
             object(), "do it", _Result(), success=False
