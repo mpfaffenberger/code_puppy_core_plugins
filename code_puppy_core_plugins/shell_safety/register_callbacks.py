@@ -126,7 +126,7 @@ async def shell_safety_callback(
                 error_msg = (
                     f"🛑 Command blocked (risk {risk_display.upper()} > permission {threshold.upper()}).\n"
                     f"Reason: {concise_reason}\n"
-                    f"Override: /set yolo_mode true or /set safety_permission_level {risk_display}"
+                    f"Override: /set safety_permission_level {risk_display}"
                 )
                 emit_info(error_msg)
                 return {
@@ -167,7 +167,7 @@ async def shell_safety_callback(
             error_msg = (
                 f"🛑 Command blocked (risk {risk_display.upper()} > permission {threshold.upper()}).\n"
                 f"Reason: {concise_reason}\n"
-                f"Override: /set yolo_mode true or /set safety_permission_level {risk_display}"
+                f"Override: /set safety_permission_level {risk_display}"
             )
             emit_info(error_msg)
 
@@ -195,7 +195,7 @@ async def shell_safety_callback(
             "\U0001f6d1 Command blocked because shell-safety configuration or model "
             "was unavailable.\n"
             "Reason: Safety assessment was unavailable.\n"
-            "Next step: check logs or run the command manually outside YOLO mode."
+            "Next step: check the logs and retry the command."
         )
         return {
             "blocked": True,
