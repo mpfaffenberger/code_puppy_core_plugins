@@ -47,37 +47,37 @@ def _model_name() -> str | None:
 
 async def classify(response: str) -> Approval | None:
     """Classify one response without entering Code Puppy's sub-agent runtime."""
-    from pydantic_ai import Agent, UsageLimits
-
-    from code_puppy.model_factory import ModelFactory, make_model_settings
-    from code_puppy.model_utils import prepare_prompt_for_model
-
-    model_name = _model_name()
-    if not model_name:
-        return None
-    models_config = ModelFactory.load_config()
-    if model_name not in models_config:
-        return None
-
-    model = ModelFactory.get_model(model_name, models_config)
-    prepared = prepare_prompt_for_model(
-        model_name,
-        _INSTRUCTIONS,
-        f"Classify this assistant response:\n\n{response}",
-        prepend_system_to_user=True,
-    )
-    agent = Agent(
-        model=model,
-        instructions=prepared.instructions,
-        output_type=ContinuationDecision,
-        retries=0,
-        model_settings=make_model_settings(
-            model_name,
-            max_tokens=64,
-            overrides=_NON_THINKING_OVERRIDES,
-        ),
-    )
     try:
+        from pydantic_ai import Agent, UsageLimits
+
+        from code_puppy.model_factory import ModelFactory, make_model_settings
+        from code_puppy.model_utils import prepare_prompt_for_model
+
+        model_name = _model_name()
+        if not model_name:
+            return None
+        models_config = ModelFactory.load_config()
+        if model_name not in models_config:
+            return None
+
+        model = ModelFactory.get_model(model_name, models_config)
+        prepared = prepare_prompt_for_model(
+            model_name,
+            _INSTRUCTIONS,
+            f"Classify this assistant response:\n\n{response}",
+            prepend_system_to_user=True,
+        )
+        agent = Agent(
+            model=model,
+            instructions=prepared.instructions,
+            output_type=ContinuationDecision,
+            retries=0,
+            model_settings=make_model_settings(
+                model_name,
+                max_tokens=64,
+                overrides=_NON_THINKING_OVERRIDES,
+            ),
+        )
         async with asyncio.timeout(30):
             result = await agent.run(
                 prepared.user_prompt,

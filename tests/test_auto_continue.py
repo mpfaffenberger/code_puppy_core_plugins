@@ -5,6 +5,7 @@ import pytest
 from code_puppy_core_plugins.auto_continue.classifier import (
     ContinuationDecision,
     _model_name,
+    classify,
 )
 from code_puppy_core_plugins.auto_continue.register_callbacks import (
     _custom_help,
@@ -70,6 +71,15 @@ async def test_ignores_rejection_and_failed_runs():
 def test_decision_rejects_unexpected_output():
     with pytest.raises(ValueError):
         ContinuationDecision(approval="absolutely")
+
+
+@pytest.mark.asyncio
+async def test_classifier_fails_open_during_model_setup():
+    with patch(
+        "code_puppy_core_plugins.auto_continue.classifier._model_name",
+        side_effect=RuntimeError("model setup failed"),
+    ):
+        assert await classify(_Result.output) is None
 
 
 def test_model_name_uses_core_resolver():
