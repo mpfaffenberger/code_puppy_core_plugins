@@ -1,7 +1,7 @@
 """Tests to achieve 100% coverage for remaining plugin gaps.
 
 Covers:
-- shell_safety/agent_shell_safety.py (full class)
+- shell_safety/classifier.py
 - shell_safety/command_cache.py (all methods)
 - shell_safety/register_callbacks.py (line 43)
 - agent_skills/discovery.py (lines 79, 95)
@@ -17,7 +17,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # ============================================================
 # shell_safety/command_cache.py - Full coverage
@@ -114,46 +114,28 @@ class TestCommandCacheModuleFunctions:
 
 
 # ============================================================
-# shell_safety/agent_shell_safety.py - Full class coverage
+# shell_safety/classifier.py
 # ============================================================
 
 
-class TestShellSafetyAgent:
-    """Tests for ShellSafetyAgent without importing BaseAgent directly."""
+@pytest.mark.asyncio
+async def test_shell_safety_classifier_uses_private_non_thinking_prompt():
+    from code_puppy_core_plugins.shell_safety import classifier
 
-    def test_agent_properties(self):
-        """Test ShellSafetyAgent properties by mocking BaseAgent."""
-        # Mock the entire base_agent module to avoid MCP import
-        mock_base = MagicMock()
-        mock_base.BaseAgent = type("BaseAgent", (), {})
+    assessment = MagicMock()
+    private_prompt = AsyncMock(return_value=assessment)
+    with (
+        patch.object(classifier, "get_global_model_name", return_value="tiny-model"),
+        patch.object(classifier, "run_private_prompt", private_prompt),
+    ):
+        result = await classifier.classify("rm file", "/tmp")
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "code_puppy.agents.base_agent": mock_base,
-                "code_puppy.agents": MagicMock(),
-            },
-        ):
-            # Force reimport
-            import importlib
-
-            import code_puppy_core_plugins.shell_safety.agent_shell_safety as mod
-
-            importlib.reload(mod)
-
-            agent = mod.ShellSafetyAgent()
-            assert agent.name == "shell_safety_checker"
-            assert agent.display_name == "Shell Safety Checker \U0001f6e1\ufe0f"
-            assert "safety" in agent.description.lower()
-            assert "Risk Levels" in agent.get_system_prompt()
-            assert agent.get_available_tools() == []
-            assert agent.get_model_settings_overrides() == {
-                "reasoning_effort": "none",
-                "extended_thinking": "off",
-                "interleaved_thinking": False,
-                "thinking_type": "disabled",
-                "thinking_enabled": False,
-            }
+    assert result is assessment
+    kwargs = private_prompt.await_args.kwargs
+    assert kwargs["model_name"] == "tiny-model"
+    assert kwargs["prompt"].endswith("Working directory: /tmp")
+    assert kwargs["model_settings_overrides"]["reasoning_effort"] == "none"
+    assert kwargs["model_settings_overrides"]["thinking_enabled"] is False
 
 
 # ============================================================

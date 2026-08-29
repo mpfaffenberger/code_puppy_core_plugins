@@ -82,6 +82,26 @@ async def test_classifier_fails_open_during_model_setup():
         assert await classify(_Result.output) is None
 
 
+@pytest.mark.asyncio
+async def test_classifier_uses_private_non_thinking_prompt():
+    decision = ContinuationDecision(approval="continue")
+    private_prompt = AsyncMock(return_value=decision)
+    with (
+        patch(
+            "code_puppy_core_plugins.auto_continue.classifier._model_name",
+            return_value="tiny-model",
+        ),
+        patch("code_puppy.private_inference.run_private_prompt", private_prompt),
+    ):
+        result = await classify(_Result.output)
+
+    assert result == "continue"
+    kwargs = private_prompt.await_args.kwargs
+    assert kwargs["model_name"] == "tiny-model"
+    assert kwargs["model_settings_overrides"]["reasoning_effort"] == "none"
+    assert kwargs["max_tokens"] == 64
+
+
 def test_model_name_uses_core_resolver():
     with patch(
         "code_puppy.config.get_auto_continue_model_name",

@@ -14,12 +14,10 @@ from code_puppy.config import (
     get_safety_permission_level,
     get_yolo_mode,
 )
-from code_puppy.messaging import emit_info
 from code_puppy_core_plugins.shell_safety.command_cache import (
     cache_assessment,
     get_cached_assessment,
 )
-from code_puppy.tools.command_runner import ShellSafetyAssessment
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +126,6 @@ async def shell_safety_callback(
                     f"Reason: {concise_reason}\n"
                     f"Override: /set safety_permission_level {risk_display}"
                 )
-                emit_info(error_msg)
                 return {
                     "blocked": True,
                     "risk": cached.risk,
@@ -139,22 +136,9 @@ async def shell_safety_callback(
             return None
 
         # Cache miss - need LLM assessment
-        # Import here to avoid circular imports
-        from code_puppy_core_plugins.shell_safety.agent_shell_safety import (
-            ShellSafetyAgent,
-        )
+        from code_puppy_core_plugins.shell_safety.classifier import classify
 
-        # Create agent and assess command
-        agent = ShellSafetyAgent()
-
-        # Build the assessment prompt with optional cwd context
-        prompt = f"Assess this shell command:\n\nCommand: {command}"
-        if cwd:
-            prompt += f"\nWorking directory: {cwd}"
-
-        # Run async assessment with structured output type
-        result = await agent.run_with_mcp(prompt, output_type=ShellSafetyAssessment)
-        assessment = result.output
+        assessment = await classify(command, cwd)
 
         # Cache the result for future use, but only if it's not a fallback assessment
         if not getattr(assessment, "is_fallback", False):
@@ -169,8 +153,6 @@ async def shell_safety_callback(
                 f"Reason: {concise_reason}\n"
                 f"Override: /set safety_permission_level {risk_display}"
             )
-            emit_info(error_msg)
-
             # Return rejection info for the command runner
             return {
                 "blocked": True,
