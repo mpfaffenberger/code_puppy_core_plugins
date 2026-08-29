@@ -472,6 +472,75 @@ async def test_fork_with_no_history_starts_fresh():
 
 
 # =========================================================================
+# is_fork feature-detection (core/plugin version skew safety)
+# =========================================================================
+
+
+async def test_fork_passes_is_fork_when_core_supports_it():
+    calls = []
+
+    async def impl_with_is_fork(
+        context,
+        agent_name,
+        prompt,
+        session_id=None,
+        model_name=None,
+        emit_response_message=True,
+        is_fork=False,
+    ):
+        calls.append(is_fork)
+        return SimpleNamespace(
+            response="ok", agent_name=agent_name, session_id="sess-1", error=None
+        )
+
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=impl_with_is_fork,
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_success"),
+    ):
+        rc._handle_fork("/fork newer core")
+        await _wait_for_forks()
+
+    assert calls == [True]
+
+
+async def test_fork_omits_is_fork_when_core_predates_it():
+    """Old core's ``_invoke_agent_impl`` has no ``is_fork`` param at all --
+    passing it unconditionally would raise TypeError and take /fork down.
+    """
+
+    async def impl_without_is_fork(
+        context,
+        agent_name,
+        prompt,
+        session_id=None,
+        model_name=None,
+        emit_response_message=True,
+    ):
+        return SimpleNamespace(
+            response="ok", agent_name=agent_name, session_id="sess-1", error=None
+        )
+
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=impl_without_is_fork,
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_success") as success,
+    ):
+        rc._handle_fork("/fork older core")
+        await _wait_for_forks()
+
+    record = next(iter(rc._forks.values()))
+    assert record.status == "done"  # no TypeError crash
+    assert success.called
+
+
+# =========================================================================
 # /forks status listing
 # =========================================================================
 
