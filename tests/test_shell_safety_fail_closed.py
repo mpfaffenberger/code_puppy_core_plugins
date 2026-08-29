@@ -219,18 +219,37 @@ async def test_model_or_permission_failure_never_reaches_shell(
 
 @pytest.mark.parametrize(
     "model_name",
-    ["claude-code-test", "codex-test", "chatgpt-test", "gemini-oauth-test"],
+    ["codex-test", "chatgpt-test", "gemini-oauth-test"],
 )
-async def test_oauth_models_skip_shell_assessment(monkeypatch, model_name):
+async def test_provider_screened_models_skip_shell_assessment(monkeypatch, model_name):
     monkeypatch.setattr(shell_safety, "get_yolo_mode", lambda: True)
     monkeypatch.setattr(shell_safety, "get_global_model_name", lambda: model_name)
-    assessment_lookup = Mock(side_effect=AssertionError("OAuth model was assessed"))
+    assessment_lookup = Mock(side_effect=AssertionError("exempt model was assessed"))
     monkeypatch.setattr(shell_safety, "get_cached_assessment", assessment_lookup)
 
     result = await shell_safety.shell_safety_callback(None, "echo hi", None, 60)
 
     assert result is None
     assessment_lookup.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "model_name", ["claude-code-test", "claude-code-boodleton-opus-5"]
+)
+async def test_claude_code_models_are_assessed(monkeypatch, model_name):
+    """claude-code- is OAuth but not exempt, so assessment must still happen."""
+    monkeypatch.setattr(shell_safety, "get_yolo_mode", lambda: True)
+    monkeypatch.setattr(shell_safety, "get_global_model_name", lambda: model_name)
+    monkeypatch.setattr(shell_safety, "get_safety_permission_level", lambda: "medium")
+    assessment_lookup = Mock(return_value=CachedAssessment("critical", "destroys all"))
+    monkeypatch.setattr(shell_safety, "get_cached_assessment", assessment_lookup)
+
+    result = await shell_safety.shell_safety_callback(None, "echo hi", None, 60)
+
+    assessment_lookup.assert_called_once()
+    assert result is not None
+    assert result["blocked"] is True
+    assert result["risk"] == "critical"
 
 
 async def test_yolo_mode_allows_cached_low_risk_assessment(monkeypatch):

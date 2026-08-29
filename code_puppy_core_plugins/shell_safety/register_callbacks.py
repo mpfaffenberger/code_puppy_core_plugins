@@ -21,30 +21,29 @@ from code_puppy_core_plugins.shell_safety.command_cache import (
 
 logger = logging.getLogger(__name__)
 
-# OAuth model prefixes - these models have their own safety mechanisms
-OAUTH_MODEL_PREFIXES = (
-    "claude-code-",  # Anthropic OAuth
+# Model prefixes exempt from shell-safety assessment because the provider
+# applies its own command screening. Being an OAuth model is not itself a
+# reason to skip: claude-code- deliberately stays absent so the configured
+# safety_permission_level actually governs those sessions.
+SAFETY_EXEMPT_MODEL_PREFIXES = (
     "codex-",  # OpenAI OAuth
     "chatgpt-",  # Legacy OpenAI OAuth
     "gemini-oauth",  # Google OAuth
 )
 
 
-def is_oauth_model(model_name: str | None) -> bool:
-    """Check if the model is an OAuth model that should skip safety checks.
-
-    OAuth models have their own built-in safety mechanisms, so we skip
-    the shell safety callback to avoid redundant checks and potential bugs.
+def is_safety_exempt_model(model_name: str | None) -> bool:
+    """Check whether the provider screens commands, letting us skip assessment.
 
     Args:
         model_name: The name of the current model
 
     Returns:
-        True if the model is an OAuth model, False otherwise
+        True if the model is exempt from assessment, False otherwise
     """
     if not model_name:
         return False
-    return model_name.startswith(OAUTH_MODEL_PREFIXES)
+    return model_name.startswith(SAFETY_EXEMPT_MODEL_PREFIXES)
 
 
 # Numeric risk hierarchy: lower values are safer.
@@ -106,8 +105,8 @@ async def shell_safety_callback(
         if not get_yolo_mode():
             return None
 
-        # Skip safety checks for OAuth models - they have their own mechanisms.
-        if is_oauth_model(get_global_model_name()):
+        # Skip assessment when the provider already screens commands itself.
+        if is_safety_exempt_model(get_global_model_name()):
             return None
 
         threshold = get_safety_permission_level()

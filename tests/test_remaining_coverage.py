@@ -143,14 +143,26 @@ async def test_shell_safety_classifier_uses_private_non_thinking_prompt():
 # ============================================================
 
 from code_puppy_core_plugins.shell_safety.register_callbacks import (  # noqa: E402
-    is_oauth_model,
+    is_safety_exempt_model,
 )
 
 
-class TestIsOauthModel:
+class TestIsSafetyExemptModel:
     @pytest.mark.parametrize("model", [None, "", "gpt-4"])
-    def test_non_oauth_model(self, model):
-        assert is_oauth_model(model) is False
+    def test_non_exempt_model(self, model):
+        assert is_safety_exempt_model(model) is False
+
+    @pytest.mark.parametrize("model", ["codex-mini", "chatgpt-4o", "gemini-oauth-pro"])
+    def test_provider_screened_models_are_exempt(self, model):
+        assert is_safety_exempt_model(model) is True
+
+    @pytest.mark.parametrize(
+        "model", ["claude-code-opus-4", "claude-code-boodleton-opus-5"]
+    )
+    def test_claude_code_models_are_assessed(self, model):
+        """claude-code- is OAuth but NOT exempt: safety_permission_level must
+        govern these sessions rather than being silently inert."""
+        assert is_safety_exempt_model(model) is False
 
 
 # ============================================================
