@@ -6,14 +6,7 @@ from typing import Any
 
 from code_puppy.callbacks import register_callback
 
-from .agent import AutoContinueAgent
-
-_AGENT_NAME = "auto-continue"
-_APPROVALS = {"yes, go.", "continue", "okay"}
-
-
-def _register_agents() -> list[dict[str, object]]:
-    return [{"name": _AGENT_NAME, "class": AutoContinueAgent}]
+from .classifier import classify
 
 
 def _response_text(result: Any) -> str | None:
@@ -36,22 +29,13 @@ async def _on_interactive_turn_end(
     if not success or error is not None or not response:
         return None
 
-    from code_puppy.tools.subagent_invocation import _invoke_agent_impl
-
-    verdict = await _invoke_agent_impl(
-        context=None,
-        agent_name=_AGENT_NAME,
-        prompt=f"Classify this assistant response:\n\n{response}",
-        emit_response_message=False,
-    )
-    approval = (verdict.response or "").strip().lower()
-    if approval not in _APPROVALS:
+    approval = await classify(response)
+    if approval is None:
         return None
     return {"prompt": approval}
 
 
-register_callback("register_agents", _register_agents)
 register_callback("interactive_turn_end", _on_interactive_turn_end)
 
 
-__all__ = ["_on_interactive_turn_end", "_register_agents"]
+__all__ = ["_on_interactive_turn_end"]
