@@ -4,6 +4,7 @@ agent_creator_skill
 aws_bedrock
 azure_foundry
 auto_continue
+browser_harness
 btw
 chatgpt_oauth
 claude_code_hooks
