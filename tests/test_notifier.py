@@ -144,15 +144,10 @@ def _stub_send(mod, monkeypatch):
     monkeypatch.setattr(
         mod,
         "_send_notification",
-        lambda title,
-        message,
-        subtitle=None,
-        rate_limit_key=None,
-        timeout=None,
-        persistent=False: sent.append(
-            {"title": title, "message": message, "key": rate_limit_key}
-        )
-        or True,
+        lambda title, message, subtitle=None, rate_limit_key=None, timeout=None, persistent=False: (
+            sent.append({"title": title, "message": message, "key": rate_limit_key})
+            or True
+        ),
     )
     return sent
 
@@ -581,12 +576,9 @@ def test_public_api_delegates_to_dispatcher(monkeypatch):
     monkeypatch.setattr(
         rc,
         "_send_notification",
-        lambda t,
-        m,
-        s=None,
-        rate_limit_key=None,
-        timeout=None,
-        persistent=False: calls.append((t, m, s, rate_limit_key)) or True,
+        lambda t, m, s=None, rate_limit_key=None, timeout=None, persistent=False: (
+            calls.append((t, m, s, rate_limit_key)) or True
+        ),
     )
 
     # Patch the reference inside the __init__ lazy import
@@ -991,12 +983,9 @@ def test_agent_run_end_suppressed_when_terminal_focused(monkeypatch, mod):
     monkeypatch.setattr(
         mod,
         "_send_notification",
-        lambda title,
-        message,
-        subtitle=None,
-        rate_limit_key=None,
-        timeout=None,
-        persistent=False: sent.append(title) or True,
+        lambda title, message, subtitle=None, rate_limit_key=None, timeout=None, persistent=False: (
+            sent.append(title) or True
+        ),
     )
     monkeypatch.setattr(mod, "_is_notifications_enabled", lambda: True)
     monkeypatch.setattr(mod, "_is_terminal_focused", lambda: True)
@@ -1013,12 +1002,9 @@ def test_agent_run_end_fires_when_terminal_not_focused(monkeypatch, mod):
     monkeypatch.setattr(
         mod,
         "_send_notification",
-        lambda title,
-        message,
-        subtitle=None,
-        rate_limit_key=None,
-        timeout=None,
-        persistent=False: sent.append(title) or True,
+        lambda title, message, subtitle=None, rate_limit_key=None, timeout=None, persistent=False: (
+            sent.append(title) or True
+        ),
     )
     monkeypatch.setattr(mod, "_is_notifications_enabled", lambda: True)
     monkeypatch.setattr(mod, "_is_terminal_focused", lambda: False)
@@ -1221,12 +1207,9 @@ def test_pre_tool_call_suppressed_when_terminal_focused(monkeypatch, mod):
     monkeypatch.setattr(
         mod,
         "_send_notification",
-        lambda title,
-        message,
-        subtitle=None,
-        rate_limit_key=None,
-        timeout=None,
-        persistent=False: sent.append(title) or True,
+        lambda title, message, subtitle=None, rate_limit_key=None, timeout=None, persistent=False: (
+            sent.append(title) or True
+        ),
     )
     monkeypatch.setattr(mod, "_is_notifications_enabled", lambda: True)
     monkeypatch.setattr(mod, "_is_terminal_focused", lambda: True)
@@ -1242,12 +1225,9 @@ def test_pre_tool_call_fires_when_terminal_not_focused(monkeypatch, mod):
     monkeypatch.setattr(
         mod,
         "_send_notification",
-        lambda title,
-        message,
-        subtitle=None,
-        rate_limit_key=None,
-        timeout=None,
-        persistent=False: sent.append(title) or True,
+        lambda title, message, subtitle=None, rate_limit_key=None, timeout=None, persistent=False: (
+            sent.append(title) or True
+        ),
     )
     monkeypatch.setattr(mod, "_is_notifications_enabled", lambda: True)
     monkeypatch.setattr(mod, "_is_terminal_focused", lambda: False)
