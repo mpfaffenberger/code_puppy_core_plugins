@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from code_puppy.callbacks import register_callback
 
@@ -89,13 +90,19 @@ def _start_notification_worker(sound: str) -> None:
 
 
 def _drain_workers(*_args, **_kwargs) -> None:
-    """Give notification workers a bounded chance to finish before exit."""
+    """Give notification workers a bounded chance to finish before exit.
+
+    Joins share a single deadline so total wall time stays within the timeout
+    regardless of how many workers are in flight, rather than N x timeout.
+    """
     with _lock:
         workers = tuple(_workers)
         _workers.clear()
+    deadline = time.monotonic() + _WORKER_JOIN_TIMEOUT_SECONDS
     for worker in workers:
+        remaining = max(0.0, deadline - time.monotonic())
         try:
-            worker.join(timeout=_WORKER_JOIN_TIMEOUT_SECONDS)
+            worker.join(timeout=remaining)
         except RuntimeError:
             logger.debug(
                 "completion notification worker could not be joined", exc_info=True

@@ -89,6 +89,50 @@ def test_macos_named_sound_uses_notification_sound(monkeypatch):
     ]
 
 
+def test_escape_applescript_neutralizes_injection():
+    payload = 'x"\ndo shell script "touch /tmp/PWNED"\ndisplay notification "'
+    escaped = notifier._escape_applescript(payload)
+
+    assert "\n" not in escaped  # control characters stripped
+    # Every double-quote is escaped, so none can terminate the literal early.
+    assert '"' not in escaped.replace('\\"', "")
+
+
+def test_macos_escapes_untrusted_catalog_text(monkeypatch):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(notifier, "_run", lambda command: commands.append(command))
+    monkeypatch.setattr(notifier, "_title", lambda: 'L\'assistant "Puppy"')
+
+    payload = 'x"\ndo shell script "touch /tmp/PWNED"'
+    notifier._notify_macos(payload, "")
+
+    script = commands[0][2]
+    assert "\n" not in script
+    assert 'do shell script \\"' in script  # injected quote escaped, not raw
+    # Only the four structural AppleScript quotes remain unescaped.
+    assert script.replace('\\"', "").count('"') == 4
+
+
+def test_escape_xml_neutralizes_markup():
+    assert notifier._escape_xml("a<b>&\"c'") == "a&lt;b&gt;&amp;&quot;c&apos;"
+
+
+def test_windows_escapes_untrusted_title_and_message(monkeypatch):
+    commands: list[list[str]] = []
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
+    monkeypatch.setattr(notifier, "_run", lambda command: commands.append(command))
+    monkeypatch.setattr(notifier, "_title", lambda: "L'assistant")
+
+    notifier._notify_windows('R\u00e9ponse </text>"pwn"', "")
+
+    script = commands[0][4]
+    # Title enters a single-quoted PowerShell literal with '' escaping.
+    assert "CreateToastNotifier('L''assistant')" in script
+    # Injected closing tag is XML-escaped: only the two structural tags remain.
+    assert script.count("</text>") == 2
+    assert "&lt;/text&gt;" in script
+
+
 def test_explicit_sound_path_must_be_an_existing_absolute_file(tmp_path):
     sound_file = tmp_path / "done.wav"
     sound_file.write_bytes(b"sound")
@@ -125,6 +169,7 @@ def test_linux_notify_send_uses_argument_vector(monkeypatch):
             "/usr/bin/notify-send",
             "--app-name",
             "Code Puppy",
+            "--",
             "Code Puppy",
             "Response complete.",
         ]
@@ -227,5 +272,25 @@ def test_shutdown_drains_notification_workers(monkeypatch):
 
     callbacks._drain_workers()
 
-    worker.join.assert_called_once_with(timeout=callbacks._WORKER_JOIN_TIMEOUT_SECONDS)
+    worker.join.assert_called_once()
+    (timeout,) = (worker.join.call_args.kwargs.get("timeout"),)
+    assert 0.0 < timeout <= callbacks._WORKER_JOIN_TIMEOUT_SECONDS
     assert callbacks._workers == set()
+
+
+def test_drain_shares_one_deadline_across_workers(monkeypatch):
+    """Total join budget is bounded by the timeout, not timeout * worker count."""
+    timeouts: list[float] = []
+
+    def make_worker():
+        worker = Mock()
+        worker.join = Mock(side_effect=lambda timeout: timeouts.append(timeout))
+        return worker
+
+    monkeypatch.setattr(callbacks, "_workers", {make_worker() for _ in range(3)})
+
+    callbacks._drain_workers()
+
+    assert len(timeouts) == 3
+    # Each successive join gets the remaining budget, never a fresh full timeout.
+    assert all(0.0 <= t <= callbacks._WORKER_JOIN_TIMEOUT_SECONDS for t in timeouts)
