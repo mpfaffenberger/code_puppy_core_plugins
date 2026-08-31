@@ -55,6 +55,7 @@ def emit_error(message: str) -> None:
 
     _emit_error(message)
 
+
 _HERE = pathlib.Path(__file__).parent
 _backend_cache: dict[str, Any] = {}
 

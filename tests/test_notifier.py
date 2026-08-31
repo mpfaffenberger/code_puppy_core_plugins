@@ -543,7 +543,6 @@ def test_notification_backend_failures_return_false(monkeypatch, mod, windows_mo
     assert mod._send_linux_notification("t", "m") is False
 
 
-
 # ---------------------------------------------------------------------------
 # T26 – callback count
 # ---------------------------------------------------------------------------
@@ -667,9 +666,7 @@ def test_notify_command_title_only(monkeypatch, mod):
         lambda t, m, s=None, rate_limit_key=None: dispatched.append((t, m)) or True,
     )
     success_msgs = []
-    monkeypatch.setattr(
-        mod, "emit_success", lambda msg: success_msgs.append(msg)
-    )
+    monkeypatch.setattr(mod, "emit_success", lambda msg: success_msgs.append(msg))
 
     result = mod._handle_notify_command("/notify Hello", "notify")
 
@@ -696,9 +693,7 @@ def test_notify_command_title_and_message(monkeypatch, mod):
 def test_notify_command_empty_title_emits_error(monkeypatch, mod):
     """T33: /notify with no title emits usage error."""
     errors = []
-    monkeypatch.setattr(
-        mod, "emit_error", lambda msg: errors.append(msg)
-    )
+    monkeypatch.setattr(mod, "emit_error", lambda msg: errors.append(msg))
 
     result = mod._handle_notify_command("/notify", "notify")
 
