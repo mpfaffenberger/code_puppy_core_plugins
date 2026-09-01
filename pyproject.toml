@@ -89,6 +89,7 @@ token_ratio_learner = "code_puppy_core_plugins.token_ratio_learner.register_call
 universal_constructor = "code_puppy_core_plugins.universal_constructor.register_callbacks"
 web_retriever_skill = "code_puppy_core_plugins.web_retriever_skill.register_callbacks"
 wiggum = "code_puppy_core_plugins.wiggum.register_callbacks"
+yantrik_memory = "code_puppy_core_plugins.yantrik_memory.register_callbacks"
 yolo_cli = "code_puppy_core_plugins.yolo_cli.register_callbacks"
 
 [tool.hatch.build]
