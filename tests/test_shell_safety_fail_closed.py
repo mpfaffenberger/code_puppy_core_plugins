@@ -158,6 +158,7 @@ async def test_failure_log_omits_exception_details(monkeypatch):
         "RuntimeError",
     )
     assert "sensitive config details" not in str(warning.call_args)
+    assert "YOLO" not in result["error_message"]
 
 
 async def test_a_failed_assessment_denies(broken_interpolation_config):
@@ -245,6 +246,23 @@ async def test_yolo_mode_allows_cached_low_risk_assessment(monkeypatch):
     result = await shell_safety.shell_safety_callback(None, "echo hi", None, 60)
 
     assert result is None
+
+
+async def test_block_message_only_names_permission_level_override(monkeypatch):
+    monkeypatch.setattr(shell_safety, "get_yolo_mode", lambda: True)
+    monkeypatch.setattr(shell_safety, "get_global_model_name", lambda: "test-model")
+    monkeypatch.setattr(shell_safety, "get_safety_permission_level", lambda: "medium")
+    monkeypatch.setattr(
+        shell_safety,
+        "get_cached_assessment",
+        lambda command, cwd: CachedAssessment("high", "dangerous"),
+    )
+
+    result = await shell_safety.shell_safety_callback(None, "rm important", None, 60)
+
+    assert result["blocked"] is True
+    assert "Override: /set safety_permission_level high" in result["error_message"]
+    assert "yolo" not in result["error_message"].lower()
 
 
 async def test_manual_mode_does_not_require_model_lookup(monkeypatch):
