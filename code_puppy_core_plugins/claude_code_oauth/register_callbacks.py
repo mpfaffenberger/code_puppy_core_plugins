@@ -394,7 +394,7 @@ def _handle_custom_command(command: str, name: str) -> Optional[bool]:
         if tokens and tokens.get("access_token"):
             emit_warning(t("oauth.claude.cmd.auth.overwrite_warning"))
         _perform_authentication()
-        set_model_and_reload_agent("claude-code-claude-opus-4-8-long")
+        set_model_and_reload_agent("claude-code-claude-fable-5-1-long")
         return True
 
     if name == "claude-code-status":

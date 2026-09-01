@@ -32,6 +32,7 @@ CLAUDE_CODE_OAUTH_CONFIG: Dict[str, Any] = {
         "claude-opus-5",
         "claude-sonnet-5",
         "claude-fable-5",
+        "claude-fable-5-1",
     ],
     "api_key_env_var": "CLAUDE_CODE_ACCESS_TOKEN",
     "anthropic_version": "2023-06-01",

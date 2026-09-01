@@ -476,6 +476,9 @@ def filter_latest_claude_models(
         if model_name == "claude-fable-5":
             family_models.setdefault("fable", []).append((model_name, 5, 0, 0))
             continue
+        if model_name == "claude-fable-5-1":
+            family_models.setdefault("fable", []).append((model_name, 5, 1, 0))
+            continue
         # Match pattern: claude-{family}-{major}-{minor}-{date}
         # Examples: claude-haiku-3-5-20241022, claude-sonnet-4-5-20250929
         match = re.match(r"claude-(haiku|sonnet|opus)-(\d+)-(\d+)-(\d+)", model_name)

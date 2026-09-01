@@ -233,6 +233,18 @@ class TestModelFiltering:
         assert "claude-opus-4-8" not in filtered
         assert "claude-opus-4-7" not in filtered
 
+    def test_filter_latest_claude_models_fable_5_1_special_case(self):
+        """claude-fable-5-1 (undated minor bump) should outrank claude-fable-5."""
+        models = [
+            "claude-fable-5",
+            "claude-fable-5-1",
+        ]
+
+        filtered = filter_latest_claude_models(models, max_per_family=1)
+
+        assert "claude-fable-5-1" in filtered
+        assert "claude-fable-5" not in filtered
+
     def test_filter_latest_claude_models_max_per_family_one(self):
         """Test that max_per_family=1 keeps only the single latest."""
         models = [
@@ -390,6 +402,25 @@ class TestAddRemoveModels:
         assert saved_models["claude-code-claude-sonnet-5"]["context_length"] == 200000
         assert (
             saved_models["claude-code-claude-sonnet-5-long"]["context_length"]
+            == 1000000
+        )
+
+    @patch("code_puppy_core_plugins.claude_code_oauth.utils.get_valid_access_token")
+    @patch("code_puppy_core_plugins.claude_code_oauth.utils.save_claude_models")
+    def test_add_models_fable_5_1_gets_long_variant(self, mock_save, mock_get_token):
+        """claude-fable-5-1 gets a 1M -long variant (the post-auth default)."""
+        mock_get_token.return_value = "test_token_123"
+        mock_save.return_value = True
+
+        result = add_models_to_extra_config(["claude-fable-5-1"])
+
+        assert result is True
+        saved_models = mock_save.call_args[0][0]
+        assert "claude-code-claude-fable-5-1" in saved_models
+        # /claude-code-auth switches to this exact name; keep it existing.
+        assert "claude-code-claude-fable-5-1-long" in saved_models
+        assert (
+            saved_models["claude-code-claude-fable-5-1-long"]["context_length"]
             == 1000000
         )
 
