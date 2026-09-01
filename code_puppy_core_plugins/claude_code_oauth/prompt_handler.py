@@ -17,8 +17,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-# System-prompt override the Claude Code CLI expects. For OAuth claude-code models the
-# real system prompt moves into the user turn instead (see the callback below).
+# The OAuth endpoint fingerprints this exact string as the FIRST system block.
+# It ships as the agent's standing ``system_prompt`` (its own SystemPromptPart);
+# the real system prompt follows as the ``instructions`` block — a separate
+# system block, never the user turn. Mirrors CLAUDE_CODE_SYSTEM_PROMPT in
+# core's claude_cache_client.
 CLAUDE_CODE_INSTRUCTIONS = "You are Claude Code, Anthropic's official CLI for Claude."
 
 # Prefix used by every claude-code-* model (as registered by this plugin).
@@ -43,8 +46,14 @@ def prepare_claude_code_prompt(
 ) -> Optional[Dict[str, Any]]:
     """Callback for the ``prepare_model_prompt`` hook.
 
-    For claude-code models, swap in the Anthropic-expected instruction string
-    and (optionally) fold the caller's system prompt into the user message.
+    For claude-code models, the Anthropic-expected identity line becomes the
+    standing ``system_prompt`` (a separate ``SystemPromptPart``, rendered as
+    the first system block) and the caller's system prompt is passed through
+    as ``instructions`` (the block right after it). The user prompt is never
+    touched.
+
+    ``prepend_system_to_user`` is part of the hook signature core fires with,
+    but this plugin never folds the system prompt into the user message.
 
     Returns ``None`` for non-claude-code models so other handlers / the
     default passthrough can take over.
@@ -52,13 +61,10 @@ def prepare_claude_code_prompt(
     if not is_claude_code_model(model_name):
         return None
 
-    modified_prompt = user_prompt
-    if prepend_system_to_user and system_prompt:
-        modified_prompt = f"{system_prompt}\n\n{user_prompt}"
-
     return {
         "handled": True,
-        "instructions": CLAUDE_CODE_INSTRUCTIONS,
-        "user_prompt": modified_prompt,
+        "system_prompt": CLAUDE_CODE_INSTRUCTIONS,
+        "instructions": system_prompt,
+        "user_prompt": user_prompt,
         "is_claude_code": True,
     }
