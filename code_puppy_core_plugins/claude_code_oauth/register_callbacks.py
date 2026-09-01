@@ -52,6 +52,10 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
+# Model switched to after a successful /claude-code-auth run. Only applied
+# when authentication succeeded AND discovery actually minted this entry.
+POST_AUTH_MODEL = f"{CLAUDE_CODE_OAUTH_CONFIG['prefix']}claude-fable-5-1-long"
+
 
 class _OAuthResult:
     def __init__(self) -> None:
@@ -393,8 +397,13 @@ def _handle_custom_command(command: str, name: str) -> Optional[bool]:
         tokens = load_stored_tokens()
         if tokens and tokens.get("access_token"):
             emit_warning(t("oauth.claude.cmd.auth.overwrite_warning"))
-        _perform_authentication()
-        set_model_and_reload_agent("claude-code-claude-fable-5-1-long")
+        authenticated = _perform_authentication()
+        if authenticated and POST_AUTH_MODEL in load_claude_models_filtered():
+            set_model_and_reload_agent(POST_AUTH_MODEL)
+        else:
+            emit_warning(
+                t("oauth.claude.cmd.auth.model_switch_skipped", model=POST_AUTH_MODEL)
+            )
         return True
 
     if name == "claude-code-status":

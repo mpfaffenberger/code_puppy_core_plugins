@@ -340,7 +340,8 @@ def load_claude_models_filtered() -> Dict[str, Any]:
         # Filter to only latest models
         latest_names = set(
             filter_latest_claude_models(
-                model_names, max_per_family={"default": 1, "opus": 3}
+                model_names,
+                max_per_family=CLAUDE_CODE_OAUTH_CONFIG["model_family_limits"],
             )
         )
 
@@ -450,6 +451,12 @@ def filter_latest_claude_models(
             mapping family name to its limit (e.g. ``{"opus": 3}``). Families
             not present in the dict fall back to ``"default"`` key, or ``2``.
     """
+    # Dedupe while preserving order: base and "-long" config entries share the
+    # same underlying model name, and a duplicate must not consume a slot of
+    # the per-family limit (e.g. [opus-5, opus-5, opus-4-8] silently dropping
+    # opus-4-7 at limit 3).
+    models = list(dict.fromkeys(models))
+
     # Collect all parsed models per family
     # family -> list of (model_name, major, minor, date)
     family_models: Dict[str, List[Tuple[str, int, int, int]]] = {}
@@ -612,7 +619,8 @@ def add_models_to_extra_config(models: List[str]) -> bool:
     try:
         # Filter to only latest haiku, sonnet, and opus models
         filtered_models = filter_latest_claude_models(
-            models, max_per_family={"default": 1, "opus": 3, "fable": 3}
+            models,
+            max_per_family=CLAUDE_CODE_OAUTH_CONFIG["model_family_limits"],
         )
 
         # Start fresh - overwrite the file on every auth instead of loading existing
