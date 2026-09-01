@@ -30,6 +30,7 @@ hook_manager
 logfire_oauth
 logfire_sessions
 meta_oauth
+model_switcher
 namespace_skill_search
 no_tools
 obsidian_agent
