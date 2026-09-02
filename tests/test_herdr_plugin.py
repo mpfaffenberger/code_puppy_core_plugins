@@ -444,3 +444,155 @@ def test_set_awaiting_user_input_exposes_notification_intent():
     assert should_notify_awaiting_user_input() is False
     set_awaiting_user_input(False)
     assert should_notify_awaiting_user_input() is True
+
+
+# --- exit guards (pane release on non-graceful shutdown) --------------------
+
+
+def test_install_exit_guards_registers_atexit_and_signal_handlers():
+    """The guards must cover both interpreter teardown and terminating signals.
+
+    The ``shutdown``/``session_end`` callbacks only fire from a ``finally:``
+    that a signal-killed interpreter never reaches, so without these the pane
+    stays claimed by a dead process.
+    """
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    registered = []
+    installed = {}
+
+    def fake_signal(sig, handler):
+        installed[sig] = handler
+        return signal_mod.SIG_DFL
+
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: registered.append(fn)),
+        patch.object(rc.signal, "signal", fake_signal),
+        patch.object(rc.signal, "getsignal", lambda sig: signal_mod.SIG_DFL),
+    ):
+        rc._install_exit_guards()
+
+    assert rc._client.release_and_close in registered
+    assert set(installed) == set(rc._TERMINATING_SIGNALS)
+
+
+def test_exit_guard_signal_handler_releases_then_reraises():
+    """Releasing must not swallow the signal: the process still dies from it."""
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    installed = {}
+    released = []
+    killed = []
+
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: None),
+        patch.object(rc.signal, "signal", lambda s, h: installed.__setitem__(s, h)),
+        patch.object(rc.signal, "getsignal", lambda sig: signal_mod.SIG_DFL),
+    ):
+        rc._install_exit_guards()
+
+    handler = installed[signal_mod.SIGTERM]
+    with (
+        patch.object(rc._client, "release_and_close", lambda: released.append(True)),
+        patch.object(rc.os, "kill", lambda pid, sig: killed.append(sig)),
+        patch.object(rc.signal, "signal", lambda s, h: None),
+    ):
+        handler(signal_mod.SIGTERM, None)
+
+    assert released == [True]
+    assert killed == [signal_mod.SIGTERM]
+
+
+def test_exit_guard_chains_previous_handler():
+    """A pre-existing handler is chained, not clobbered."""
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    prior_calls = []
+
+    def prior_handler(signum, frame):
+        prior_calls.append(signum)
+
+    installed = {}
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: None),
+        patch.object(rc.signal, "signal", lambda s, h: installed.__setitem__(s, h)),
+        patch.object(rc.signal, "getsignal", lambda sig: prior_handler),
+    ):
+        rc._install_exit_guards()
+
+    killed = []
+    with (
+        patch.object(rc._client, "release_and_close", lambda: None),
+        patch.object(rc.os, "kill", lambda pid, sig: killed.append(sig)),
+    ):
+        installed[signal_mod.SIGTERM](signal_mod.SIGTERM, None)
+
+    assert prior_calls == [signal_mod.SIGTERM]
+    assert killed == []  # chained handler owns the exit
+
+
+def test_exit_guard_survives_release_failure():
+    """A broken socket must not stop the process from shutting down."""
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    installed = {}
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: None),
+        patch.object(rc.signal, "signal", lambda s, h: installed.__setitem__(s, h)),
+        patch.object(rc.signal, "getsignal", lambda sig: signal_mod.SIG_DFL),
+    ):
+        rc._install_exit_guards()
+
+    def boom():
+        raise OSError("herdr socket gone")
+
+    killed = []
+    with (
+        patch.object(rc._client, "release_and_close", boom),
+        patch.object(rc.os, "kill", lambda pid, sig: killed.append(sig)),
+        patch.object(rc.signal, "signal", lambda s, h: None),
+    ):
+        installed[signal_mod.SIGTERM](signal_mod.SIGTERM, None)
+
+    assert killed == [signal_mod.SIGTERM]
+
+
+def test_install_exit_guards_tolerates_unavailable_signal():
+    """Non-main-thread / Windows-missing signals degrade quietly."""
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    def refuse(sig, handler):
+        raise ValueError("signal only works in main thread")
+
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: None),
+        patch.object(rc.signal, "signal", refuse),
+        patch.object(rc.signal, "getsignal", lambda sig: None),
+    ):
+        rc._install_exit_guards()  # must not raise
+
+
+def test_terminating_signals_are_platform_safe():
+    """SIGHUP is absent on Windows; resolving it must not break the import.
+
+    ``client.py`` ships a named-pipe transport, so this module is imported on
+    Windows too -- a bare ``signal.SIGHUP`` reference would raise
+    AttributeError at import time and disable the plugin entirely.
+    """
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    assert signal_mod.SIGTERM in rc._TERMINATING_SIGNALS
+    assert all(s is not None for s in rc._TERMINATING_SIGNALS)
+    # Every entry must be a signal this platform actually knows about.
+    for sig in rc._TERMINATING_SIGNALS:
+        assert sig in set(signal_mod.Signals)
