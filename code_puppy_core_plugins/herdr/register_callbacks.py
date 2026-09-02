@@ -32,6 +32,12 @@ Callback -> effect:
 * ``interactive_turn_cancel`` ........................ reset -> idle
 * ``awaiting_user_input`` ............................ blocked <-> not
 
+Callbacks alone are not enough to guarantee the pane is released. They fire
+from a ``finally:`` in ``cli_runner``, which the interpreter only reaches on
+a graceful exit. ``_install_exit_guards`` adds an ``atexit`` hook and a
+SIGTERM/SIGHUP handler so a closed pane, a plain ``kill``, or a logout also
+release pane authority instead of stranding a dead agent in herdr's sidebar.
+
 Session identity is the durable autosave (name, path) resolved by
 ``sources.current_session_ref`` -- NOT the per-run ``group_id`` UUID, which
 changes every turn. Pane metadata (model / context / tokens) and the
@@ -47,7 +53,10 @@ choice.
 
 from __future__ import annotations
 
+import atexit
 import logging
+import os
+import signal
 
 from code_puppy.callbacks import register_callback
 
@@ -55,6 +64,18 @@ from .client import HerdrClient
 from .reporter import HerdrReporter
 
 logger = logging.getLogger(__name__)
+
+#: Signals that terminate the process without unwinding the interpreter, so
+#: neither the ``finally:`` in cli_runner nor ``atexit`` would otherwise run.
+#: SIGKILL is deliberately absent -- it cannot be caught by design. SIGHUP is
+#: resolved defensively because it does not exist on Windows, where this
+#: module is still imported (client.py speaks a named pipe there) and a bare
+#: ``signal.SIGHUP`` would raise AttributeError and break the whole plugin.
+_TERMINATING_SIGNALS = tuple(
+    sig
+    for sig in (getattr(signal, name, None) for name in ("SIGTERM", "SIGHUP"))
+    if sig is not None
+)
 
 _client = HerdrClient()
 _reporter = HerdrReporter(_client)
@@ -119,6 +140,67 @@ def _on_shutdown(*_args, **_kw) -> None:
     _reporter.on_shutdown()
 
 
+def _install_exit_guards() -> None:
+    """Release the pane even when the interpreter never unwinds.
+
+    The ``shutdown`` / ``session_end`` callbacks fire from a ``finally:`` in
+    ``cli_runner``, which only runs on a graceful exit (``/exit``, EOF). A
+    terminal closing its pane, a plain ``kill``, a logout, or a service
+    restart all send SIGTERM/SIGHUP, whose *default* disposition terminates
+    the process immediately -- the ``finally:`` never executes, no
+    ``pane.release_agent`` is ever sent, and herdr keeps showing a dead
+    agent forever with no mechanism to reap it.
+
+    Two guards, because neither alone is sufficient:
+
+    * ``atexit`` -- covers ordinary interpreter teardown paths that bypass
+      the callback (an unhandled exception above the ``finally:``,
+      ``sys.exit()`` from a nested frame). It does **not** run on SIGTERM.
+    * a SIGTERM/SIGHUP handler -- covers the signal paths ``atexit`` misses.
+
+    The handler restores the previous disposition and re-raises so the
+    process still dies from the signal with correct ``128 + signum`` exit
+    status; it does not swallow the signal or alter shutdown semantics.
+    Any previously-installed handler is chained rather than clobbered.
+
+    SIGKILL cannot be caught, so a ``kill -9`` still strands the pane. That
+    residual case needs a herdr-side liveness check on the reporting
+    process and is out of scope here.
+    """
+    # release_and_close() is idempotent and bounded, so double-firing from
+    # both a signal and atexit is harmless.
+    atexit.register(_client.release_and_close)
+
+    previous_handlers = {}
+
+    def _release_and_reraise(signum: int, frame) -> None:
+        try:
+            _client.release_and_close()
+        except Exception:  # never let cleanup mask the shutdown itself
+            logger.debug("herdr: release on signal %s failed", signum, exc_info=True)
+
+        previous = previous_handlers.get(signum)
+        if callable(previous):
+            previous(signum, frame)
+            return
+
+        # Restore the default disposition and re-raise so the exit status
+        # remains 128 + signum rather than a synthetic 0.
+        signal.signal(signum, previous if previous is not None else signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for sig in _TERMINATING_SIGNALS:
+        try:
+            previous_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, _release_and_reraise)
+        except (OSError, ValueError, AttributeError):
+            # signal.signal() only works on the main thread, and some signals
+            # are absent on some platforms (SIGHUP on Windows). Reporting must
+            # never break the agent, so degrade quietly.
+            previous_handlers.pop(sig, None)
+            logger.debug("herdr: could not install handler for %s", sig, exc_info=True)
+
+
 if _reporter.active:
     register_callback("startup", _on_startup)
     register_callback("user_prompt_submit", _on_user_prompt)
@@ -132,6 +214,7 @@ if _reporter.active:
     register_callback("awaiting_user_input", _on_awaiting_user_input)
     register_callback("session_end", _on_shutdown)
     register_callback("shutdown", _on_shutdown)
+    _install_exit_guards()
     logger.debug("herdr plugin active for pane %s", _client._pane_id)
 else:
     logger.debug("herdr plugin inactive (not running inside a herdr pane)")
