@@ -32,9 +32,14 @@ CLAUDE_CODE_OAUTH_CONFIG: Dict[str, Any] = {
         "claude-opus-5",
         "claude-sonnet-5",
         "claude-fable-5",
+        "claude-fable-5-1",
     ],
     "api_key_env_var": "CLAUDE_CODE_ACCESS_TOKEN",
     "anthropic_version": "2023-06-01",
+    # Per-family caps applied by filter_latest_claude_models. Shared by the
+    # save path (add_models_to_extra_config) and the load path
+    # (load_claude_models_filtered) so the two can never drift apart.
+    "model_family_limits": {"default": 1, "opus": 3, "fable": 3},
 }
 
 

@@ -233,6 +233,18 @@ class TestModelFiltering:
         assert "claude-opus-4-8" not in filtered
         assert "claude-opus-4-7" not in filtered
 
+    def test_filter_latest_claude_models_fable_5_1_special_case(self):
+        """claude-fable-5-1 (undated minor bump) should outrank claude-fable-5."""
+        models = [
+            "claude-fable-5",
+            "claude-fable-5-1",
+        ]
+
+        filtered = filter_latest_claude_models(models, max_per_family=1)
+
+        assert "claude-fable-5-1" in filtered
+        assert "claude-fable-5" not in filtered
+
     def test_filter_latest_claude_models_max_per_family_one(self):
         """Test that max_per_family=1 keeps only the single latest."""
         models = [
@@ -244,6 +256,138 @@ class TestModelFiltering:
 
         assert len(filtered) == 1
         assert "claude-opus-4-1-20250805" in filtered
+
+    def test_filter_latest_claude_models_dedupes_duplicate_names(self):
+        """Duplicate names (base + -long entries) must not consume limit slots.
+
+        Without dedupe, [opus-5, opus-5, opus-4-8] fills an opus limit of 3
+        and silently drops opus-4-7.
+        """
+        models = [
+            "claude-opus-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-opus-4-7",
+        ]
+
+        filtered = filter_latest_claude_models(models, max_per_family={"opus": 3})
+
+        assert filtered == ["claude-opus-5", "claude-opus-4-8", "claude-opus-4-7"]
+
+    @patch("code_puppy_core_plugins.claude_code_oauth.utils.load_claude_models")
+    def test_load_filter_uses_same_family_limits_as_save(self, mock_load):
+        """The load path must honor the shared family limits (fable: 3).
+
+        A hand-maintained loader limit once lacked the fable entry, so models
+        the saver kept were silently dropped again at load time.
+        """
+
+        def entry(name: str) -> dict:
+            return {"oauth_source": "claude-code-plugin", "name": name}
+
+        mock_load.return_value = {
+            "claude-code-claude-fable-5-1": entry("claude-fable-5-1"),
+            "claude-code-claude-fable-5-1-long": entry("claude-fable-5-1"),
+            "claude-code-claude-fable-5": entry("claude-fable-5"),
+            "claude-code-claude-fable-5-long": entry("claude-fable-5"),
+            "claude-code-claude-opus-5": entry("claude-opus-5"),
+            "claude-code-claude-opus-5-long": entry("claude-opus-5"),
+            "claude-code-claude-opus-4-8": entry("claude-opus-4-8"),
+            "claude-code-claude-opus-4-7": entry("claude-opus-4-7"),
+        }
+
+        loaded = load_claude_models_filtered()
+
+        # fable limit is 3 on load too: fable-5 survives alongside fable-5-1.
+        assert "claude-code-claude-fable-5-1" in loaded
+        assert "claude-code-claude-fable-5-1-long" in loaded
+        assert "claude-code-claude-fable-5" in loaded
+        # Dedupe keeps opus-4-7 despite opus-5 appearing twice.
+        assert "claude-code-claude-opus-4-7" in loaded
+
+
+# ============================================================================
+# POST-AUTH MODEL SWITCH
+# ============================================================================
+
+
+class TestPostAuthModelSwitch:
+    """/claude-code-auth only switches models when auth actually delivered."""
+
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.set_model_and_reload_agent"
+    )
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.load_claude_models_filtered"
+    )
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks._perform_authentication"
+    )
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.load_stored_tokens"
+    )
+    def test_switches_when_auth_succeeds_and_model_exists(
+        self, mock_tokens, mock_auth, mock_filtered, mock_set_model
+    ):
+        from code_puppy_core_plugins.claude_code_oauth.register_callbacks import (
+            POST_AUTH_MODEL,
+            _handle_custom_command,
+        )
+
+        mock_tokens.return_value = None
+        mock_auth.return_value = True
+        mock_filtered.return_value = {POST_AUTH_MODEL: {}}
+
+        assert _handle_custom_command("/claude-code-auth", "claude-code-auth") is True
+        mock_set_model.assert_called_once_with(POST_AUTH_MODEL)
+
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.set_model_and_reload_agent"
+    )
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks._perform_authentication"
+    )
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.load_stored_tokens"
+    )
+    def test_no_switch_when_auth_fails(self, mock_tokens, mock_auth, mock_set_model):
+        from code_puppy_core_plugins.claude_code_oauth.register_callbacks import (
+            _handle_custom_command,
+        )
+
+        mock_tokens.return_value = None
+        mock_auth.return_value = False
+
+        assert _handle_custom_command("/claude-code-auth", "claude-code-auth") is True
+        mock_set_model.assert_not_called()
+
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.set_model_and_reload_agent"
+    )
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.load_claude_models_filtered"
+    )
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks._perform_authentication"
+    )
+    @patch(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.load_stored_tokens"
+    )
+    def test_no_switch_when_target_model_missing(
+        self, mock_tokens, mock_auth, mock_filtered, mock_set_model
+    ):
+        from code_puppy_core_plugins.claude_code_oauth.register_callbacks import (
+            _handle_custom_command,
+        )
+
+        mock_tokens.return_value = None
+        mock_auth.return_value = True
+        mock_filtered.return_value = {}
+
+        assert _handle_custom_command("/claude-code-auth", "claude-code-auth") is True
+        mock_set_model.assert_not_called()
 
 
 # ============================================================================
@@ -390,6 +534,25 @@ class TestAddRemoveModels:
         assert saved_models["claude-code-claude-sonnet-5"]["context_length"] == 200000
         assert (
             saved_models["claude-code-claude-sonnet-5-long"]["context_length"]
+            == 1000000
+        )
+
+    @patch("code_puppy_core_plugins.claude_code_oauth.utils.get_valid_access_token")
+    @patch("code_puppy_core_plugins.claude_code_oauth.utils.save_claude_models")
+    def test_add_models_fable_5_1_gets_long_variant(self, mock_save, mock_get_token):
+        """claude-fable-5-1 gets a 1M -long variant (the post-auth default)."""
+        mock_get_token.return_value = "test_token_123"
+        mock_save.return_value = True
+
+        result = add_models_to_extra_config(["claude-fable-5-1"])
+
+        assert result is True
+        saved_models = mock_save.call_args[0][0]
+        assert "claude-code-claude-fable-5-1" in saved_models
+        # /claude-code-auth switches to this exact name; keep it existing.
+        assert "claude-code-claude-fable-5-1-long" in saved_models
+        assert (
+            saved_models["claude-code-claude-fable-5-1-long"]["context_length"]
             == 1000000
         )
 

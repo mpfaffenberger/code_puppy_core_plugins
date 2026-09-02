@@ -53,7 +53,6 @@ def test_parse_toggle_arg_rejects_garbage():
 
 
 def test_append_newline_returns_formatted_text_with_trailing_newline():
-
     original = list([("class:arrow", ">>> ")])
     result = _plugin_module()._append_newline(original)
 
