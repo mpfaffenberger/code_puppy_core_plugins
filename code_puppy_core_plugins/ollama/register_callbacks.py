@@ -30,16 +30,18 @@ Note: Code Puppy requires models with strong tool/function calling support.
 Models without tool calling will notwork properly.
 """
 
+from __future__ import annotations
+
 import logging
 import os
-from typing import Any
-
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
+from typing import TYPE_CHECKING, Any
 
 from code_puppy.callbacks import register_callback
 from code_puppy.http_utils import create_async_client
 from code_puppy.model_factory import get_custom_config
+
+if TYPE_CHECKING:
+    from pydantic_ai.models.openai import OpenAIChatModel
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,12 @@ def create_ollama_model(
     Returns:
         OpenAIChatModel instance, or None if creation fails.
     """
+    # Imported here, not at module scope: this plugin loads on every boot and
+    # the openai SDK behind OpenAIChatModel is ~200ms cold -- only runs that
+    # actually pick an Ollama model should pay for it.
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
     try:
         if "custom_endpoint" in model_config:
             url, headers, verify, api_key, _timeout = get_custom_config(model_config)
