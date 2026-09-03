@@ -5,6 +5,7 @@ from __future__ import annotations
 from code_puppy.config import get_value
 
 KEY_ENABLED = "completion_notifications"
+KEY_INCLUDE_PROMPT = "completion_notification_include_prompt"
 KEY_SOUND = "completion_notification_sound"
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -12,6 +13,11 @@ _TRUTHY = {"1", "true", "yes", "on"}
 def is_enabled() -> bool:
     """Return whether completion notifications are explicitly enabled."""
     return str(get_value(KEY_ENABLED) or "").strip().lower() in _TRUTHY
+
+
+def include_prompt() -> bool:
+    """Return whether notifications may include a shortened user prompt."""
+    return str(get_value(KEY_INCLUDE_PROMPT) or "").strip().lower() in _TRUTHY
 
 
 def get_sound() -> str:

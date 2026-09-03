@@ -8,14 +8,23 @@ import time
 
 from code_puppy.callbacks import register_callback
 
-from .config import get_sound, is_enabled
-from .notifier import notify_completion
+from .config import get_sound, include_prompt, is_enabled
+from .notifier import notify_completion, prompt_preview
 
 logger = logging.getLogger(__name__)
 _WORKER_JOIN_TIMEOUT_SECONDS = 3
 _lock = threading.Lock()
 _run_depth = 0
 _workers: set[threading.Thread] = set()
+_prompts: dict[str, str] = {}
+
+
+def _on_user_prompt_submit(prompt: str, session_id: str | None = None) -> None:
+    """Keep an opted-in prompt only until its run finishes."""
+    if not session_id or not is_enabled() or not include_prompt() or _is_subagent():
+        return
+    with _lock:
+        _prompts[session_id] = prompt_preview(prompt)
 
 
 def _is_subagent() -> bool:
@@ -48,11 +57,12 @@ def _on_agent_run_end(
     metadata: dict | None = None,
 ) -> None:
     """Notify only when the outermost successful textual run completes."""
-    del agent_name, model_name, session_id, error, metadata
+    del agent_name, model_name, error, metadata
     global _run_depth
     with _lock:
         _run_depth = max(0, _run_depth - 1)
         is_outermost_run = _run_depth == 0
+        prompt = _prompts.pop(session_id, "") if session_id else ""
 
     if (
         not is_outermost_run
@@ -64,17 +74,17 @@ def _on_agent_run_end(
         return
 
     try:
-        _start_notification_worker(get_sound())
+        _start_notification_worker(get_sound(), prompt)
     except Exception:
         logger.debug("completion notification worker could not start", exc_info=True)
 
 
-def _start_notification_worker(sound: str) -> None:
+def _start_notification_worker(sound: str, prompt: str = "") -> None:
     worker: threading.Thread
 
     def notify() -> None:
         try:
-            notify_completion(sound)
+            notify_completion(sound, prompt)
         finally:
             with _lock:
                 _workers.discard(worker)
@@ -109,9 +119,15 @@ def _drain_workers(*_args, **_kwargs) -> None:
             )
 
 
+register_callback("user_prompt_submit", _on_user_prompt_submit)
 register_callback("agent_run_start", _on_agent_run_start)
 register_callback("agent_run_end", _on_agent_run_end)
 register_callback("session_end", _drain_workers)
 register_callback("shutdown", _drain_workers)
 
-__all__ = ["_drain_workers", "_on_agent_run_end", "_on_agent_run_start"]
+__all__ = [
+    "_drain_workers",
+    "_on_agent_run_end",
+    "_on_agent_run_start",
+    "_on_user_prompt_submit",
+]

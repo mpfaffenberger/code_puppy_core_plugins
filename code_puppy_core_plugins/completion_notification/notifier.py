@@ -22,6 +22,8 @@ _MACOS_SOUND_NAME = re.compile(r"^[A-Za-z0-9 _-]+$")
 # Control characters cannot survive intact inside AppleScript/PowerShell/XML
 # source and are never meaningful in a single-line notification, so drop them.
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_WHITESPACE = re.compile(r"\s+")
+_PROMPT_PREVIEW_CHARS = 88
 _TERMINAL_NAMES = {
     "apple_terminal": "Terminal",
     "iterm.app": "iTerm2",
@@ -29,21 +31,33 @@ _TERMINAL_NAMES = {
 }
 
 
-def _title() -> str:
+def _title(prompt: str = "") -> str:
+    context = prompt_preview(prompt)
+    if context:
+        return t("completion_notification.title_with_context", context=context)
     return t("completion_notification.title")
 
 
-def notify_completion(sound: str = "") -> None:
+def prompt_preview(prompt: str) -> str:
+    """Return a single-line, bounded prompt preview for an opted-in title."""
+    compact = _WHITESPACE.sub(" ", _CONTROL_CHARS.sub(" ", prompt)).strip()
+    if len(compact) <= _PROMPT_PREVIEW_CHARS:
+        return compact
+    shortened = compact[: _PROMPT_PREVIEW_CHARS - 1].rsplit(" ", 1)[0]
+    return f"{shortened or compact[: _PROMPT_PREVIEW_CHARS - 1]}…"
+
+
+def notify_completion(sound: str = "", prompt: str = "") -> None:
     """Show a platform-native completion notification without raising."""
     try:
         system = platform.system()
         message = _completion_message()
         if system == "Darwin":
-            _notify_macos(message, sound)
+            _notify_macos(message, sound, prompt)
         elif system == "Linux":
-            _notify_linux(message, sound)
+            _notify_linux(message, sound, prompt)
         elif system == "Windows":
-            _notify_windows(message, sound)
+            _notify_windows(message, sound, prompt)
     except Exception:
         logger.debug("completion notification failed", exc_info=True)
 
@@ -59,9 +73,9 @@ def _completion_message() -> str:
     )
 
 
-def _notify_macos(message: str, sound: str) -> None:
+def _notify_macos(message: str, sound: str, prompt: str = "") -> None:
     body = _escape_applescript(message)
-    title = _escape_applescript(_title())
+    title = _escape_applescript(_title(prompt))
     script = f'display notification "{body}" with title "{title}"'
     if _is_macos_sound_name(sound):
         script += f' sound name "{sound}"'
@@ -69,28 +83,30 @@ def _notify_macos(message: str, sound: str) -> None:
     _play_file(sound, players=(("/usr/bin/afplay",),))
 
 
-def _notify_linux(message: str, sound: str) -> None:
+def _notify_linux(message: str, sound: str, prompt: str = "") -> None:
     notify_send = shutil.which("notify-send")
     if notify_send:
+        title = _title(prompt)
         # "--" stops option parsing so a title/message starting with "-" is
         # never misread as a flag.
-        _run([notify_send, "--app-name", _title(), "--", _title(), message])
+        _run([notify_send, "--app-name", _title(), "--", title, message])
     _play_file(sound, players=(("paplay",), ("aplay",)))
 
 
-def _notify_windows(message: str, sound: str) -> None:
+def _notify_windows(message: str, sound: str, prompt: str = "") -> None:
     # Windows Runtime toast APIs are available on current Windows releases. This
     # remains best-effort: restricted hosts can reject the call without affecting
     # the completed Code Puppy run.
+    title = _title(prompt)
     toast_xml = (
         '<toast><visual><binding template="ToastGeneric">'
-        f"<text>{_escape_xml(_title())}</text><text>{_escape_xml(message)}</text>"
+        f"<text>{_escape_xml(title)}</text><text>{_escape_xml(message)}</text>"
         "</binding></visual></toast>"
     )
     # XML-escaping already removes single quotes, but escape the assembled
     # literal defensively before it enters the single-quoted PowerShell string.
     toast_literal = toast_xml.replace("'", "''")
-    notifier_title = _title().replace("'", "''")
+    notifier_title = title.replace("'", "''")
     script = (
         "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; "
         f"$xml.LoadXml('{toast_literal}'); "
