@@ -44,6 +44,7 @@ puppy_kennel
 puppy_spinner
 qa_kitten_skill
 quick_resume
+read_before_write
 review_pr
 session_namer
 shell_safety
