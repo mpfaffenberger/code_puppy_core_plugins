@@ -17,6 +17,7 @@ from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warni
 
 from .config import COPILOT_AUTH_CONFIG
 from .utils import (
+    COPILOT_API_RESPONSES,
     add_models_to_config,
     clear_caches,
     fetch_copilot_models,
@@ -308,7 +309,7 @@ def _handle_copilot_login(command: str) -> None:
         try:
             from code_puppy.model_switching import set_model_and_reload_agent
 
-            default_model = f"{COPILOT_AUTH_CONFIG['prefix']}{model_list[0]}"
+            default_model = f"{COPILOT_AUTH_CONFIG['prefix']}{model_list[0]['id']}"
             set_model_and_reload_agent(default_model)
         except Exception as exc:
             logger.debug("Could not auto-switch to Copilot model: %s", exc)
@@ -341,6 +342,22 @@ def _handle_custom_command(command: str, name: str) -> Optional[bool]:
 # ---------------------------------------------------------------------------
 
 
+def _uses_responses_api(model_config: Dict) -> bool:
+    """Decide whether a Copilot model must be called via ``/responses``.
+
+    Prefer the ``copilot_api`` value recorded at registration (derived from
+    the catalogue's ``supported_endpoints``).  Entries written before that
+    key existed fall back to a name heuristic: every GPT-5.x / Codex model
+    Copilot serves accepts ``/responses`` and the newer ones (5.5, 5.6-*)
+    reject ``/chat/completions`` outright with ``unsupported_api_for_model``.
+    """
+    api = model_config.get("copilot_api")
+    if api:
+        return str(api).strip().lower() == COPILOT_API_RESPONSES
+    underlying = str(model_config.get("name", "")).lower()
+    return underlying.startswith("gpt-5") or "codex" in underlying
+
+
 def _create_copilot_model(model_name: str, model_config: Dict, config: Dict) -> Any:
     """Create an OpenAI-compatible model backed by GitHub Copilot API.
 
@@ -349,9 +366,13 @@ def _create_copilot_model(model_name: str, model_config: Dict, config: Dict) -> 
     Uses a dynamic auth flow that refreshes the short-lived Copilot session
     token automatically before each API request, preventing mid-conversation
     token expiry errors.
+
+    Models whose catalogue entry only lists ``/responses`` (GPT-5.5, the
+    GPT-5.6 family, Codex, Grok, ...) are built as ``OpenAIResponsesModel``;
+    everything else keeps using Chat Completions.
     """
     import httpx
-    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
     from code_puppy.http_utils import create_async_client
@@ -435,7 +456,18 @@ def _create_copilot_model(model_name: str, model_config: Dict, config: Dict) -> 
         )
         patch_client_for_reasoning_opaque(client, thinking_field="reasoning_text")
 
-    return OpenAIChatModel(
+    # Responses-only models 400 on /chat/completions ("unsupported_api_for_model").
+    if _uses_responses_api(model_config):
+        from .responses_stream import patch_client_for_stable_ids
+
+        # Copilot re-encrypts every item id on every SSE event, and pydantic-ai
+        # keys streamed parts by that id.  Without normalising, tool-call
+        # arguments arrive empty and text splits into one part per delta.
+        patch_client_for_stable_ids(client)
+        model_cls: Any = OpenAIResponsesModel
+    else:
+        model_cls = OpenAIChatModel
+    return model_cls(
         model_name=model_config["name"],
         provider=provider,
         profile=profile,
