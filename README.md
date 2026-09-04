@@ -44,19 +44,11 @@ best-effort desktop notification after a successful top-level response with:
 /set completion_notifications=true
 ```
 
-Notifications never include response text. When available, the notification
-labels Apple Terminal, iTerm2, or Warp using `TERM_PROGRAM`; unknown terminals
-get a generic message. Sub-agent completions are intentionally silent.
-
-To distinguish simultaneous terminal conversations, optionally include a
-sanitized, shortened copy of the latest user prompt in the notification title:
-
-```text
-/set completion_notification_include_prompt=true
-```
-
-Prompt context is disabled by default because desktop notifications may be
-visible to other people. It never changes the generic notification body.
+Notifications use a sanitized, shortened copy of the latest user prompt as the
+title and a shortened response preview as the body, with Apple Terminal, iTerm2,
+or Warp labeled through `TERM_PROGRAM` when available. Unknown terminals omit
+the terminal label. Sub-agent completions are intentionally silent. Desktop
+notification centers may retain visible prompt and response previews.
 
 Optional sound configuration is platform-aware:
 

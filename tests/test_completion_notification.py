@@ -17,7 +17,6 @@ def test_config_defaults_to_disabled_and_empty_sound(monkeypatch):
     monkeypatch.setattr(config, "get_value", lambda _key: None)
 
     assert config.is_enabled() is False
-    assert config.include_prompt() is False
     assert config.get_sound() == ""
 
 
@@ -29,7 +28,6 @@ def test_config_accepts_truthy_values(monkeypatch):
     )
 
     assert config.is_enabled() is True
-    assert config.include_prompt() is True
     assert config.get_sound() == "Frog"
 
 
@@ -45,6 +43,14 @@ def test_completion_message_is_generic_for_unknown_terminal(monkeypatch):
     assert notifier._completion_message() == "Response complete."
 
 
+def test_completion_message_includes_response_preview(monkeypatch):
+    monkeypatch.setenv("TERM_PROGRAM", "WarpTerminal")
+
+    assert notifier._completion_message("Finished safely.") == (
+        "Finished safely. · Warp"
+    )
+
+
 def test_notify_completion_routes_by_platform(monkeypatch):
     calls: list[tuple[str, str, str, str]] = []
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
@@ -52,15 +58,15 @@ def test_notify_completion_routes_by_platform(monkeypatch):
     monkeypatch.setattr(
         notifier,
         "_notify_macos",
-        lambda message, sound, prompt: calls.append(("mac", message, sound, prompt)),
+        lambda title, message, sound: calls.append(("mac", title, message, sound)),
     )
-    notifier.notify_completion("Frog", "Which run?")
+    notifier.notify_completion("Frog", "Which run?", "Finished")
 
     monkeypatch.setattr(notifier.platform, "system", lambda: "Linux")
     monkeypatch.setattr(
         notifier,
         "_notify_linux",
-        lambda message, sound, prompt: calls.append(("linux", message, sound, prompt)),
+        lambda title, message, sound: calls.append(("linux", title, message, sound)),
     )
     notifier.notify_completion("")
 
@@ -68,28 +74,31 @@ def test_notify_completion_routes_by_platform(monkeypatch):
     monkeypatch.setattr(
         notifier,
         "_notify_windows",
-        lambda message, sound, prompt: calls.append(
-            ("windows", message, sound, prompt)
-        ),
+        lambda title, message, sound: calls.append(("windows", title, message, sound)),
     )
     notifier.notify_completion("C:/sound.wav")
 
     assert calls == [
-        ("mac", "Response complete.", "Frog", "Which run?"),
-        ("linux", "Response complete.", "", ""),
-        ("windows", "Response complete.", "C:/sound.wav", ""),
+        ("mac", "Code Puppy — Which run?", "Finished", "Frog"),
+        ("linux", "Code Puppy", "Response complete.", ""),
+        ("windows", "Code Puppy", "Response complete.", "C:/sound.wav"),
     ]
 
 
-def test_prompt_preview_is_single_line_and_bounded():
+def test_prompt_and_response_previews_are_single_line_and_bounded():
     prompt = "  Which\nnotification\twas this?  " + " very" * 30
+    response = "  Finished\nsafely.  " + " result" * 60
 
-    preview = notifier.prompt_preview(prompt)
+    prompt_preview = notifier.prompt_preview(prompt)
+    response_preview = notifier.response_preview(response)
 
-    assert "\n" not in preview
-    assert "\t" not in preview
-    assert len(preview) <= notifier._PROMPT_PREVIEW_CHARS
-    assert preview.endswith("…")
+    assert "\n" not in prompt_preview
+    assert "\t" not in prompt_preview
+    assert len(prompt_preview) <= notifier._TITLE_PREVIEW_CHARS
+    assert prompt_preview.endswith("…")
+    assert "\n" not in response_preview
+    assert len(response_preview) <= notifier._BODY_PREVIEW_CHARS
+    assert response_preview.endswith("…")
 
 
 def test_title_uses_i18n_for_opted_in_prompt(monkeypatch):
@@ -127,9 +136,12 @@ def test_contextual_title_supports_pseudolocale():
     try:
         i18n.set_locale("en-XA")
         title = notifier._title("Which run?")
+        message = notifier._completion_message("Finished")
         assert title.startswith("⟦")
         assert title.endswith("⟧")
         assert "Which run?" not in title
+        assert message.startswith("⟦")
+        assert "Finished" not in message
     finally:
         i18n.set_locale(previous_locale)
 
@@ -138,7 +150,7 @@ def test_macos_named_sound_uses_notification_sound(monkeypatch):
     commands: list[list[str]] = []
     monkeypatch.setattr(notifier, "_run", lambda command: commands.append(command))
 
-    notifier._notify_macos("Response complete.", "Frog")
+    notifier._notify_macos("Code Puppy", "Response complete.", "Frog")
 
     assert commands == [
         [
@@ -164,7 +176,7 @@ def test_macos_escapes_untrusted_catalog_text(monkeypatch):
     monkeypatch.setattr(notifier, "_title", lambda _prompt="": 'L\'assistant "Puppy"')
 
     payload = 'x"\ndo shell script "touch /tmp/PWNED"'
-    notifier._notify_macos(payload, "")
+    notifier._notify_macos(notifier._title(), payload, "")
 
     script = commands[0][2]
     assert "\n" not in script
@@ -183,7 +195,7 @@ def test_windows_escapes_untrusted_title_and_message(monkeypatch):
     monkeypatch.setattr(notifier, "_run", lambda command: commands.append(command))
     monkeypatch.setattr(notifier, "_title", lambda _prompt="": "L'assistant")
 
-    notifier._notify_windows('R\u00e9ponse </text>"pwn"', "")
+    notifier._notify_windows(notifier._title(), 'R\u00e9ponse </text>"pwn"', "")
 
     script = commands[0][4]
     # Title enters a single-quoted PowerShell literal with '' escaping.
@@ -193,23 +205,27 @@ def test_windows_escapes_untrusted_title_and_message(monkeypatch):
     assert "&lt;/text&gt;" in script
 
 
-def test_contextual_title_is_escaped_on_every_platform(monkeypatch):
+def test_contextual_title_and_response_are_escaped_on_every_platform(monkeypatch):
     prompt = 'Which "run"? </text> L\'assistant\nnext'
+    response = 'Done "safely". </text>\nAll checks passed.'
+    title = notifier._title(prompt)
+    message = notifier._completion_message(response)
     mac_commands: list[list[str]] = []
     windows_commands: list[list[str]] = []
     linux_commands: list[list[str]] = []
 
     monkeypatch.setattr(notifier, "_run", lambda command: mac_commands.append(command))
-    notifier._notify_macos("Response complete.", "", prompt)
+    notifier._notify_macos(title, message, "")
     mac_script = mac_commands[0][2]
     assert "\n" not in mac_script
     assert '\\"run\\"' in mac_script
+    assert 'Done \\"safely\\"' in mac_script
 
     monkeypatch.setenv("SystemRoot", r"C:\Windows")
     monkeypatch.setattr(
         notifier, "_run", lambda command: windows_commands.append(command)
     )
-    notifier._notify_windows("Response complete.", "", prompt)
+    notifier._notify_windows(title, message, "")
     windows_script = windows_commands[0][4]
     assert "&lt;/text&gt;" in windows_script
     assert "L&apos;assistant" in windows_script
@@ -222,7 +238,7 @@ def test_contextual_title_is_escaped_on_every_platform(monkeypatch):
     monkeypatch.setattr(
         notifier, "_run", lambda command: linux_commands.append(command)
     )
-    notifier._notify_linux("Response complete.", "", prompt)
+    notifier._notify_linux(title, message, "")
     assert linux_commands[0][3] == "--"
     assert linux_commands[0][4].startswith("Code Puppy — Which")
 
@@ -242,7 +258,7 @@ def test_linux_without_notify_send_is_still_safe(monkeypatch):
     monkeypatch.setattr(notifier.shutil, "which", lambda _name: None)
     monkeypatch.setattr(notifier, "_run", lambda command: commands.append(command))
 
-    notifier._notify_linux("Response complete.", "")
+    notifier._notify_linux("Code Puppy", "Response complete.", "")
 
     assert commands == []
 
@@ -256,7 +272,7 @@ def test_linux_notify_send_uses_argument_vector(monkeypatch):
     )
     monkeypatch.setattr(notifier, "_run", lambda command: commands.append(command))
 
-    notifier._notify_linux("Response complete.", "")
+    notifier._notify_linux("Code Puppy", "Response complete.", "")
 
     assert commands == [
         [
@@ -277,7 +293,7 @@ def test_windows_sound_path_uses_trusted_absolute_powershell(monkeypatch, tmp_pa
     monkeypatch.setenv("SystemRoot", r"C:\Windows")
     monkeypatch.setattr(notifier, "_run", lambda command: commands.append(command))
 
-    notifier._notify_windows("Response complete.", str(sound_file))
+    notifier._notify_windows("Code Puppy", "Response complete.", str(sound_file))
 
     powershell = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
     escaped_path = str(sound_file).replace("'", "''")
@@ -303,31 +319,27 @@ def test_completion_message_uses_i18n(monkeypatch):
     assert notifier._completion_message() == (
         "completion_notification.response_complete_in_terminal:{'terminal': 'Warp'}"
     )
+    assert notifier._completion_message("Finished") == (
+        "completion_notification.response_preview_in_terminal:"
+        "{'preview': 'Finished', 'terminal': 'Warp'}"
+    )
 
 
-def test_prompt_is_captured_only_when_notifications_and_context_are_enabled(
-    monkeypatch,
-):
+def test_prompt_is_captured_only_when_notifications_are_enabled(monkeypatch):
     monkeypatch.setattr(callbacks, "_prompts", {})
     monkeypatch.setattr(callbacks, "_is_subagent", lambda: False)
     monkeypatch.setattr(callbacks, "is_enabled", lambda: False)
-    monkeypatch.setattr(callbacks, "include_prompt", lambda: True)
 
     callbacks._on_user_prompt_submit("Private prompt", "run-1")
     assert callbacks._prompts == {}
 
     monkeypatch.setattr(callbacks, "is_enabled", lambda: True)
-    monkeypatch.setattr(callbacks, "include_prompt", lambda: False)
-    callbacks._on_user_prompt_submit("Private prompt", "run-1")
-    assert callbacks._prompts == {}
-
-    monkeypatch.setattr(callbacks, "include_prompt", lambda: True)
     callbacks._on_user_prompt_submit("Which\nrun?", "run-1")
     assert callbacks._prompts == {"run-1": "Which run?"}
 
 
-def test_callback_passes_prompt_to_worker_and_discards_it(monkeypatch):
-    worker_calls: list[tuple[str, str]] = []
+def test_callback_passes_context_to_worker_and_discards_prompt(monkeypatch):
+    worker_calls: list[tuple[str, str, str]] = []
     monkeypatch.setattr(callbacks, "_prompts", {"run-1": "Which run?"})
     monkeypatch.setattr(callbacks, "_run_depth", 1)
     monkeypatch.setattr(callbacks, "is_enabled", lambda: True)
@@ -336,14 +348,16 @@ def test_callback_passes_prompt_to_worker_and_discards_it(monkeypatch):
     monkeypatch.setattr(
         callbacks,
         "_start_notification_worker",
-        lambda sound, prompt="": worker_calls.append((sound, prompt)),
+        lambda sound, prompt="", response_text="": worker_calls.append(
+            (sound, prompt, response_text)
+        ),
     )
 
     callbacks._on_agent_run_end(
         session_id="run-1", success=True, response_text="Finished"
     )
 
-    assert worker_calls == [("Frog", "Which run?")]
+    assert worker_calls == [("Frog", "Which run?", "Finished")]
     assert callbacks._prompts == {}
 
 

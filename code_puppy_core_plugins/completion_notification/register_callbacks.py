@@ -8,7 +8,7 @@ import time
 
 from code_puppy.callbacks import register_callback
 
-from .config import get_sound, include_prompt, is_enabled
+from .config import get_sound, is_enabled
 from .notifier import notify_completion, prompt_preview
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ _prompts: dict[str, str] = {}
 
 def _on_user_prompt_submit(prompt: str, session_id: str | None = None) -> None:
     """Keep an opted-in prompt only until its run finishes."""
-    if not session_id or not is_enabled() or not include_prompt() or _is_subagent():
+    if not session_id or not is_enabled() or _is_subagent():
         return
     with _lock:
         _prompts[session_id] = prompt_preview(prompt)
@@ -74,17 +74,19 @@ def _on_agent_run_end(
         return
 
     try:
-        _start_notification_worker(get_sound(), prompt)
+        _start_notification_worker(get_sound(), prompt, response_text)
     except Exception:
         logger.debug("completion notification worker could not start", exc_info=True)
 
 
-def _start_notification_worker(sound: str, prompt: str = "") -> None:
+def _start_notification_worker(
+    sound: str, prompt: str = "", response_text: str = ""
+) -> None:
     worker: threading.Thread
 
     def notify() -> None:
         try:
-            notify_completion(sound, prompt)
+            notify_completion(sound, prompt, response_text)
         finally:
             with _lock:
                 _workers.discard(worker)

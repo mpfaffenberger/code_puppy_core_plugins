@@ -23,7 +23,8 @@ _MACOS_SOUND_NAME = re.compile(r"^[A-Za-z0-9 _-]+$")
 # source and are never meaningful in a single-line notification, so drop them.
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _WHITESPACE = re.compile(r"\s+")
-_PROMPT_PREVIEW_CHARS = 88
+_TITLE_PREVIEW_CHARS = 88
+_BODY_PREVIEW_CHARS = 180
 _TERMINAL_NAMES = {
     "apple_terminal": "Terminal",
     "iterm.app": "iTerm2",
@@ -38,32 +39,37 @@ def _title(prompt: str = "") -> str:
     return t("completion_notification.title")
 
 
-def prompt_preview(prompt: str) -> str:
-    """Return a single-line, bounded prompt preview for an opted-in title."""
-    compact = _WHITESPACE.sub(" ", _CONTROL_CHARS.sub(" ", prompt)).strip()
-    if len(compact) <= _PROMPT_PREVIEW_CHARS:
-        return compact
-    shortened = compact[: _PROMPT_PREVIEW_CHARS - 1].rsplit(" ", 1)[0]
-    return f"{shortened or compact[: _PROMPT_PREVIEW_CHARS - 1]}…"
-
-
-def notify_completion(sound: str = "", prompt: str = "") -> None:
-    """Show a platform-native completion notification without raising."""
+def notify_completion(
+    sound: str = "", prompt: str = "", response_text: str = ""
+) -> None:
+    """Show a contextual platform-native completion notification."""
     try:
         system = platform.system()
-        message = _completion_message()
+        title = _title(prompt)
+        message = _completion_message(response_text)
         if system == "Darwin":
-            _notify_macos(message, sound, prompt)
+            _notify_macos(title, message, sound)
         elif system == "Linux":
-            _notify_linux(message, sound, prompt)
+            _notify_linux(title, message, sound)
         elif system == "Windows":
-            _notify_windows(message, sound, prompt)
+            _notify_windows(title, message, sound)
     except Exception:
         logger.debug("completion notification failed", exc_info=True)
 
 
-def _completion_message() -> str:
+def _completion_message(response_text: str = "") -> str:
     terminal = _TERMINAL_NAMES.get(os.environ.get("TERM_PROGRAM", "").casefold())
+    preview = response_preview(response_text)
+    if preview:
+        return (
+            preview
+            if terminal is None
+            else t(
+                "completion_notification.response_preview_in_terminal",
+                preview=preview,
+                terminal=terminal,
+            )
+        )
     return (
         t("completion_notification.response_complete")
         if terminal is None
@@ -73,9 +79,28 @@ def _completion_message() -> str:
     )
 
 
-def _notify_macos(message: str, sound: str, prompt: str = "") -> None:
+def response_preview(response_text: str) -> str:
+    """Return a safe, bounded body preview for an agent response."""
+    return _preview(response_text, _BODY_PREVIEW_CHARS)
+
+
+def prompt_preview(prompt: str) -> str:
+    """Return a safe, bounded title preview for a user prompt."""
+    return _preview(prompt, _TITLE_PREVIEW_CHARS)
+
+
+def _preview(text: str, limit: int) -> str:
+    """Collapse dynamic content into a readable, bounded notification line."""
+    compact = _WHITESPACE.sub(" ", _CONTROL_CHARS.sub(" ", text or "")).strip()
+    if len(compact) <= limit:
+        return compact
+    shortened = compact[: limit - 1].rsplit(" ", 1)[0].rstrip(".,;:!?")
+    return f"{shortened or compact[: limit - 1]}…"
+
+
+def _notify_macos(title: str, message: str, sound: str) -> None:
     body = _escape_applescript(message)
-    title = _escape_applescript(_title(prompt))
+    title = _escape_applescript(title)
     script = f'display notification "{body}" with title "{title}"'
     if _is_macos_sound_name(sound):
         script += f' sound name "{sound}"'
@@ -83,21 +108,19 @@ def _notify_macos(message: str, sound: str, prompt: str = "") -> None:
     _play_file(sound, players=(("/usr/bin/afplay",),))
 
 
-def _notify_linux(message: str, sound: str, prompt: str = "") -> None:
+def _notify_linux(title: str, message: str, sound: str) -> None:
     notify_send = shutil.which("notify-send")
     if notify_send:
-        title = _title(prompt)
         # "--" stops option parsing so a title/message starting with "-" is
         # never misread as a flag.
         _run([notify_send, "--app-name", _title(), "--", title, message])
     _play_file(sound, players=(("paplay",), ("aplay",)))
 
 
-def _notify_windows(message: str, sound: str, prompt: str = "") -> None:
+def _notify_windows(title: str, message: str, sound: str) -> None:
     # Windows Runtime toast APIs are available on current Windows releases. This
     # remains best-effort: restricted hosts can reject the call without affecting
     # the completed Code Puppy run.
-    title = _title(prompt)
     toast_xml = (
         '<toast><visual><binding template="ToastGeneric">'
         f"<text>{_escape_xml(title)}</text><text>{_escape_xml(message)}</text>"
@@ -106,7 +129,7 @@ def _notify_windows(message: str, sound: str, prompt: str = "") -> None:
     # XML-escaping already removes single quotes, but escape the assembled
     # literal defensively before it enters the single-quoted PowerShell string.
     toast_literal = toast_xml.replace("'", "''")
-    notifier_title = title.replace("'", "''")
+    notifier_title = _title().replace("'", "''")
     script = (
         "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; "
         f"$xml.LoadXml('{toast_literal}'); "
