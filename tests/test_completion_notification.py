@@ -131,8 +131,9 @@ def test_contextual_title_preserves_supported_locales(
         i18n.set_locale(previous_locale)
 
 
-def test_contextual_title_supports_pseudolocale():
+def test_contextual_title_supports_pseudolocale(monkeypatch):
     previous_locale = i18n.get_locale()
+    monkeypatch.setenv("TERM_PROGRAM", "WarpTerminal")
     try:
         i18n.set_locale("en-XA")
         title = notifier._title("Which run?")
