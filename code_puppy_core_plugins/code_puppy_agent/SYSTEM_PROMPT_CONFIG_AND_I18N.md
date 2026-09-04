@@ -80,8 +80,10 @@ did to your config are two separate actions.
 
 The builtin `spill` plugin saves oversized top-level string fields to
 private files and substitutes bounded head/tail previews with retrieval
-guidance. It leaves error-only and non-dict results untouched and skips
-`read_file` by default to avoid a read → spill → read loop.
+guidance. It handles both dict results and Pydantic `BaseModel` results
+(most built-in tools return the latter), and leaves error-only and other
+result shapes untouched. It skips `read_file` by default to avoid a read →
+spill → read loop.
 
 | `puppy.cfg` key | Default | Meaning |
 |-----------------|---------|---------|
