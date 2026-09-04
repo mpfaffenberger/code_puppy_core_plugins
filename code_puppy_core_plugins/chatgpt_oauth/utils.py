@@ -7,10 +7,11 @@ import datetime
 import hashlib
 import json
 import logging
+import re
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs as urllib_parse_qs
 from urllib.parse import urlencode, urlparse
 
@@ -377,6 +378,7 @@ def exchange_code_for_tokens(
 # Models known to work with ChatGPT OAuth tokens (sourced from codex-rs CLI
 # and shell-scripts/codex-call.sh).
 DEFAULT_CODEX_MODELS = [
+    "gpt-6-astra",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
@@ -399,17 +401,39 @@ CODEX_MODEL_CONTEXT_LENGTHS = {
 }
 
 
+_GPT_VERSION_RE = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
+
+
+def _gpt_version(model_name: str) -> Optional[Tuple[int, int]]:
+    """``(major, minor)`` for a ``gpt-X[.Y]...`` Codex slug, else ``None``.
+
+    Kept local (rather than importing ``code_puppy.model_utils``) so this
+    plugin doesn't hard-require a core release that ships the shared helper.
+    """
+    match = _GPT_VERSION_RE.match(model_name.lower())
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2) or 0)
+
+
+def _gpt_at_least(model_name: str, minimum: Tuple[int, int]) -> bool:
+    version = _gpt_version(model_name)
+    return version is not None and version >= minimum
+
+
 def _supports_xhigh_reasoning(model_name: str) -> bool:
     """Return whether a ChatGPT OAuth model supports xhigh reasoning."""
-    normalized_model_name = model_name.lower()
-    return "codex" in normalized_model_name or normalized_model_name.startswith(
-        ("gpt-5.4", "gpt-5.5", "gpt-5.6")
-    )
+    return "codex" in model_name.lower() or _gpt_at_least(model_name, (5, 4))
 
 
 def _supports_max_reasoning(model_name: str) -> bool:
     """Return whether a ChatGPT OAuth model supports max reasoning effort."""
-    return model_name.lower().startswith("gpt-5.6")
+    return _gpt_at_least(model_name, (5, 6))
+
+
+def _supports_responses_reasoning_controls(model_name: str) -> bool:
+    """GPT-5.6+ (incl. GPT-6) expose reasoning_context / reasoning_mode."""
+    return _gpt_at_least(model_name, (5, 6))
 
 
 def fetch_chatgpt_models(access_token: str, account_id: str) -> List[CodexModelInfo]:
@@ -431,7 +455,7 @@ def fetch_chatgpt_models(access_token: str, account_id: str) -> List[CodexModelI
     import platform
 
     # Build the models URL with client version
-    client_version = CHATGPT_OAUTH_CONFIG.get("client_version", "0.144.1")
+    client_version = CHATGPT_OAUTH_CONFIG.get("client_version", "0.153.3")
     base_url = CHATGPT_OAUTH_CONFIG["api_base_url"].rstrip("/")
     models_url = f"{base_url}/models"
 
@@ -525,7 +549,7 @@ def add_models_to_extra_config(models: List[Union[str, CodexModelInfo]]) -> bool
             # Responses-API models always support reasoning effort, summaries,
             # and text verbosity; per-model extras are added below.
             supported_settings = ["reasoning_effort", "summary", "verbosity"]
-            if model_name.lower().startswith("gpt-5.6"):
+            if _supports_responses_reasoning_controls(model_name):
                 supported_settings.extend(["reasoning_context", "reasoning_mode"])
 
             # xhigh: codex + GPT-5.4+; max: GPT-5.6+. Separate flags so a stronger
