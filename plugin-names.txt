@@ -38,6 +38,7 @@ ollama
 ollama_setup
 plugin_list
 pop_command
+profiles
 prompt_newline
 prune
 puppy_kennel
