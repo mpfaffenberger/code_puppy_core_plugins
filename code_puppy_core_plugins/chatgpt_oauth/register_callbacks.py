@@ -129,7 +129,7 @@ def _handle_custom_command(command: str, name: str) -> Optional[bool]:
 
     if name in {"chatgpt-auth", "codex-auth"}:
         run_oauth_flow()
-        set_model_and_reload_agent("codex-gpt-5.6-sol")
+        set_model_and_reload_agent(CHATGPT_OAUTH_CONFIG["default_model"])
         # Auth just succeeded: re-discover the auth-gated codex-imagegen skill now
         # rather than waiting for the next process restart.
         refresh_skill_cache()
@@ -205,7 +205,7 @@ def _create_chatgpt_oauth_model(
 
     # Build headers for ChatGPT Codex API
     originator = CHATGPT_OAUTH_CONFIG.get("originator", "codex_cli_rs")
-    client_version = CHATGPT_OAUTH_CONFIG.get("client_version", "0.144.1")
+    client_version = CHATGPT_OAUTH_CONFIG.get("client_version", "0.153.3")
 
     headers = {
         "ChatGPT-Account-Id": account_id,

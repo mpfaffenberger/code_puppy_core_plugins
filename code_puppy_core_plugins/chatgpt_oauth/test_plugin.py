@@ -314,8 +314,45 @@ def test_auth_command_refreshes_skill_cache():
         )
 
     oauth_flow.assert_called_once_with()
-    set_model.assert_called_once_with("codex-gpt-5.6-sol")
+    set_model.assert_called_once_with("codex-gpt-6-astra")
     refresh_skills.assert_called_once_with()
+
+
+def test_default_model_is_in_fallback_catalog():
+    """A default that isn't in the fallback list would 404 when /models is down."""
+    from code_puppy_core_plugins.chatgpt_oauth.config import CHATGPT_OAUTH_CONFIG
+
+    default = CHATGPT_OAUTH_CONFIG["default_model"]
+    prefix = CHATGPT_OAUTH_CONFIG["prefix"]
+    assert default.startswith(prefix)
+    assert default[len(prefix) :] in utils.DEFAULT_CODEX_MODELS
+
+
+def test_client_version_meets_gpt6_minimum():
+    """gpt-6-astra carries minimal_client_version 0.153.0 in the catalog."""
+    from code_puppy_core_plugins.chatgpt_oauth.config import CHATGPT_OAUTH_CONFIG
+
+    version = tuple(int(p) for p in CHATGPT_OAUTH_CONFIG["client_version"].split("."))
+    assert version >= (0, 153, 0)
+
+
+@pytest.mark.parametrize(
+    "name,xhigh,max_effort,responses_controls",
+    [
+        ("gpt-6-astra", True, True, True),
+        ("gpt-6-astra-pro", True, True, True),
+        ("gpt-5.6-sol", True, True, True),
+        ("gpt-5.5", True, False, False),
+        ("gpt-5.4-mini", True, False, False),
+        ("gpt-5.3-codex-spark", True, False, False),
+        ("codex-auto-review", True, False, False),
+        ("gpt-4o", False, False, False),
+    ],
+)
+def test_reasoning_gates_by_gpt_generation(name, xhigh, max_effort, responses_controls):
+    assert utils._supports_xhigh_reasoning(name) is xhigh
+    assert utils._supports_max_reasoning(name) is max_effort
+    assert utils._supports_responses_reasoning_controls(name) is responses_controls
 
 
 def test_codex_imagegen_agent_tool(tmp_path):
@@ -677,6 +714,19 @@ def test_add_models_to_chatgpt_config(tmp_path):
         assert loaded["codex-gpt-4o"]["oauth_source"] == "chatgpt-oauth-plugin"
         # Plain names resolve to the effective fallback, not the API spec.
         assert loaded["codex-gpt-4o"]["context_length"] == 258400
+
+
+def test_gpt6_astra_entry_gets_full_reasoning_surface(tmp_path):
+    with patch.object(
+        utils, "get_chatgpt_models_path", return_value=tmp_path / "chatgpt_models.json"
+    ):
+        assert utils.add_models_to_extra_config(["gpt-6-astra"])
+        entry = utils.load_chatgpt_models()["codex-gpt-6-astra"]
+
+    assert entry["supports_xhigh_reasoning"] is True
+    assert entry["supports_max_reasoning"] is True
+    assert "reasoning_context" in entry["supported_settings"]
+    assert "reasoning_mode" in entry["supported_settings"]
 
 
 if __name__ == "__main__":

@@ -28,8 +28,13 @@ CHATGPT_OAUTH_CONFIG: Dict[str, Any] = {
     # backend serves — never the raw number (openai/codex#31860, #32806).
     "default_context_length": 258400,
     "api_key_env_var": "CHATGPT_OAUTH_API_KEY",
-    # Codex CLI version info (for User-Agent header)
-    "client_version": "0.144.1",
+    # Codex CLI version info (for User-Agent header AND the /models
+    # ``client_version`` query param). The catalog gates models on it:
+    # gpt-6-astra has ``minimal_client_version: 0.153.0``, so an older value
+    # here silently hides newer models. Bump when a new generation lands.
+    "client_version": "0.153.3",
+    # Model selected right after a successful OAuth login.
+    "default_model": "codex-gpt-6-astra",
     "originator": "codex_cli_rs",
 }
 
