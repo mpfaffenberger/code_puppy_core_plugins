@@ -33,6 +33,7 @@ logfire_sessions
 meta_oauth
 namespace_skill_search
 no_tools
+notifier
 obsidian_agent
 ollama
 ollama_setup
