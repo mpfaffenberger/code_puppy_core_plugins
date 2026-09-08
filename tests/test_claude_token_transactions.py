@@ -122,6 +122,37 @@ def test_invalid_refresh_response_preserves_credentials(tokens, monkeypatch):
     assert tokens.read_bytes() == original
 
 
+def test_failed_exchange_backs_off_but_forced_refresh_still_rotates(
+    tokens, monkeypatch
+):
+    monkeypatch.setattr(token_store, "_exchange_blocked_until", 0.0)
+    responses = iter(
+        [
+            Mock(status_code=429, headers={"Retry-After": "45"}),
+            Mock(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                json=lambda: {"access_token": "new", "expires_in": 3600},
+            ),
+        ]
+    )
+    post = Mock(side_effect=lambda *a, **k: next(responses))
+    monkeypatch.setattr(utils.requests, "post", post)
+
+    # Expired-in-buffer token: first proactive attempt hits the endpoint and
+    # fails; the next ones must not touch the endpoint at all.
+    assert utils.refresh_access_token() is None
+    assert utils.refresh_access_token() is None
+    assert utils.refresh_access_token() is None
+    assert post.call_count == 1
+    remaining = token_store._exchange_blocked_until - time.monotonic()
+    assert 40 < remaining <= 45
+
+    # A rejected token (401 recovery) must still rotate despite the backoff.
+    assert utils.refresh_access_token(force=True, rejected_token="old") == "new"
+    assert post.call_count == 2
+
+
 @pytest.mark.asyncio
 async def test_runtime_providers_offload_blocking_io(monkeypatch):
     from code_puppy_core_plugins.claude_code_oauth import runtime_credentials
