@@ -6,16 +6,17 @@ import base64
 import hashlib
 import json
 import logging
-import re
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests
 
 from code_puppy_core_plugins.oauth_pasteback import parse_oauth_callback_input
+
+from .model_filter import filter_latest_claude_models
 
 from .config import (
     CLAUDE_CODE_OAUTH_CONFIG,
@@ -200,70 +201,12 @@ def update_claude_code_model_tokens(access_token: str) -> bool:
     return False
 
 
-def refresh_access_token(force: bool = False) -> Optional[str]:
-    tokens = load_stored_tokens()
-    if not tokens:
-        return None
+def refresh_access_token(
+    force: bool = False, *, rejected_token: str | None = None
+) -> Optional[str]:
+    from .token_store import refresh_access_token as refresh
 
-    if not force and not is_token_expired(tokens):
-        return tokens.get("access_token")
-
-    refresh_token = tokens.get("refresh_token")
-    if not refresh_token:
-        logger.debug("No refresh_token available")
-        return None
-
-    payload = {
-        "grant_type": "refresh_token",
-        "client_id": CLAUDE_CODE_OAUTH_CONFIG["client_id"],
-        "refresh_token": refresh_token,
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-    }
-
-    try:
-        response = requests.post(
-            CLAUDE_CODE_OAUTH_CONFIG["token_url"],
-            json=payload,
-            headers=headers,
-            timeout=30,
-        )
-        if response.status_code == 200:
-            content_type = response.headers.get("content-type", "")
-            if not content_type.startswith("application/json"):
-                logger.error(
-                    "Token refresh returned non-JSON response (Content-Type: %s): %s",
-                    content_type,
-                    response.text[:500],
-                )
-                return None
-            try:
-                new_tokens = response.json()
-            except (ValueError, json.JSONDecodeError) as e:
-                logger.error("Failed to parse token refresh response as JSON: %s", e)
-                return None
-            tokens["access_token"] = new_tokens.get("access_token")
-            tokens["refresh_token"] = new_tokens.get("refresh_token", refresh_token)
-            expires_in_value = new_tokens.get("expires_in")
-            if expires_in_value is None:
-                expires_in_value = tokens.get("expires_in")
-            if expires_in_value is not None:
-                tokens["expires_in"] = expires_in_value
-                tokens["expires_at"] = _calculate_expires_at(expires_in_value)
-            if save_tokens(tokens):
-                update_claude_code_model_tokens(tokens["access_token"])
-                return tokens["access_token"]
-        else:
-            logger.error(
-                "Token refresh failed: %s - %s", response.status_code, response.text
-            )
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.error("Token refresh error: %s", exc)
-    return None
+    return refresh(force=force, rejected_token=rejected_token)
 
 
 def get_valid_access_token() -> Optional[str]:
@@ -294,15 +237,9 @@ def get_valid_access_token() -> Optional[str]:
 
 
 def save_tokens(tokens: Dict[str, Any]) -> bool:
-    try:
-        token_path = get_token_storage_path()
-        with open(token_path, "w", encoding="utf-8") as handle:
-            json.dump(tokens, handle, indent=2)
-        token_path.chmod(0o600)
-        return True
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.error("Failed to save tokens: %s", exc)
-        return False
+    from .token_store import save_tokens as save
+
+    return save(tokens)
 
 
 def load_claude_models() -> Dict[str, Any]:
@@ -366,9 +303,13 @@ def load_claude_models_filtered() -> Dict[str, Any]:
 
 def save_claude_models(models: Dict[str, Any]) -> bool:
     try:
+        from code_puppy.atomic_io import atomic_write_bytes, path_lock
+
         models_path = get_claude_models_path()
-        with open(models_path, "w", encoding="utf-8") as handle:
-            json.dump(models, handle, indent=2)
+        with path_lock(str(models_path)):
+            if models_path.exists():
+                models_path.chmod(0o600)
+            atomic_write_bytes(str(models_path), json.dumps(models, indent=2).encode())
         return True
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Failed to save Claude models: %s", exc)
@@ -434,96 +375,6 @@ def exchange_code_for_tokens(
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Token exchange error: %s", exc)
     return None
-
-
-def filter_latest_claude_models(
-    models: List[str], max_per_family: Union[int, Dict[str, int]] = 2
-) -> List[str]:
-    """Filter models to keep the top N latest haiku, sonnet, and opus.
-
-    Parses model names in the format claude-{family}-{major}-{minor}-{date}
-    and returns the top ``max_per_family`` versions of each family
-    (haiku, sonnet, opus), sorted newest-first.
-
-    Args:
-        models: List of model name strings to filter.
-        max_per_family: Either a single int applied to all families, or a dict
-            mapping family name to its limit (e.g. ``{"opus": 3}``). Families
-            not present in the dict fall back to ``"default"`` key, or ``2``.
-    """
-    # Dedupe while preserving order: base and "-long" config entries share the
-    # same underlying model name, and a duplicate must not consume a slot of
-    # the per-family limit (e.g. [opus-5, opus-5, opus-4-8] silently dropping
-    # opus-4-7 at limit 3).
-    models = list(dict.fromkeys(models))
-
-    # Collect all parsed models per family
-    # family -> list of (model_name, major, minor, date)
-    family_models: Dict[str, List[Tuple[str, int, int, int]]] = {}
-
-    for model_name in models:
-        if model_name == "claude-opus-5":
-            family_models.setdefault("opus", []).append((model_name, 5, 0, 0))
-            continue
-        if model_name == "claude-opus-4-8":
-            family_models.setdefault("opus", []).append((model_name, 4, 8, 20250301))
-            continue
-        if model_name == "claude-opus-4-7":
-            family_models.setdefault("opus", []).append((model_name, 4, 7, 20250219))
-            continue
-        if model_name == "claude-opus-4-6":
-            family_models.setdefault("opus", []).append((model_name, 4, 6, 20260205))
-            continue
-        if model_name == "claude-sonnet-4-6":
-            family_models.setdefault("sonnet", []).append((model_name, 4, 6, 20250610))
-            continue
-        if model_name == "claude-sonnet-5":
-            family_models.setdefault("sonnet", []).append((model_name, 5, 0, 0))
-            continue
-        if model_name == "claude-fable-5":
-            family_models.setdefault("fable", []).append((model_name, 5, 0, 0))
-            continue
-        if model_name == "claude-fable-5-1":
-            family_models.setdefault("fable", []).append((model_name, 5, 1, 0))
-            continue
-        # Match pattern: claude-{family}-{major}-{minor}-{date}
-        # Examples: claude-haiku-3-5-20241022, claude-sonnet-4-5-20250929
-        match = re.match(r"claude-(haiku|sonnet|opus)-(\d+)-(\d+)-(\d+)", model_name)
-        if not match:
-            # Also try pattern with dots: claude-{family}-{major}.{minor}-{date}
-            match = re.match(
-                r"claude-(haiku|sonnet|opus)-(\d+)\.(\d+)-(\d+)", model_name
-            )
-
-        if not match:
-            continue
-
-        family = match.group(1)
-        major = int(match.group(2))
-        minor = int(match.group(3))
-        date = int(match.group(4))
-
-        family_models.setdefault(family, []).append((model_name, major, minor, date))
-
-    # Sort each family descending and keep the top N
-    filtered: List[str] = []
-    for family, family_entries in family_models.items():
-        if isinstance(max_per_family, dict):
-            limit = max_per_family.get(family, max_per_family.get("default", 2))
-        else:
-            limit = max_per_family
-        family_entries.sort(key=lambda e: (e[1], e[2], e[3]), reverse=True)
-        for entry in family_entries[:limit]:
-            filtered.append(entry[0])
-
-    logger.info(
-        "Filtered %d models to %d latest models (max_per_family=%s): %s",
-        len(models),
-        len(filtered),
-        max_per_family,
-        filtered,
-    )
-    return filtered
 
 
 def fetch_claude_code_models(access_token: str) -> Optional[List[str]]:

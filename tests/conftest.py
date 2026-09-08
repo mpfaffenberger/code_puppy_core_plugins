@@ -14,6 +14,7 @@ def _isolate_code_puppy_config(tmp_path, monkeypatch):
     from code_puppy import config
 
     config_dir = tmp_path / ".code_puppy"
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "code_puppy" / "data")
     monkeypatch.setattr(config, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(config, "CONFIG_FILE", config_dir / "puppy.cfg")
 

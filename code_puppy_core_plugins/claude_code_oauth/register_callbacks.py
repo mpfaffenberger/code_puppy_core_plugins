@@ -18,19 +18,13 @@ from code_puppy.callbacks import register_callback
 from code_puppy.i18n import t
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
 from code_puppy.model_switching import set_model_and_reload_agent
-from code_puppy.provider_identity import (
-    make_anthropic_provider,
-    resolve_provider_identity,
-)
 
 from ..oauth_pasteback import parse_oauth_callback_input, read_available_stdin_line
 from ..oauth_puppy_html import oauth_failure_html, oauth_success_html
 from .config import CLAUDE_CODE_OAUTH_CONFIG, get_token_storage_path
 from .fast_mode import (
     FAST_SETTING_KEY,
-    ensure_fast_beta_header,
     is_fast_mode_enabled,
-    patch_anthropic_client_fast_mode,
 )
 from .prompt_handler import prepare_claude_code_prompt
 from .utils import (
@@ -462,7 +456,9 @@ def _handle_custom_command(command: str, name: str) -> Optional[bool]:
     if name == "claude-code-logout":
         token_path = get_token_storage_path()
         if token_path.exists():
-            token_path.unlink()
+            from .token_store import remove_tokens
+
+            remove_tokens()
             emit_info(t("oauth.claude.cmd.logout.tokens_removed"))
 
         removed = remove_claude_code_models()
@@ -475,138 +471,10 @@ def _handle_custom_command(command: str, name: str) -> Optional[bool]:
     return None
 
 
-def _create_claude_code_model(model_name: str, model_config: Dict, config: Dict) -> Any:
-    """Create a Claude Code model instance.
+def _create_claude_code_model(model_name, model_config, config):
+    from .model_provider import create_claude_code_model
 
-    This handler is registered via the 'register_model_type' callback to handle
-    models with type='claude_code'.
-    """
-    from anthropic import AsyncAnthropic
-    from pydantic_ai.models.anthropic import AnthropicModel
-
-    from code_puppy.claude_cache_client import ClaudeCacheAsyncClient
-    from code_puppy.http_utils import get_cert_bundle_path
-    from code_puppy.model_factory import (
-        CONTEXT_1M_BETA,
-        get_custom_config,
-        make_model_settings,
-    )
-
-    url, headers, verify, api_key, timeout = get_custom_config(model_config)
-
-    # Refresh token if this is from the plugin
-    if model_config.get("oauth_source") == "claude-code-plugin":
-        refreshed_token = get_valid_access_token()
-        if refreshed_token:
-            api_key = refreshed_token
-            custom_endpoint = model_config.get("custom_endpoint")
-            if isinstance(custom_endpoint, dict):
-                custom_endpoint["api_key"] = refreshed_token
-
-    if not api_key:
-        emit_warning(
-            t(
-                "oauth.claude.model.no_api_key",
-                model=model_config.get("name") or "(unknown)",
-            )
-        )
-        return None
-
-    # Interleaved thinking (defaults True for OAuth models). NOTE: read via
-    # get_all_model_settings — these plugin-owned settings aren't in core's
-    # supported_settings allowlist (see fast_mode.FAST_SETTING_KEY).
-    from code_puppy.config import get_all_model_settings
-
-    per_model_settings = get_all_model_settings(model_name)
-    interleaved_thinking = per_model_settings.get("interleaved_thinking", True)
-    fast_enabled = bool(per_model_settings.get(FAST_SETTING_KEY, False))
-
-    # Handle anthropic-beta header based on interleaved_thinking setting
-    if "anthropic-beta" in headers:
-        beta_parts = [p.strip() for p in headers["anthropic-beta"].split(",")]
-        if interleaved_thinking:
-            if "interleaved-thinking-2025-05-14" not in beta_parts:
-                beta_parts.append("interleaved-thinking-2025-05-14")
-        else:
-            beta_parts = [p for p in beta_parts if "interleaved-thinking" not in p]
-        headers["anthropic-beta"] = ",".join(beta_parts) if beta_parts else None
-        if headers.get("anthropic-beta") is None:
-            del headers["anthropic-beta"]
-    elif interleaved_thinking:
-        headers["anthropic-beta"] = "interleaved-thinking-2025-05-14"
-
-    # Add 1M context beta header for long-context models
-    if model_config.get("context_length", 0) >= 1_000_000:
-        if "anthropic-beta" in headers:
-            beta_parts = [p.strip() for p in headers["anthropic-beta"].split(",")]
-            if CONTEXT_1M_BETA not in beta_parts:
-                beta_parts.append(CONTEXT_1M_BETA)
-            headers["anthropic-beta"] = ",".join(beta_parts)
-        else:
-            headers["anthropic-beta"] = CONTEXT_1M_BETA
-
-    # Fast mode: append fast-mode-2026-02-01 beta marker when enabled
-    ensure_fast_beta_header(headers, fast_enabled)
-
-    # Use a dedicated client wrapper for OAuth refresh and tool-name transport
-    # transformations; prompt-cache markers are owned by model settings.
-    if verify is None:
-        verify = get_cert_bundle_path()
-
-    # No HTTP/2 for OAuth: the UnprefixingStream tool-name rewrite breaks under
-    # HTTP/2's compression handling, causing zlib decompression errors.
-    client = ClaudeCacheAsyncClient(
-        headers=headers,
-        verify=verify,
-        timeout=180,
-        http2=False,
-        # Claude Code OAuth requires the ``cp_`` tool-name prefix; the wire
-        # format Anthropic's CLI uses won't accept un-prefixed tools.
-        apply_claude_code_prefix=True,
-        oauth_reauthentication_callback=lambda: _reauthenticate_after_expired_oauth(
-            model_name
-        ),
-    )
-
-    anthropic_client = AsyncAnthropic(
-        base_url=url,
-        http_client=client,
-        auth_token=api_key,
-    )
-
-    def _update_runtime_token(access_token: str) -> None:
-        anthropic_client.auth_token = access_token
-        custom_endpoint = model_config.get("custom_endpoint")
-        if isinstance(custom_endpoint, dict):
-            custom_endpoint["api_key"] = access_token
-
-    client.set_token_update_callback(_update_runtime_token)
-    # Fast mode wrapper re-reads the setting on every call so
-    # /claude-code-fast takes effect live.
-
-    patch_anthropic_client_fast_mode(anthropic_client, model_name)
-    anthropic_client.api_key = None
-    anthropic_client.auth_token = api_key
-    provider = make_anthropic_provider(
-        resolve_provider_identity(model_name, model_config),
-        anthropic_client=anthropic_client,
-    )
-    # Prompt caching belongs to pydantic-ai's native Anthropic settings, not
-    # the transport shim. OAuth subscription models receive the free one-hour
-    # TTL at all three cache breakpoints.
-    model_settings = make_model_settings(model_name)
-    model_settings.update(
-        {
-            "anthropic_cache_instructions": "1h",
-            "anthropic_cache_tool_definitions": "1h",
-            "anthropic_cache_messages": "1h",
-        }
-    )
-    return AnthropicModel(
-        model_name=model_config["name"],
-        provider=provider,
-        settings=model_settings,
-    )
+    return create_claude_code_model(model_name, model_config, config)
 
 
 def _register_model_types() -> List[Dict[str, Any]]:
@@ -624,12 +492,7 @@ async def _on_agent_run_start(
     model_name: str,
     session_id: Optional[str] = None,
 ) -> None:
-    """Start token refresh heartbeat for Claude Code OAuth models.
-
-    This callback is triggered when an agent run starts. If the model is a
-    Claude Code OAuth model, we start a background heartbeat to keep the
-    token fresh during long-running operations.
-    """
+    """Start token refresh heartbeat for Claude Code OAuth models."""
     # Only start heartbeat for Claude Code models
     if not model_name.startswith("claude-code"):
         return
@@ -637,12 +500,14 @@ async def _on_agent_run_start(
     try:
         from .token_refresh_heartbeat import TokenRefreshHeartbeat
 
+        key = (agent_name, model_name, session_id)
+        existing = _active_heartbeats.get(key)
+        if existing:
+            existing[1] += 1
+            return
         heartbeat = TokenRefreshHeartbeat()
+        _active_heartbeats[key] = [heartbeat, 1]
         await heartbeat.start()
-
-        # Store heartbeat for cleanup, keyed by session_id
-        key = session_id or "default"
-        _active_heartbeats[key] = heartbeat
         logger.debug(
             "Started token refresh heartbeat for session %s (model: %s)",
             key,
@@ -663,14 +528,16 @@ async def _on_agent_run_end(
     response_text: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Stop token refresh heartbeat when agent run ends.
-
-    This callback is triggered when an agent run completes (success or failure).
-    We stop any heartbeat that was started for this session.
-    """
+    """Stop token refresh heartbeat when agent run ends."""
     # We don't use response_text or metadata, just cleanup the heartbeat
-    key = session_id or "default"
-    heartbeat = _active_heartbeats.pop(key, None)
+    key = (agent_name, model_name, session_id)
+    entry = _active_heartbeats.get(key)
+    if entry is None:
+        return
+    entry[1] -= 1
+    if entry[1]:
+        return
+    heartbeat = _active_heartbeats.pop(key)[0]
 
     if heartbeat is not None:
         try:
@@ -685,11 +552,7 @@ async def _on_agent_run_end(
 
 
 def _hook_check_token_expiry() -> bool:
-    """Hook: is the stored Claude Code OAuth token inside its refresh window?
-
-    Consumed by core's ``ClaudeCacheAsyncClient._check_stored_token_expiry``
-    (replacing a direct core->plugin import).
-    """
+    """Hook: is the stored Claude Code OAuth token inside its refresh window?"""
     tokens = load_stored_tokens()
     if not tokens:
         return False
@@ -697,10 +560,7 @@ def _hook_check_token_expiry() -> bool:
 
 
 def _hook_refresh_token() -> Optional[str]:
-    """Hook: force a refresh-token exchange, returning the new access token.
-
-    Consumed by core's ``ClaudeCacheAsyncClient._refresh_claude_oauth_token``.
-    """
+    """Hook: force a refresh-token exchange, returning the new access token."""
     return refresh_access_token(force=True)
 
 
