@@ -123,10 +123,15 @@ def create_claude_code_model(model_name: str, model_config: Dict, config: Dict) 
         ),
     )
 
+    # The transport already retries 429/5xx/connection errors with backoff,
+    # and the agent runtime retries the turn on top of that. The SDK's own
+    # retries would multiply every hard failure 3x -- a 429 storm is exactly
+    # when hammering the endpoint makes things worse.
     anthropic_client = AsyncAnthropic(
         base_url=url,
         http_client=client,
         auth_token=api_key,
+        max_retries=0,
     )
 
     def _update_runtime_token(access_token: str) -> None:
