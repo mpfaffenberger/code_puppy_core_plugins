@@ -34,6 +34,7 @@ agent_creator_skill = "code_puppy_core_plugins.agent_creator_skill.register_call
 aws_bedrock = "code_puppy_core_plugins.aws_bedrock.register_callbacks"
 azure_foundry = "code_puppy_core_plugins.azure_foundry.register_callbacks"
 auto_continue = "code_puppy_core_plugins.auto_continue.register_callbacks"
+browser_harness = "code_puppy_core_plugins.browser_harness.register_callbacks"
 btw = "code_puppy_core_plugins.btw.register_callbacks"
 chatgpt_oauth = "code_puppy_core_plugins.chatgpt_oauth.register_callbacks"
 claude_code_hooks = "code_puppy_core_plugins.claude_code_hooks.register_callbacks"
