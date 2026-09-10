@@ -41,6 +41,7 @@ pop_command
 profiles
 prompt_newline
 prune
+pup_lint
 puppy_kennel
 puppy_spinner
 qa_kitten_skill
