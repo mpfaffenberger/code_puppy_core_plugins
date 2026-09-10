@@ -16,6 +16,11 @@ def _isolate_code_puppy_config(tmp_path, monkeypatch):
     config_dir = tmp_path / ".code_puppy"
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "code_puppy" / "data")
     monkeypatch.setattr(config, "CONFIG_DIR", config_dir)
+    # Refresh-failure backoff is process state; never let one test's failed
+    # exchange silence the next test's refresh.
+    from code_puppy_core_plugins.claude_code_oauth import token_store
+
+    monkeypatch.setattr(token_store, "_exchange_blocked_until", 0.0)
     monkeypatch.setattr(config, "CONFIG_FILE", config_dir / "puppy.cfg")
 
 

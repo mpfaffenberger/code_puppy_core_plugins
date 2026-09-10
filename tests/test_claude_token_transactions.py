@@ -122,6 +122,95 @@ def test_invalid_refresh_response_preserves_credentials(tokens, monkeypatch):
     assert tokens.read_bytes() == original
 
 
+def test_failed_exchange_backs_off_but_forced_refresh_still_rotates(
+    tokens, monkeypatch
+):
+    monkeypatch.setattr(token_store, "_exchange_blocked_until", 0.0)
+    responses = iter(
+        [
+            Mock(status_code=429, headers={"Retry-After": "45"}),
+            Mock(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                json=lambda: {"access_token": "new", "expires_in": 3600},
+            ),
+        ]
+    )
+    post = Mock(side_effect=lambda *a, **k: next(responses))
+    monkeypatch.setattr(utils.requests, "post", post)
+
+    # Expired-in-buffer token: first proactive attempt hits the endpoint and
+    # fails; the next ones must not touch the endpoint at all.
+    assert utils.refresh_access_token() is None
+    assert utils.refresh_access_token() is None
+    assert utils.refresh_access_token() is None
+    assert post.call_count == 1
+    remaining = token_store._exchange_blocked_until - time.monotonic()
+    assert 40 < remaining <= 45
+
+    # A rejected token (401 recovery) must still rotate despite the backoff.
+    assert utils.refresh_access_token(force=True, rejected_token="old") == "new"
+    assert post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_hard_429_is_not_multiplied_by_sdk_retries(monkeypatch):
+    """Transport retries alone; the SDK must not wrap them 3x (6 -> 18 hits)."""
+    import httpx2
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+    from pydantic_ai.models import ModelRequestParameters
+
+    from code_puppy import claude_cache_client
+    from code_puppy_core_plugins.claude_code_oauth import model_provider
+
+    hits = []
+
+    def transport(request):
+        hits.append(request.url.path)
+        return httpx2.Response(
+            429, json={"error": {"type": "rate_limit_error", "message": "Error"}}
+        )
+
+    real_client = claude_cache_client.ClaudeCacheAsyncClient
+
+    def with_mock_transport(*args, **kwargs):
+        kwargs["transport"] = httpx2.MockTransport(transport)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(
+        claude_cache_client, "ClaudeCacheAsyncClient", with_mock_transport
+    )
+    monkeypatch.setattr(claude_cache_client.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(model_provider, "emit_warning", Mock())
+    monkeypatch.setattr(
+        "code_puppy.model_factory.get_custom_config",
+        lambda cfg: ("https://api.anthropic.com", {}, None, "tok", None),
+    )
+    monkeypatch.setattr(
+        "code_puppy_core_plugins.claude_code_oauth.register_callbacks.get_valid_access_token",
+        lambda: "tok",
+    )
+
+    model = model_provider.create_claude_code_model(
+        "claude-code-claude-sonnet-5",
+        {
+            "name": "claude-sonnet-5",
+            "oauth_source": "claude-code-plugin",
+            "custom_endpoint": {"url": "https://api.anthropic.com"},
+            "context_length": 200000,
+        },
+        {},
+    )
+    with pytest.raises(Exception) as excinfo:
+        await model.request(
+            [ModelRequest(parts=[UserPromptPart("hi")])],
+            None,
+            ModelRequestParameters(),
+        )
+    assert "429" in str(excinfo.value) or "rate_limit" in str(excinfo.value)
+    assert len(hits) == claude_cache_client.MAX_RETRIES + 1
+
+
 @pytest.mark.asyncio
 async def test_runtime_providers_offload_blocking_io(monkeypatch):
     from code_puppy_core_plugins.claude_code_oauth import runtime_credentials

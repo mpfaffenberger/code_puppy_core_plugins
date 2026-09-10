@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from contextlib import contextmanager
 from threading import RLock
 
@@ -19,6 +20,23 @@ from .config import CLAUDE_CODE_OAUTH_CONFIG
 
 logger = logging.getLogger(__name__)
 _thread_lock = RLock()
+
+# After a failed exchange, stop retrying on every request: the old token is
+# still usable until it actually expires, and hammering the token endpoint
+# is what earns 429s from it. Retry-After from the endpoint overrides this.
+REFRESH_FAILURE_BACKOFF_SECONDS = 30.0
+_exchange_blocked_until = 0.0
+
+
+def _note_exchange_failure(retry_after=None):
+    global _exchange_blocked_until
+    delay = REFRESH_FAILURE_BACKOFF_SECONDS
+    try:
+        if retry_after is not None:
+            delay = max(delay, float(retry_after))
+    except (TypeError, ValueError):
+        pass
+    _exchange_blocked_until = time.monotonic() + min(delay, 600.0)
 
 
 @contextmanager
@@ -81,6 +99,11 @@ def refresh_access_token(force=False, *, rejected_token=None):
                 not force or current != rejected
             ):
                 return current
+            # A forced refresh means the API rejected this token, so it must
+            # rotate regardless; a proactive refresh can wait out the backoff.
+            if not force and time.monotonic() < _exchange_blocked_until:
+                logger.debug("Skipping token exchange during failure backoff")
+                return None
             return _exchange_access_token(tokens)
     except Exception as exc:
         logger.error("Claude token refresh failed: %s", type(exc).__name__)
@@ -148,6 +171,9 @@ def _exchange_access_token(tokens) -> str | None:
                 return tokens["access_token"]
         else:
             logger.error("Token refresh failed: HTTP %s", response.status_code)
+            _note_exchange_failure(response.headers.get("Retry-After"))
+            return None
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Token refresh error: %s", exc)
+    _note_exchange_failure()
     return None
