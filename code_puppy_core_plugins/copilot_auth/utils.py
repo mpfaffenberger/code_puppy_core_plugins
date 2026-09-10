@@ -450,11 +450,79 @@ def remove_copilot_models() -> int:
     return 0
 
 
-def fetch_copilot_models(session_token: str, host: str = "github.com") -> List[str]:
+# API families a Copilot model can be driven through.  Stored on each
+# registered model as ``copilot_api`` so ``_create_copilot_model`` knows
+# whether to build a Chat Completions or a Responses model.
+COPILOT_API_CHAT = "chat"
+COPILOT_API_RESPONSES = "responses"
+
+_CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+_RESPONSES_ENDPOINT = "/responses"
+
+
+def preferred_api_for_endpoints(supported_endpoints: Any) -> str:
+    """Pick the API family for a model from its ``supported_endpoints``.
+
+    The Copilot ``/models`` catalogue lists, per model, which HTTP paths it
+    accepts (e.g. ``["/responses", "ws:/responses"]`` for GPT-5.5/5.6, or
+    ``["/chat/completions", "/v1/messages"]`` for Claude).  Chat Completions
+    is the default; Responses is only chosen when the model does *not*
+    accept Chat Completions, so dual-endpoint models keep today's behaviour.
+    """
+    if not isinstance(supported_endpoints, list):
+        return COPILOT_API_CHAT
+    endpoints = {str(ep).strip().lower() for ep in supported_endpoints}
+    if _RESPONSES_ENDPOINT in endpoints and _CHAT_COMPLETIONS_ENDPOINT not in endpoints:
+        return COPILOT_API_RESPONSES
+    return COPILOT_API_CHAT
+
+
+def _catalogue_entry(raw: Any) -> Optional[Dict[str, Any]]:
+    """Normalise one ``/models`` item (dict or bare id) to a plugin entry.
+
+    Returns ``{"id", "api", "context_length"}`` or ``None`` when the item has
+    no usable id.  ``context_length`` is the catalogue's
+    ``max_context_window_tokens`` when present, else ``None``.
+
+    Already-normalised entries (the output of this function, as handed back
+    to :func:`add_models_to_config`) pass through unchanged.
+    """
+    if isinstance(raw, str):
+        if not raw:
+            return None
+        return {"id": raw, "api": COPILOT_API_CHAT, "context_length": None}
+    if not isinstance(raw, dict):
+        return None
+    model_id = raw.get("id") or raw.get("name")
+    if not model_id:
+        return None
+
+    api = raw.get("api")
+    if api in (COPILOT_API_CHAT, COPILOT_API_RESPONSES):
+        # Already normalised -- keep the api decision made from the catalogue.
+        ctx = raw.get("context_length")
+    else:
+        api = preferred_api_for_endpoints(raw.get("supported_endpoints"))
+        capabilities = raw.get("capabilities") or {}
+        limits = capabilities.get("limits") if isinstance(capabilities, dict) else None
+        ctx = (limits or {}).get("max_context_window_tokens")
+
+    return {
+        "id": model_id,
+        "api": api,
+        "context_length": ctx if isinstance(ctx, int) and ctx > 0 else None,
+    }
+
+
+def fetch_copilot_models(
+    session_token: str, host: str = "github.com"
+) -> List[Dict[str, Any]]:
     """Try to fetch the model catalogue from the Copilot API.
 
-    Falls back to ``DEFAULT_COPILOT_MODELS`` if the endpoint is unavailable.
-    Uses the host-specific API endpoint discovered during token exchange.
+    Returns a list of ``{"id", "api", "context_length"}`` dicts (see
+    :func:`_catalogue_entry`).  Falls back to ``DEFAULT_COPILOT_MODELS`` if
+    the endpoint is unavailable.  Uses the host-specific API endpoint
+    discovered during token exchange.
     """
     api_base = get_api_endpoint_for_host(host)
     url = f"{api_base}/models"
@@ -472,22 +540,23 @@ def fetch_copilot_models(session_token: str, host: str = "github.com") -> List[s
             data = resp.json()
             model_list = data.get("data") or data.get("models") or []
             if isinstance(model_list, list):
-                ids = []
-                for m in model_list:
-                    if isinstance(m, dict):
-                        mid = m.get("id") or m.get("name")
-                        if mid:
-                            ids.append(mid)
-                    elif isinstance(m, str):
-                        ids.append(m)
-                if ids:
-                    logger.info("Fetched %d models from Copilot API", len(ids))
-                    return ids
+                entries = [
+                    entry
+                    for entry in (_catalogue_entry(m) for m in model_list)
+                    if entry is not None
+                ]
+                if entries:
+                    logger.info("Fetched %d models from Copilot API", len(entries))
+                    return entries
     except Exception as exc:
         logger.debug("Could not fetch Copilot model list: %s", exc)
 
     logger.info("Using default Copilot model list")
-    return DEFAULT_COPILOT_MODELS
+    return [
+        entry
+        for entry in (_catalogue_entry(m) for m in DEFAULT_COPILOT_MODELS)
+        if entry is not None
+    ]
 
 
 def _is_claude_model(model_name: str) -> bool:
@@ -550,30 +619,44 @@ def _model_settings_for(model_name: str) -> Dict[str, Any]:
 
 
 def add_models_to_config(
-    models: List[str],
+    models: List[Any],
     host: str = "github.com",
 ) -> bool:
-    """Register Copilot models in copilot_models.json."""
+    """Register Copilot models in copilot_models.json.
+
+    *models* is what :func:`fetch_copilot_models` returns; bare id strings
+    are also accepted and treated as Chat Completions models.
+    """
     try:
         copilot_models = load_copilot_models()
         added = 0
         prefix = COPILOT_AUTH_CONFIG["prefix"]
         # Use the API endpoint from session-token exchange (critical for GHE).
         api_url = get_api_endpoint_for_host(host)
-        for model_name in models:
+        for raw in models:
+            catalogue = _catalogue_entry(raw)
+            if catalogue is None:
+                continue
+            model_name = catalogue["id"]
             prefixed = f"{prefix}{model_name}"
+            context_length = catalogue[
+                "context_length"
+            ] or COPILOT_MODEL_CONTEXT_LENGTHS.get(
+                model_name,
+                COPILOT_AUTH_CONFIG["default_context_length"],
+            )
             entry: Dict[str, Any] = {
                 "type": "copilot",
                 "name": model_name,
                 "custom_endpoint": {
                     "url": api_url,
                 },
-                "context_length": COPILOT_MODEL_CONTEXT_LENGTHS.get(
-                    model_name,
-                    COPILOT_AUTH_CONFIG["default_context_length"],
-                ),
+                "context_length": context_length,
                 "copilot_host": host,
                 "oauth_source": "copilot-auth-plugin",
+                # Which API family the model is served through; consumed by
+                # ``_create_copilot_model`` to pick Chat vs Responses.
+                "copilot_api": catalogue["api"],
             }
             # Merge family-specific settings (supported_settings, etc.)
             entry.update(_model_settings_for(model_name))
