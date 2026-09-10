@@ -31,13 +31,15 @@ Callback -> effect:
 * ``agent_run_cancel`` / ``interactive_turn_end`` .... reset -> idle
 * ``interactive_turn_cancel`` ........................ reset -> idle
 * ``awaiting_user_input`` ............................ blocked <-> not
+* ``post_autosave`` .................................. title refresh / wait
 
 Session identity is the durable autosave (name, path) resolved by
 ``sources.current_session_ref`` -- NOT the per-run ``group_id`` UUID, which
-changes every turn. Pane metadata (model / context / tokens) and the
-best-effort activity ``message`` are decorative: they never perturb the
-authoritative state and never delay a state edge, session reference, or the
-final ``pane.release_agent`` on exit.
+changes every turn. Pane metadata (model / context / tokens), the
+session namer's conversation title, and the best-effort activity
+``message`` are decorative: they never perturb the authoritative state and
+never delay a state edge, session reference, or the final
+``pane.release_agent`` on exit.
 
 Handlers are plain sync functions that swallow every argument: the callback
 dispatcher passes hook args positionally and runs sync callbacks happily
@@ -90,6 +92,11 @@ def _on_turn_end(*_args, **_kw) -> None:
     _reporter.on_turn_end()
 
 
+def _on_post_autosave(*_args, **_kw) -> None:
+    # (SessionMetadata,) -- the reporter reads the sidecar itself.
+    _reporter.on_post_autosave()
+
+
 def _on_tool_start(*args, **kwargs):
     # (tool_name, tool_args, context=None). Decorative only -> return None so
     # the tool is never blocked or transformed.
@@ -127,6 +134,7 @@ if _reporter.active:
     register_callback("agent_run_cancel", _on_run_cancel)
     register_callback("interactive_turn_end", _on_turn_end)
     register_callback("interactive_turn_cancel", _on_turn_end)
+    register_callback("post_autosave", _on_post_autosave)
     register_callback("pre_tool_call", _on_tool_start)
     register_callback("post_tool_call", _on_tool_complete)
     register_callback("awaiting_user_input", _on_awaiting_user_input)

@@ -7,13 +7,16 @@ environment variables:
 * ``HERDR_ENV=1``          -- marks the pane as herdr-managed
 * ``HERDR_SOCKET_PATH``    -- path to herdr's local control socket
 * ``HERDR_PANE_ID``        -- the pane this process owns (e.g. ``w1:p1``)
+* ``HERDR_TAB_ID``         -- the workspace tab (e.g. ``w1:t1``); optional
 
 This module speaks herdr's newline-delimited JSON socket protocol far
 enough to call ``pane.report_agent`` / ``pane.report_agent_session`` /
-``pane.report_metadata`` / ``pane.release_agent``. It reads herdr's ack
-(and retries a few times if it doesn't come) so an authoritative state
-edge is never silently lost, but it never raises into the caller:
-reporting agent state must never be able to disturb the agent itself.
+``pane.report_metadata`` / ``pane.release_agent`` -- plus ``tab.get`` /
+``tab.rename`` for the workspace-tab label (only while the tab holds a
+single pane). It reads herdr's ack (and retries a few times if it
+doesn't come) so an authoritative state edge is never silently lost, but
+it never raises into the caller: reporting agent state must never be
+able to disturb the agent itself.
 
 Delivery runs on a single daemon worker thread fed by **coalescing
 mailbox slots** rather than an unbounded queue:
@@ -75,6 +78,8 @@ _M_STATE = "pane.report_agent"
 _M_SESSION = "pane.report_agent_session"
 _M_METADATA = "pane.report_metadata"
 _M_RELEASE = "pane.release_agent"
+_M_TAB_GET = "tab.get"
+_M_TAB_RENAME = "tab.rename"
 
 
 class HerdrClient:
@@ -84,9 +89,11 @@ class HerdrClient:
         self,
         socket_path: Optional[str] = None,
         pane_id: Optional[str] = None,
+        tab_id: Optional[str] = None,
     ) -> None:
         self._socket_path = socket_path or os.environ.get("HERDR_SOCKET_PATH")
         self._pane_id = pane_id or os.environ.get("HERDR_PANE_ID")
+        self._tab_id = tab_id or os.environ.get("HERDR_TAB_ID")
         self._active = bool(
             os.environ.get("HERDR_ENV") == "1"
             and self._socket_path
@@ -102,6 +109,13 @@ class HerdrClient:
         # Decorative lane (latest-wins, discarded on release).
         self._message: Optional[Dict[str, Any]] = None
         self._metadata: Optional[Dict[str, Any]] = None
+        # Tab-label job slot (latest-wins; survives release scheduling so
+        # the exit-time restore still drains before the release).
+        self._tab: Optional[Dict[str, Any]] = None
+        # Tab-label ownership state (guarded by ``self._cond``).
+        self._tab_original: Optional[str] = None
+        self._tab_renamed = False
+        self._tab_last_label: Optional[str] = None
         # Terminal release slot.
         self._release: Optional[Dict[str, Any]] = None
 
@@ -173,16 +187,73 @@ class HerdrClient:
             return
         self._put("_session", params)
 
-    def report_metadata(self, tokens: Dict[str, Any]) -> None:
-        """Report pane metadata (model / context / tokens) on the decorative lane."""
-        if not tokens:
+    def report_metadata(
+        self,
+        tokens: Optional[Dict[str, Any]] = None,
+        *,
+        title: Optional[str] = None,
+        clear_title: bool = False,
+    ) -> None:
+        """Report pane metadata on the decorative lane (latest wins).
+
+        ``tokens`` are herdr's ``$token`` sidebar values; ``title`` sets the
+        pane presentation title (pane border + sidebar ``pane`` token);
+        ``clear_title`` drops it. No-op when nothing is set: herdr rejects
+        empty metadata envelopes. Note herdr replaces the whole per-source
+        metadata entry on each report, so a caller that sets a title must
+        keep re-sending it on later tokens-only reports or it is wiped.
+        """
+        if clear_title and title is not None:
+            # Caller bug: herdr rejects setting and clearing in one report.
+            # Clearing wins -- a stale title is less wrong than a rejected one.
+            title = None
+        if not clear_title and title is None and not tokens:
             return
         params: Dict[str, Any] = {
             "applies_to_source": SOURCE,
             "ttl_ms": _METADATA_TTL_MS,
-            "tokens": dict(tokens),
         }
+        if clear_title:
+            params["clear_title"] = True
+        elif title is not None:
+            params["title"] = title
+        if tokens:
+            params["tokens"] = dict(tokens)
         self._put("_metadata", params)
+
+    def set_tab_label(
+        self, label: Optional[str], *, expected: Optional[str] = None
+    ) -> None:
+        """Set the label of the herdr workspace tab we run in, or restore it.
+
+        ``label=None`` restores the label that was in place when we first
+        took ownership (and only while the tab still shows ``expected`` --
+        a label the user changed meanwhile is left alone). The tab is only
+        ever relabelled when it holds a single pane: the tab bar is a
+        user-managed surface, and a tab shared with other panes is never
+        touched. Enqueued on the decorative lane; never blocks the caller,
+        and is a no-op when ``HERDR_TAB_ID`` is unset.
+        """
+        if not self._active or not self._tab_id:
+            return
+        with self._cond:
+            if label is not None:
+                if label == self._tab_last_label:
+                    return
+                if (
+                    self._tab is not None
+                    and self._tab["op"] == "set"
+                    and self._tab["label"] == label
+                ):
+                    return  # an identical set is already queued
+            elif not self._tab_renamed and self._tab is None:
+                return  # never renamed and nothing queued: nothing to restore
+            self._tab = {
+                "op": "restore" if label is None else "set",
+                "label": label,
+                "expected": expected,
+            }
+            self._cond.notify()
 
     def _put(self, slot: str, params: Dict[str, Any]) -> None:
         if not self._active:
@@ -249,6 +320,11 @@ class HerdrClient:
             if self._metadata is not None:
                 params, self._metadata = self._metadata, None
                 return _M_METADATA, params
+        # The tab job drains even while closing: the exit-time label
+        # restore is shutdown work and must land before the release.
+        if self._tab is not None:
+            job, self._tab = self._tab, None
+            return _M_TAB_RENAME, job
         if self._closing and self._release is not None:
             params, self._release = self._release, None
             return _M_RELEASE, params
@@ -266,7 +342,10 @@ class HerdrClient:
                     self._cond.wait()
                     job = self._take_next_locked()
                 method, params = job
-            self._send(method, params)
+            if method == _M_TAB_RENAME:
+                self._do_tab(params)
+            else:
+                self._send(method, params)
             if method == _M_RELEASE:
                 self._released.set()
                 return
@@ -286,6 +365,10 @@ class HerdrClient:
                 **params,
             },
         }
+        self._transmit(method, envelope)
+
+    def _transmit(self, method: str, envelope: Dict[str, Any]) -> None:
+        """Fire-and-forget send with retry-until-acked. Never raises."""
         payload = (json.dumps(envelope) + "\n").encode("utf-8")
         last_exc: Optional[Exception] = None
         for attempt in range(_SEND_ATTEMPTS):
@@ -334,6 +417,102 @@ class HerdrClient:
         with open(pipe_name, "r+b", buffering=0) as pipe:
             pipe.write(payload)
             return bool(pipe.readline(_ACK_BYTES))
+
+    # -- tab label -----------------------------------------------------
+
+    def _do_tab(self, job: Dict[str, Any]) -> None:
+        """Apply a tab-label set or restore, with the ownership gate.
+
+        Runs on the worker. The tab is only ever relabelled by us while it
+        holds exactly one pane: herdr's tab bar is a user-managed surface,
+        and a tab shared with other panes is never touched. The original
+        label is captured on first takeover and restored on a clean exit
+        -- but only while the tab still shows the label we last set, so a
+        manual rename by the user is never clobbered.
+        """
+        info = self._request(_M_TAB_GET, {"tab_id": self._tab_id}) or {}
+        result = info.get("result") if isinstance(info.get("result"), dict) else {}
+        tab = result.get("tab") if isinstance(result.get("tab"), dict) else {}
+        if tab.get("pane_count") != 1:
+            return  # shared or vanished tab: leave its label alone
+        current = tab.get("label")
+        label = job.get("label")
+        with self._cond:
+            if label is None:  # restore
+                if not (self._tab_renamed and self._tab_original):
+                    return
+                expected = job.get("expected")
+                if expected is not None and current != expected:
+                    return  # the user changed it meanwhile; leave it
+                target = self._tab_original
+            else:
+                if not self._tab_renamed:
+                    self._tab_original = current
+                self._tab_renamed = True
+                self._tab_last_label = label
+                target = label
+        if current != target:
+            seq = self._next_seq()
+            self._transmit(
+                _M_TAB_RENAME,
+                {
+                    "id": f"{SOURCE}:{seq}",
+                    "method": _M_TAB_RENAME,
+                    "params": {"tab_id": self._tab_id, "label": target},
+                },
+            )
+        if label is None:
+            with self._cond:
+                self._tab_renamed = False
+                self._tab_original = None
+                self._tab_last_label = None
+
+    def _request(self, method: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """One request/response round-trip on a fresh connection.
+
+        Used only for the tab-info read (``tab.get``). Unlike fire-and-forget
+        reports, the response carries data we need; any failure degrades to
+        ``None`` and the caller simply skips the operation.
+        """
+        seq = self._next_seq()
+        envelope = {"id": f"{SOURCE}:{seq}", "method": method, "params": params}
+        payload = (json.dumps(envelope) + "\n").encode("utf-8")
+        try:
+            raw = (
+                self._request_pipe(payload)
+                if os.name == "nt"
+                else self._request_unix(payload)
+            )
+        except (OSError, ValueError):
+            logger.debug("herdr %s failed", method, exc_info=True)
+            return None
+        if not raw:
+            return None
+        try:
+            reply = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            return None
+        return reply if isinstance(reply, dict) else None
+
+    def _request_unix(self, payload: bytes) -> bytes:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(_CONNECT_TIMEOUT_S)
+            sock.connect(self._socket_path)  # type: ignore[arg-type]
+            sock.sendall(payload)
+            line = b""
+            while not line.endswith(b"\n") and len(line) < 65536:
+                chunk = sock.recv(_ACK_BYTES)
+                if not chunk:
+                    break
+                line += chunk
+        return line
+
+    def _request_pipe(self, payload: bytes) -> bytes:
+        # Same named-pipe mapping as ``_deliver_pipe`` (see there).
+        pipe_name = "\\\\.\\pipe\\" + str(self._socket_path)
+        with open(pipe_name, "r+b", buffering=0) as pipe:
+            pipe.write(payload)
+            return pipe.readline(65536)
 
 
 __all__ = ["HerdrClient", "SOURCE", "AGENT"]

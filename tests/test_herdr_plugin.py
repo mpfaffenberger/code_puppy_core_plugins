@@ -8,10 +8,13 @@ Covers:
 
 * ``HerdrReporter`` -- the event -> state machine (dedup, refcount,
   blocked/idle arbitration), driven through a fake client.
+* turn-end pane metadata (model / context / tokens).
 * the core wiring -- ``command_runner.set_awaiting_user_input`` firing the
   ``awaiting_user_input`` callback that feeds the reporter.
-* ``HerdrClient`` -- the socket transport (env-gated activation, a real
-  ``AF_UNIX`` round-trip, seq monotonicity, and retry-until-acked delivery).
+
+Title / tab-label propagation lives in ``test_herdr_titles.py``; the socket
+transport lives in ``test_herdr_client.py`` and ``test_herdr_tab_label.py``.
+The shared ``FakeClient`` lives in ``tests/herdr_test_support.py``.
 """
 
 from __future__ import annotations
@@ -28,36 +31,7 @@ from code_puppy_core_plugins.herdr.reporter import (
     WORKING,
     HerdrReporter,
 )
-
-
-class FakeClient:
-    """Records report calls instead of touching a socket."""
-
-    def __init__(self, active: bool = True) -> None:
-        self.active = active
-        self.states: list[tuple[str, str | None]] = []
-        self.activity: list[tuple[str, str | None, bool]] = []
-        self.sessions: list[tuple[str, str]] = []
-        self.metadata: list[dict] = []
-        self.closed = False
-
-    def report_state(
-        self, state, agent_session_id=None, *, message=None, critical=True
-    ):
-        self.states.append((state, agent_session_id))
-        self.activity.append((state, message, critical))
-
-    def report_session(self, agent_session_id, session_path=None):
-        self.sessions.append((agent_session_id, session_path))
-
-    def report_metadata(self, tokens):
-        self.metadata.append(tokens)
-
-    def release_and_close(self, timeout_s=1.0):
-        self.closed = True
-
-    def close(self):
-        self.closed = True
+from tests.herdr_test_support import FakeClient
 
 
 def _states(fake: FakeClient) -> list[str]:
@@ -265,22 +239,34 @@ def test_reporter_emits_metadata_at_turn_end():
     fake = FakeClient()
     r = HerdrReporter(fake)
     payload = {"model": "claude", "context": "42%", "tokens": "48k/200k"}
-    with patch(
-        "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
-        return_value=payload,
+    with (
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
+            return_value=payload,
+        ),
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_session_title",
+            return_value=None,
+        ),
     ):
         r.on_run_start()
         r.on_turn_end()
-    assert fake.metadata == [payload]
+    assert fake.metadata == [(payload, None, False)]
 
 
 def test_reporter_skips_metadata_when_payload_unavailable():
-    """No usage -> no metadata report (pane keeps last good values / TTL)."""
+    """No usage and no title change -> no metadata report."""
     fake = FakeClient()
     r = HerdrReporter(fake)
-    with patch(
-        "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
-        return_value=None,
+    with (
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
+            return_value=None,
+        ),
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_session_title",
+            return_value=None,
+        ),
     ):
         r.on_run_start()
         r.on_turn_end()
@@ -297,9 +283,15 @@ def test_reporter_metadata_computed_outside_lock():
         observed["locked"] = r._lock.locked()
         return {"context": "1%", "tokens": "1k/200k"}
 
-    with patch(
-        "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
-        side_effect=_probe,
+    with (
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
+            side_effect=_probe,
+        ),
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_session_title",
+            return_value=None,
+        ),
     ):
         r.on_turn_end()
     assert observed["locked"] is False

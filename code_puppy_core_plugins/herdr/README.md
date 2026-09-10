@@ -11,13 +11,14 @@ This plugin teaches code-puppy to report that state authoritatively.
 
 ## What it does
 
-herdr injects three environment variables into every pane it owns:
+herdr injects four environment variables into every pane it owns:
 
 | variable            | meaning                                   |
 | ------------------- | ----------------------------------------- |
 | `HERDR_ENV=1`       | this shell is running inside a herdr pane |
 | `HERDR_SOCKET_PATH` | herdr's local control socket              |
 | `HERDR_PANE_ID`     | the pane this process owns (e.g. `w1:p1`) |
+| `HERDR_TAB_ID`      | the workspace tab (e.g. `w1:t1`)          |
 
 On startup the plugin checks for those. If they're absent it does
 **nothing** -- zero overhead, zero output, no behaviour change, no socket,
@@ -94,6 +95,55 @@ when the reference actually changes (after `/clear`, `/session new`,
 This is a stable *reference*; automatic process restoration from it is
 **unverified** and not claimed here.
 
+## Conversation titles
+
+The `session_namer` plugin auto-names every conversation (the titles you
+see in `/resume`). This plugin propagates the current session's title to
+two herdr surfaces:
+
+* the pane's **presentation title**, which herdr renders as the pane
+  border label and the sidebar `pane` token, and
+* the **workspace tab label** in herdr's tab bar -- but only while the
+  tab holds a single pane (the one running this code-puppy). The tab bar
+  is a user-managed surface, so a tab shared with other panes is never
+  touched.
+
+Add the `pane` token to `rows_by_agent` to show the title in the sidebar
+too:
+
+```toml
+[ui.sidebar.agents.rows_by_agent]
+codepuppy = [
+  ["state_icon", "workspace", "tab"],
+  ["agent", "$model", "pane"],
+  ["$context", "$tokens"],
+]
+```
+
+The title is read from the session metadata sidecar that `session_namer`
+maintains (the same store `/resume` reads). The pane presentation title
+rides the same `pane.report_metadata` envelope as the token payload:
+herdr replaces the whole per-source metadata entry on each report, so
+every turn-end report re-sends the title (or a `clear_title` on a
+set-to-none transition) and a title change is reported title-only the
+moment it is seen. The tab label follows the same title changes via
+`tab.rename`, guarded by a `tab.get` read of the tab's `pane_count`; on
+a clean exit the original label is restored -- but only while the tab
+still shows the label we last set, so a tab you renamed by hand is never
+clobbered (a crashed exit simply leaves the last title in place, like
+the stale-pane case above).
+
+Because the namer names the session *asynchronously* after each autosave,
+a bounded background wait (2s ticks, 90s ceiling -- the namer's own model
+call is capped at 60s) picks the title up a few seconds after the turn
+ends instead of waiting for the next turn. The wait is single-flight,
+pinned to the session that triggered it, and skipped when the
+`session_namer` plugin is disabled via its `session_namer` config value.
+A session switch clears the previous session's title on the next prompt
+(and restores the tab label). As with the token payload, the pane title
+self-expires after the 24h metadata TTL, and all of this is decorative:
+it never touches the authoritative state and is a no-op outside herdr.
+
 ## Notifications are herdr's job
 
 The plugin sends no notifications itself. herdr derives attention and
@@ -103,7 +153,8 @@ plugin's only job is to report accurate state.
 
 ## Release on exit
 
-On `session_end` / `shutdown` the plugin calls `pane.release_agent` once
+On `session_end` / `shutdown` the plugin restores the workspace tab label
+(if it relabelled one) and then calls `pane.release_agent` once
 (idempotent, bounded) so herdr knows code-puppy has let go of the pane --
 no lingering stale `working`. There is no intermediate `idle` report on
 shutdown; if herdr is unavailable the release is bounded and can never
@@ -147,9 +198,9 @@ state, metadata, and activity.
 | ----------------------- | ------------------------------------------- |
 | `client.py`             | herdr socket transport (JSON, worker thread)|
 | `reporter.py`           | event -> state machine (refcount + dedup)   |
-| `sources.py`            | fail-soft adapters (tokens / session / msg) |
+| `sources.py`            | fail-soft adapters (tokens / title / session / msg) |
 | `register_callbacks.py` | callback wiring + env activation guard       |
-| `smoke.py`              | manual live smoke test (disposable pane)     |
+| `smoke.py`              | manual live smoke test (disposable pane + tab) |
 
 ## Live smoke test
 
@@ -163,6 +214,6 @@ python -m code_puppy_core_plugins.herdr.smoke
 
 It creates its **own** disposable pane, drives the real client through
 every protocol-16 method (state edges, session reference, metadata,
-release), reads each result back with `herdr pane get`, then closes the
-disposable pane -- your working pane is never touched. Exits non-zero if
-any check fails.
+conversation title, release), reads each result back with
+`herdr pane get`, then closes the disposable pane -- your working pane is
+never touched. Exits non-zero if any check fails.
