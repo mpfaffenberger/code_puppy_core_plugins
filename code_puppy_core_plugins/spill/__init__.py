@@ -1,1 +1,1 @@
-"""Keep oversized dict-shaped tool results out of model context."""
+"""Keep oversized dict- and BaseModel-shaped tool results out of context."""
