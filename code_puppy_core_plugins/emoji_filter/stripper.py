@@ -31,10 +31,15 @@ _EMOJI_RE = re.compile(
 )
 
 
-def strip_emojis(text: str) -> str:
+def strip_emojis(text: str, *, preserve_width: bool = False) -> str:
     """Return ``text`` with emoji codepoints removed. None-safe on non-strings."""
     if not isinstance(text, str) or not text:
         return text
+    if preserve_width:
+        from wcwidth import wcswidth
+
+        # Terminal output is already laid out: deletion would move borders.
+        return _EMOJI_RE.sub(lambda match: " " * max(0, wcswidth(match.group())), text)
     return _EMOJI_RE.sub("", text)
 
 

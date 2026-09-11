@@ -161,7 +161,7 @@ class _FilteringWriter:
 
     def write(self, text: Any) -> Any:
         if is_enabled() and isinstance(text, str):
-            text = strip_emojis(text)
+            text = strip_emojis(text, preserve_width=True)
         return self._target.write(text)
 
     def flush(self) -> Any:
