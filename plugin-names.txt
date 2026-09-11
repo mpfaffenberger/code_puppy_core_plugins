@@ -2,6 +2,7 @@ acp
 agent_skills
 agent_creator_skill
 aws_bedrock
+background_agents
 azure_foundry
 auto_continue
 btw

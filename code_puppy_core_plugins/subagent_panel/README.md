@@ -12,7 +12,10 @@ bouncing puppy:
 Milo is thinking... (  o  )
 ```
 
-- Line 1 is the `INVOKE AGENT` banner (same color/styling as core).
+- Line 1 is the `INVOKE AGENT` banner (same color/styling as core). /fork-started
+  runs show `FORK`, and fire-and-forget background delegations show a
+  `BACKGROUND` badge instead, so a non-blocking invocation is never mistaken for
+  a blocking one.
 - Line 2 is a single-char animated spinner + `mm:ss` elapsed + the current
   activity, color-coded: **yellow** = calling a tool, **magenta** = thinking,
   **green** = writing the response.

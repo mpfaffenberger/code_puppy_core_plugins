@@ -48,6 +48,7 @@ def register(
     model: Optional[str] = None,
     parent: Optional[str] = None,
     is_fork: bool = False,
+    background: bool = False,
 ) -> None:
     if not session_id:
         return
@@ -61,6 +62,7 @@ def register(
             "name": name,
             "model": model,
             "is_fork": is_fork,
+            "background": background,
             "status": "starting",
             "start": existing["start"] if existing else now,
             "last_seen": now,

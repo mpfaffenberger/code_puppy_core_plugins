@@ -304,12 +304,16 @@ def _install_emit_hook() -> None:
                 # ``is_fork`` is core-optional (added after this plugin existed);
                 # default False keeps old-core rows rendering exactly as before.
                 is_fork = getattr(message, "is_fork", False)
+                # ``background`` is likewise core-optional; a missing attr
+                # (older core) simply renders the row as a normal invocation.
+                background = getattr(message, "background", False)
                 state.register(
                     message.session_id,
                     message.agent_name,
                     model,
                     parent=parent,
                     is_fork=is_fork,
+                    background=background,
                 )
                 _push_panel(force=True)
                 _start_ticker()  # keeps mm:ss advancing through silence
