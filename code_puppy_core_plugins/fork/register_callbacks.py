@@ -286,15 +286,15 @@ async def _run_fork(
 
 
 def _first_line(text: Any) -> str:
-    """First line of ``text``, or the whole stripped string when it has none.
+    """First line of ``text``, or ``""`` when it has no non-blank content.
 
-    ``str(text).strip().splitlines()`` is ``[]`` for an empty or whitespace-only
-    error, so indexing ``[0]`` blindly raised IndexError -- which the surrounding
-    ``except`` then swallowed, marking the fork ``failed`` with no banner at all.
+    A whitespace-only error strips to no lines, so indexing ``[0]`` blindly
+    raised IndexError -- which the surrounding ``except`` then swallowed,
+    marking the fork ``failed`` with no banner at all.
     """
     stripped = str(text).strip()
     lines = stripped.splitlines()
-    return lines[0] if lines else stripped
+    return lines[0] if lines else ""
 
 
 def _on_fork_done(fork_id: int, task: asyncio.Task) -> None:
@@ -332,16 +332,23 @@ def _on_fork_done(fork_id: int, task: asyncio.Task) -> None:
             f"{tag} finished in {record.elapsed:.1f}s"
             + (f" — session '{record.session_id}'" if record.session_id else "")
         )
-    except Exception as exc:  # banner must never break the loop
-        # Never let an unexpected error leave the fork marked failed *silently*:
-        # emit what we can, but keep the emit itself from breaking the loop.
-        record.status = "failed"
-        detail = _first_line(exc) or "no error detail provided"
+    except Exception as exc:
+        # Never let an unexpected error leave the fork silent: emit what we can,
+        # but keep the emit itself from breaking the loop. A fork that already
+        # finished stays ``done`` -- a render failure must not relabel real work
+        # as a failure. Bare exceptions carry no message, so fall back to the
+        # exception type name rather than an empty banner.
+        detail = _first_line(exc) or type(exc).__name__
+        if record.status == "done":
+            message = f"{tag} completed but could not render its result: {detail}"
+        else:
+            record.status = "failed"
+            message = f"{tag} failed after {record.elapsed:.1f}s: {detail}"
         try:
-            _emit_error(f"{tag} failed after {record.elapsed:.1f}s: {detail}")
+            _emit_error(message)
         except Exception:  # pragma: no cover - banner must never break the loop
-            logger.debug(
-                "fork %s: could not emit failure banner", fork_id, exc_info=True
+            logger.warning(
+                "fork %s: could not emit completion banner", fork_id, exc_info=True
             )
 
 

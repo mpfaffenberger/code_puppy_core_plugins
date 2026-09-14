@@ -330,7 +330,7 @@ async def test_fork_reports_whitespace_only_error_without_crashing():
 
 
 async def test_fork_unexpected_banner_error_is_not_silent():
-    """An unexpected error while rendering still surfaces a failure banner."""
+    """A render failure is loud, but does not relabel a successful fork as failed."""
     errors = []
     with (
         patch(
@@ -347,8 +347,28 @@ async def test_fork_unexpected_banner_error_is_not_silent():
         await _wait_for_forks()
 
     record = next(iter(rc._forks.values()))
-    assert record.status == "failed"
+    # The sub-agent succeeded; only rendering broke, so it stays done.
+    assert record.status == "done"
     assert any("render blew up" in str(m) for m in errors)
+    assert any("could not render" in str(m) for m in errors)
+
+
+async def test_fork_render_failure_falls_back_to_exception_type():
+    """A message-less exception still produces a diagnosable banner."""
+    errors = []
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=_fake_impl(),
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_agent_response", side_effect=RuntimeError()),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork fine prompt")
+        await _wait_for_forks()
+
+    assert any("RuntimeError" in str(m) for m in errors)
 
 
 async def test_fork_reports_crash_as_failure():
