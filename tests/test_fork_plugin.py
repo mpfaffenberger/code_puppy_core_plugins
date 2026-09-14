@@ -298,6 +298,59 @@ async def test_fork_reports_result_error_as_failure():
     assert not any("traceback junk" in str(m) for m in errors)
 
 
+def test_first_line_falls_back_when_there_are_no_lines():
+    assert rc._first_line("") == ""
+    assert rc._first_line("   \n\t  ") == ""
+    assert rc._first_line("model exploded\ntraceback junk") == "model exploded"
+    assert rc._first_line(RuntimeError("kaboom")) == "kaboom"
+
+
+async def test_fork_reports_whitespace_only_error_without_crashing():
+    """ "   " is truthy, so it enters the failure branch -- but strips to no lines.
+
+    Previously ``str(error).strip().splitlines()[0]`` raised IndexError, which
+    the outer ``except`` swallowed: the fork went ``failed`` with no banner.
+    """
+    errors = []
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=_fake_impl(error="   \n\t  "),
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork doomed prompt")
+        await _wait_for_forks()
+
+    record = next(iter(rc._forks.values()))
+    assert record.status == "failed"
+    assert len(errors) == 1
+    assert "no error detail provided" in str(errors[0])
+
+
+async def test_fork_unexpected_banner_error_is_not_silent():
+    """An unexpected error while rendering still surfaces a failure banner."""
+    errors = []
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=_fake_impl(),
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(
+            rc, "_emit_agent_response", side_effect=RuntimeError("render blew up")
+        ),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork fine prompt")
+        await _wait_for_forks()
+
+    record = next(iter(rc._forks.values()))
+    assert record.status == "failed"
+    assert any("render blew up" in str(m) for m in errors)
+
+
 async def test_fork_reports_crash_as_failure():
     async def boom(
         context,
