@@ -372,7 +372,7 @@ def _create_copilot_model(model_name: str, model_config: Dict, config: Dict) -> 
     everything else keeps using Chat Completions.
     """
     import httpx
-    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+    from pydantic_ai.models.openai import OpenAIResponsesModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
     from code_puppy.http_utils import create_async_client
@@ -466,7 +466,11 @@ def _create_copilot_model(model_name: str, model_config: Dict, config: Dict) -> 
         patch_client_for_stable_ids(client)
         model_cls: Any = OpenAIResponsesModel
     else:
-        model_cls = OpenAIChatModel
+        # CopilotChatModel, not OpenAIChatModel: Copilot's non-streaming bodies omit
+        # `object` and `choices[].index`, which pydantic-ai validates strictly.
+        from .chat_model import CopilotChatModel
+
+        model_cls = CopilotChatModel
     return model_cls(
         model_name=model_config["name"],
         provider=provider,
