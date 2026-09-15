@@ -35,11 +35,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import itertools
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from code_puppy.callbacks import register_callback
+
+logger = logging.getLogger(__name__)
 
 _FORK = "fork"
 _FORKS = "forks"
@@ -282,6 +285,18 @@ async def _run_fork(
             )
 
 
+def _first_line(text: Any) -> str:
+    """First line of ``text``, or ``""`` when it has no non-blank content.
+
+    A whitespace-only error strips to no lines, so indexing ``[0]`` blindly
+    raised IndexError -- which the surrounding ``except`` then swallowed,
+    marking the fork ``failed`` with no banner at all.
+    """
+    stripped = str(text).strip()
+    lines = stripped.splitlines()
+    return lines[0] if lines else ""
+
+
 def _on_fork_done(fork_id: int, task: asyncio.Task) -> None:
     """Done-callback (runs in-loop): record outcome + emit a banner."""
     record = _forks.get(fork_id)
@@ -304,8 +319,8 @@ def _on_fork_done(fork_id: int, task: asyncio.Task) -> None:
         record.session_id = getattr(result, "session_id", None)
         if getattr(result, "error", None):
             record.status = "failed"
-            first_line = str(result.error).strip().splitlines()[0]
-            _emit_error(f"{tag} failed after {record.elapsed:.1f}s: {first_line}")
+            detail = _first_line(result.error) or "no error detail provided"
+            _emit_error(f"{tag} failed after {record.elapsed:.1f}s: {detail}")
             return
         record.status = "done"
         response = getattr(result, "response", None)
@@ -317,8 +332,25 @@ def _on_fork_done(fork_id: int, task: asyncio.Task) -> None:
             f"{tag} finished in {record.elapsed:.1f}s"
             + (f" — session '{record.session_id}'" if record.session_id else "")
         )
-    except Exception:  # pragma: no cover - banner must never break the loop
-        record.status = "failed"
+    except Exception as exc:
+        # Never let an unexpected error leave the fork silent: emit what we can,
+        # but keep the emit itself from breaking the loop. Only a fork still
+        # ``running`` may be promoted to ``failed`` -- every other status is a
+        # truthful terminal state (``done`` / ``cancelled``) that a rendering
+        # failure must not overwrite. Bare exceptions carry no message, so fall
+        # back to the exception type name rather than an empty banner.
+        detail = _first_line(exc) or type(exc).__name__
+        if record.status == "running":
+            record.status = "failed"
+            message = f"{tag} failed after {record.elapsed:.1f}s: {detail}"
+        else:
+            message = f"{tag} {record.status} but could not render its result: {detail}"
+        try:
+            _emit_error(message)
+        except Exception:  # pragma: no cover - banner must never break the loop
+            logger.warning(
+                "fork %s: could not emit completion banner", fork_id, exc_info=True
+            )
 
 
 def _start_fork(agent_name: str, prompt: str, model_name: str | None = None) -> None:
