@@ -6,18 +6,26 @@ debug level, and returns a safe fallback -- reporting to herdr must never
 be able to disturb the agent. Reporter/client code depends only on this
 module's return shapes, and its tests mock this module.
 
-Three adapters:
+Adapters:
 
 * :func:`current_tokens_payload` -- a static-keyed, string-valued map of
   ``model`` / ``context`` / ``tokens`` for ``pane.report_metadata``.
-* :func:`current_session_ref` -- a stable ``(session_id, session_path)``
-  reference for ``pane.report_agent_session``.
+* :func:`current_session_title` -- the session namer's auto-generated
+  conversation title (the ``/resume`` name) for the pane presentation
+  title, read from the session metadata sidecar.
+* :func:`naming_enabled` -- whether the ``session_namer`` plugin is
+  enabled, so the reporter only waits for a title a naming job will
+  produce.
+* :func:`current_session_name` / :func:`current_session_ref` -- a stable
+  ``(session_id, session_path)`` reference for
+  ``pane.report_agent_session``.
 * :func:`activity_message` -- a short human-readable activity string for
   the decorative ``message`` field on ``pane.report_agent``.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Dict, Optional, Tuple
 
@@ -25,6 +33,9 @@ logger = logging.getLogger(__name__)
 
 #: herdr caps metadata values; keep every value comfortably short.
 _MAX_VALUE_LEN = 128
+
+#: herdr clips the pane presentation title at 80 characters.
+_TITLE_MAX_LEN = 80
 
 
 def _compact_tokens(n: int) -> str:
@@ -86,6 +97,72 @@ def current_tokens_payload() -> Optional[Dict[str, str]]:
         return None
 
 
+def current_session_name() -> Optional[str]:
+    """The durable current session name, or ``None``. Never raises."""
+    try:
+        from code_puppy.config import get_current_session_name
+
+        return get_current_session_name() or None
+    except Exception:
+        logger.debug("herdr: session name unavailable", exc_info=True)
+        return None
+
+
+def _session_sidecar_meta(session_name: str) -> dict:
+    """The session's metadata sidecar as a dict. ``{}`` when unreadable."""
+    try:
+        from pathlib import Path
+
+        from code_puppy.config import AUTOSAVE_DIR
+        from code_puppy.session_storage import build_session_paths
+
+        paths = build_session_paths(Path(AUTOSAVE_DIR), session_name)
+        with paths.metadata_path.open(encoding="utf-8") as file:
+            meta = json.load(file)
+        return meta if isinstance(meta, dict) else {}
+    except Exception:
+        logger.debug("herdr: sidecar unreadable", exc_info=True)
+        return {}
+
+
+def current_session_title() -> Optional[str]:
+    """The current session's auto-named title (the ``/resume`` name).
+
+    Read from the metadata sidecar the ``session_namer`` plugin maintains.
+    ``None`` when the session is unnamed or unreadable -- fail-soft, never
+    raises. Clipped to herdr's presentation-title limit.
+    """
+    name = current_session_name()
+    if name is None:
+        return None
+    title = _session_sidecar_meta(name).get("title")
+    if not isinstance(title, str):
+        return None
+    title = title.strip()
+    if not title:
+        return None
+    return title[:_TITLE_MAX_LEN]
+
+
+def naming_enabled() -> bool:
+    """Whether the ``session_namer`` plugin is enabled for this process.
+
+    Mirrors the namer's own gate (the ``session_namer`` config value, on by
+    default) so the herdr plugin only waits for a title a naming job will
+    produce. The namer keeps its disable list private, so this mirrors the
+    check instead of importing across plugins.
+    """
+    try:
+        from code_puppy.config import get_value
+
+        raw = get_value("session_namer")
+        if raw is None or str(raw).strip() == "":
+            return True  # on by default -- the naming IS the feature
+        return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    except Exception:
+        return False
+
+
 def current_session_ref() -> Optional[Tuple[str, str]]:
     """Return ``(session_id, session_path)`` for the process's autosave.
 
@@ -94,15 +171,15 @@ def current_session_ref() -> Optional[Tuple[str, str]]:
     canonical because the CLI pins the resolved stem and writes later saves
     to ``AUTOSAVE_DIR``. Returns ``None`` on any failure.
     """
+    name = current_session_name()
+    if not name:
+        return None
     try:
         from pathlib import Path
 
-        from code_puppy.config import AUTOSAVE_DIR, get_current_session_name
+        from code_puppy.config import AUTOSAVE_DIR
         from code_puppy.session_storage import build_session_paths
 
-        name = get_current_session_name()
-        if not name:
-            return None
         paths = build_session_paths(Path(AUTOSAVE_DIR), name)
         return name, str(paths.pickle_path)
     except Exception:
@@ -128,6 +205,9 @@ def activity_message(tool_name: str) -> str:
 
 __all__ = [
     "current_tokens_payload",
+    "current_session_name",
+    "current_session_title",
     "current_session_ref",
+    "naming_enabled",
     "activity_message",
 ]

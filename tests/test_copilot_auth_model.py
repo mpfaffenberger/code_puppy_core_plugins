@@ -449,3 +449,119 @@ class TestCreateCopilotModel:
         profile = result.profile
         # No thinking field should be configured for GPT models
         assert profile.get("openai_chat_thinking_field") is None
+
+
+# ---------------------------------------------------------------------------
+# Chat Completions vs Responses API selection
+# ---------------------------------------------------------------------------
+
+
+class TestCopilotApiSelection:
+    """Responses-only Copilot models (GPT-5.5/5.6, Codex) must not hit
+    ``/chat/completions`` -- Copilot rejects that with
+    ``unsupported_api_for_model``."""
+
+    def _create(self, config: dict):
+        from code_puppy_core_plugins.copilot_auth.register_callbacks import (
+            _create_copilot_model,
+        )
+
+        with (
+            patch(
+                "code_puppy_core_plugins.copilot_auth.register_callbacks.get_token_for_host",
+                return_value=FakeCopilotToken(
+                    host="github.com", oauth_token="ghp_real"
+                ),
+            ),
+            patch(
+                "code_puppy_core_plugins.copilot_auth.register_callbacks.get_valid_session_token",
+                return_value="session_token",
+            ),
+            patch(
+                "code_puppy_core_plugins.copilot_auth.register_callbacks.get_api_endpoint_for_host",
+                return_value="https://api.githubcopilot.com",
+            ),
+        ):
+            return _create_copilot_model(f"copilot-{config['name']}", config, {})
+
+    def test_uses_responses_api_flag_true(self):
+        from code_puppy_core_plugins.copilot_auth.register_callbacks import (
+            _uses_responses_api,
+        )
+
+        assert _uses_responses_api(
+            {"name": "gpt-5.6-terra", "copilot_api": "responses"}
+        )
+        assert _uses_responses_api({"name": "gpt-4o", "copilot_api": "RESPONSES"})
+
+    def test_uses_responses_api_flag_false(self):
+        from code_puppy_core_plugins.copilot_auth.register_callbacks import (
+            _uses_responses_api,
+        )
+
+        # Explicit "chat" wins even for names the heuristic would route elsewhere.
+        assert not _uses_responses_api({"name": "gpt-5.4", "copilot_api": "chat"})
+        assert not _uses_responses_api(
+            {"name": "claude-sonnet-5", "copilot_api": "chat"}
+        )
+
+    def test_uses_responses_api_heuristic_when_key_missing(self):
+        from code_puppy_core_plugins.copilot_auth.register_callbacks import (
+            _uses_responses_api,
+        )
+
+        # Legacy copilot_models.json entries have no copilot_api key.
+        assert _uses_responses_api({"name": "gpt-5.6-terra"})
+        assert _uses_responses_api({"name": "gpt-5.3-codex"})
+        assert not _uses_responses_api({"name": "gpt-4o"})
+        assert not _uses_responses_api({"name": "claude-opus-4.6"})
+        assert not _uses_responses_api({"name": "gemini-2.5-pro"})
+
+    def test_responses_model_for_responses_only_entry(self):
+        from pydantic_ai.models.openai import OpenAIResponsesModel
+
+        config = _model_config(name="gpt-5.6-terra")
+        config["copilot_api"] = "responses"
+        result = self._create(config)
+
+        assert isinstance(result, OpenAIResponsesModel)
+        assert result.model_name == "gpt-5.6-terra"
+        # Same provider wiring as the chat path: dynamic auth still attached.
+        http_client = result._provider.client._client
+        assert http_client.auth._oauth_token == "ghp_real"
+        # And the stable-id SSE shim is installed on the client.
+        assert getattr(http_client.send, "__name__", "") == "_patched_send"
+
+    def test_chat_model_for_chat_entry(self):
+        from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+
+        config = _model_config(name="gpt-5.4")
+        config["copilot_api"] = "chat"
+        result = self._create(config)
+
+        assert isinstance(result, OpenAIChatModel)
+        assert not isinstance(result, OpenAIResponsesModel)
+        # Chat path leaves the client's send untouched (no Responses shim).
+        http_client = result._provider.client._client
+        assert getattr(http_client.send, "__name__", "") != "_patched_send"
+
+    def test_claude_entry_keeps_chat_model_and_reasoning_profile(self):
+        from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+
+        config = _model_config(name="claude-sonnet-5")
+        config["copilot_api"] = "chat"
+        result = self._create(config)
+
+        assert isinstance(result, OpenAIChatModel)
+        assert not isinstance(result, OpenAIResponsesModel)
+        assert result.profile.get("openai_chat_thinking_field") == "reasoning_text"
+
+    def test_legacy_entry_without_key_uses_heuristic(self):
+        from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+
+        assert isinstance(
+            self._create(_model_config(name="gpt-5.6-terra")), OpenAIResponsesModel
+        )
+        legacy_gpt4o = self._create(_model_config(name="gpt-4o"))
+        assert isinstance(legacy_gpt4o, OpenAIChatModel)
+        assert not isinstance(legacy_gpt4o, OpenAIResponsesModel)

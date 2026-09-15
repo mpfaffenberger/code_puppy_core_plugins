@@ -322,7 +322,7 @@ def test_render_wrapper_filters_terminal_output():
         renderer.output.write("hello \U0001f436 world")
         renderer.output.flush()
 
-    assert target.getvalue() == "hello  world"
+    assert target.getvalue() == "hello    world"
 
     disabled_target = io.StringIO()
     disabled_renderer = termflow.Renderer(output=disabled_target)
@@ -331,6 +331,26 @@ def test_render_wrapper_filters_terminal_output():
         disabled_renderer.output.flush()
     assert disabled_target.getvalue() == "hello \U0001f436 world"
     assert getattr(termflow.Renderer, module._RENDER_WRAPPER_FLAG) is True
+
+
+@pytest.mark.parametrize("cell", ["\u2705", "\U0001f436", "\U0001f1fa\U0001f1f8"])
+def test_render_filter_keeps_table_borders_aligned(cell):
+    import termflow
+    from termflow.ansi import visible
+    from wcwidth import wcswidth
+
+    module = _plugin_module()
+    module._install_render_wrapper()
+    target = io.StringIO()
+    markdown = f"| A | B |\n| --- | ---: |\n| text | {cell} |\n"
+    with patch.object(module, "is_enabled", return_value=True):
+        termflow.Renderer(output=target, width=80).render_all(
+            termflow.Parser().parse_document(markdown)
+        )
+    rendered = visible(target.getvalue())
+    assert cell not in rendered
+    lines = [line for line in rendered.splitlines() if line.strip()]
+    assert len({wcswidth(line) for line in lines}) == 1
 
 
 # ---------------------------------------------------------------------------

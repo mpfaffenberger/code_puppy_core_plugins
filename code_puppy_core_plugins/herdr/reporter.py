@@ -26,12 +26,19 @@ Effective state::
 Sub-agents fire the same ``agent_run_start`` / ``agent_run_end`` hooks as the
 root agent, so we refcount active runs (the same pattern the puppy_spinner
 plugin uses) rather than flipping idle when a sub-agent finishes.
+
+Beyond state, the reporter propagates the session namer's auto-generated
+conversation title to the pane (presentation title: herdr's pane border and
+the sidebar ``pane`` token). The namer names the session asynchronously
+after each autosave, so a bounded background wait re-reads the sidecar and
+reports the title the moment it lands, without waiting for the next turn.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Optional, Tuple
 
 from .client import HerdrClient
@@ -47,6 +54,11 @@ IDLE = "idle"
 # State stays authoritative; these are best-effort colour commentary.
 THINKING = "thinking"
 AWAITING = "awaiting input"
+
+# The namer's model call has its own 60s timeout; the wait for a fresh
+# title must cover that plus queueing slack, then give up.
+_TITLE_WAIT_INTERVAL_S = 2.0
+_TITLE_WAIT_TIMEOUT_S = 90.0
 
 
 class HerdrReporter:
@@ -66,6 +78,13 @@ class HerdrReporter:
         # Durable session reference (name, pickle_path) — NOT the per-run group_id UUID,
         # which changes every turn and can't identify a resumable session.
         self._session_ref: Optional[Tuple[str, str]] = None
+        # The title we believe herdr currently shows for our source (herdr
+        # replaces the whole per-source metadata entry per report, so this
+        # must always match the last envelope we sent).
+        self._reported_title: Optional[str] = None
+        # Single-flight background wait for the namer's async title write.
+        self._title_wait: Optional[threading.Thread] = None
+        self._title_wait_session: Optional[str] = None
 
     @property
     def active(self) -> bool:
@@ -139,6 +158,26 @@ class HerdrReporter:
     def on_user_prompt(self, *_ignored) -> None:
         # Ignore the callback's per-run group_id; resolve the durable session.
         self._refresh_session()
+        # The title belongs to the session: a resumed or fresh session shows
+        # its own title (or none) without waiting for the next turn.
+        self._refresh_title()
+
+    def on_post_autosave(self, *_ignored) -> None:
+        """A session was just saved: report a fresh title, or wait for one.
+
+        The namer names the conversation asynchronously after this event, so
+        a title typically lands seconds later. When the session is still
+        unnamed and the namer is enabled, a bounded background wait reports
+        the title as soon as it appears. No-op outside herdr.
+        """
+        if not self._client.active:
+            return
+        if sources.current_session_title() is not None:
+            self._refresh_title()
+            return
+        if not sources.naming_enabled():
+            return
+        self._start_title_wait()
 
     def on_run_start(self, *_ignored) -> None:
         with self._lock:
@@ -190,10 +229,88 @@ class HerdrReporter:
         self._emit_metadata()
 
     def _emit_metadata(self) -> None:
-        """Compute and enqueue pane metadata. Never holds the reporter lock."""
-        payload = sources.current_tokens_payload()
-        if payload:
-            self._client.report_metadata(payload)
+        """Compute and enqueue pane metadata. Never holds the reporter lock.
+
+        The tokens payload and the session title ride one envelope: herdr
+        replaces the whole per-source metadata entry on each report, so a
+        tokens report that omits the title would silently wipe it.
+        """
+        tokens = sources.current_tokens_payload()
+        title = sources.current_session_title()
+        changed, previous = self._claim_title(title)
+        if tokens is None and not changed:
+            return
+        # Clear only on a set->None transition; when a tokens report is
+        # present, its entry replacement clears any stale title for us.
+        self._client.report_metadata(
+            tokens, title=title, clear_title=changed and title is None
+        )
+        if changed:
+            self._client.set_tab_label(title, expected=previous)
+
+    # -- session title propagation --------------------------------------
+
+    def _claim_title(self, title: Optional[str]) -> Tuple[bool, Optional[str]]:
+        """Record ``title`` as the herdr-side value.
+
+        Returns ``(changed, previous)`` -- ``previous`` is the value herdr
+        showed before this claim, so a clear can tell the tab-label restore
+        what label it should find there. Both title paths (turn-end
+        metadata and title-only refresh) go through here, so
+        ``_reported_title`` is the single source of truth for what herdr
+        currently shows for our source.
+        """
+        with self._lock:
+            previous = self._reported_title
+            if title == previous:
+                return False, previous
+            self._reported_title = title
+            return True, previous
+
+    def _refresh_title(self) -> bool:
+        """Report the current session's title (or its absence). Title-only.
+
+        Returns True when a report was enqueued. Safe to call whenever:
+        deduped by :meth:`_claim_title`.
+        """
+        title = sources.current_session_title()
+        changed, previous = self._claim_title(title)
+        if not changed:
+            return False
+        self._client.report_metadata(None, title=title, clear_title=(title is None))
+        self._client.set_tab_label(title, expected=previous)
+        return True
+
+    def _start_title_wait(self) -> None:
+        """Arm a bounded, session-pinned background wait for a fresh title.
+
+        Single-flight: at most one wait at a time. The wait stops on title
+        arrival, session change, shutdown (daemon thread), or timeout.
+        """
+        session = sources.current_session_name()
+        with self._lock:
+            wait = self._title_wait
+            if wait is not None and wait.is_alive():
+                return
+            wait = threading.Thread(
+                target=self._title_wait_loop, name="herdr-title-wait", daemon=True
+            )
+            self._title_wait = wait
+            self._title_wait_session = session
+        wait.start()
+
+    def _title_wait_loop(self) -> None:
+        """Re-check the sidecar until the title lands, the session changes,
+        or the timeout elapses. Runs on its own daemon thread; every step
+        is fail-soft."""
+        deadline = time.monotonic() + _TITLE_WAIT_TIMEOUT_S
+        pinned = self._title_wait_session
+        while time.monotonic() < deadline:
+            time.sleep(_TITLE_WAIT_INTERVAL_S)
+            if sources.current_session_name() != pinned:
+                return  # the new prompt's refresh owns the new session's title
+            if self._refresh_title():
+                return  # title landed (or its absence was reported)
 
     def on_awaiting_user_input(self, awaiting: bool, *, notify: bool = True) -> None:
         """Track an interactive wait, notifying only when requested."""
@@ -203,6 +320,14 @@ class HerdrReporter:
         self._sync()
 
     def on_shutdown(self) -> None:
+        # If we relabelled the workspace tab, restore its original label
+        # first: the client drains the tab job ahead of the release on its
+        # worker. A title currently displayed means the tab may be ours;
+        # no title ever shown means no tab job is needed at all.
+        with self._lock:
+            expected = self._reported_title
+        if expected is not None:
+            self._client.set_tab_label(None, expected=expected)
         # Release pane authority directly (no intermediate idle report).
         # release_and_close() is idempotent and bounded, so calling it from both
         # session_end and shutdown can never delay process exit.
