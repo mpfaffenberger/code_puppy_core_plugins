@@ -111,7 +111,7 @@ def _skills_command_help() -> List[Tuple[str, str]]:
     from .skill_commands import skill_command_help
 
     entries: List[Tuple[str, str]] = [
-        ("skills", "Manage agent skills – browse, enable, disable, install"),
+        ("skills", "Manage agent skills – browse, enable, disable"),
         ("skill", "Alias for /skills"),
     ]
     # Append per-skill commands so they show up in /help & tab-completion.
@@ -125,7 +125,6 @@ def _handle_skills_command(command: str, name: str) -> Optional[Any]:
     Sub-commands:
         /skills          – Launch interactive TUI menu
         /skills list     – Quick text list of all skills
-        /skills install  – Browse & install from remote catalog
         /skills enable   – Enable skills integration globally
         /skills disable  – Disable skills integration globally
         /skills toggle   – Toggle skills integration globally
@@ -200,14 +199,6 @@ def _handle_skills_command(command: str, name: str) -> Optional[Any]:
                 emit_info("")
             return True
 
-        elif subcommand == "install":
-            from code_puppy_core_plugins.agent_skills.skills_install_menu import (
-                run_skills_install_menu,
-            )
-
-            run_skills_install_menu()
-            return True
-
         elif subcommand == "enable":
             set_skills_enabled(True)
             emit_success("\u2705 Skills integration enabled globally")
@@ -274,7 +265,6 @@ def _handle_skills_command(command: str, name: str) -> Optional[Any]:
         elif subcommand == "help":
             emit_info("Available /skills subcommands:")
             emit_info("  /skills list     - List all installed skills")
-            emit_info("  /skills install  - Browse & install from catalog")
             emit_info("  /skills enable   - Enable skills integration globally")
             emit_info("  /skills disable  - Disable skills integration globally")
             emit_info("  /skills toggle   - Toggle skills integration globally")
@@ -288,7 +278,7 @@ def _handle_skills_command(command: str, name: str) -> Optional[Any]:
         else:
             emit_error(f"Unknown subcommand: {subcommand}")
             emit_info(
-                "Usage: /skills [list|install|enable|disable|toggle|frontmatter|refresh|help]"
+                "Usage: /skills [list|enable|disable|toggle|frontmatter|refresh|help]"
             )
             return True
 
