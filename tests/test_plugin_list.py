@@ -159,6 +159,54 @@ class TestHandleCustomCommand:
             assert "Loaded Plugins" in mock_emit.call_args[0][0]
 
 
+class TestMenuListsAndTogglesBuiltins:
+    """Builtins are ordinary rows: always listed, always toggleable. (The old
+    ``lock_builtin_plugins`` deployment lock that hid and refused them is gone.)"""
+
+    _LOADED = {
+        "builtin": ["plugin_list", "agent_skills", "emoji_filter"],
+        "user": ["convo_namer"],
+        "project": [],
+    }
+
+    def _make_menu(self):
+        from code_puppy_core_plugins.plugin_list.plugins_menu import PluginsMenu
+
+        with (
+            patch(f"{_PLUGINS_MOD}.get_loaded_plugins", return_value=self._LOADED),
+            patch(f"{_PLUGINS_MOD}.get_project_plugin_status", return_value={}),
+            patch(f"{_PLUGINS_MOD}.get_project_plugins_directory", return_value=None),
+            patch(f"{_PLUGINS_CONFIG_MOD}.get_disabled_plugins", return_value=set()),
+        ):
+            return PluginsMenu()
+
+    def test_every_builtin_is_listed(self):
+        menu = self._make_menu()
+        builtins = [e.name for e in menu.plugins if e.tier == "builtin"]
+        assert builtins == ["agent_skills", "emoji_filter", "plugin_list"]
+
+    def test_toggle_disables_a_builtin(self):
+        menu = self._make_menu()
+        menu.selected_idx = next(
+            i for i, e in enumerate(menu.plugins) if e.tier == "builtin"
+        )
+        with (
+            patch(
+                f"{_PLUGINS_CONFIG_MOD}.set_plugin_disabled", return_value=True
+            ) as set_disabled,
+            patch.object(menu, "_refresh_data"),
+            patch.object(menu, "update_display"),
+        ):
+            menu._toggle_current()
+        set_disabled.assert_called_once_with("agent_skills", True)
+        assert menu._changed is True
+
+    def test_no_managed_hidden_note_in_list(self):
+        menu = self._make_menu()
+        text = "".join(seg for _, seg in menu._render_list())
+        assert "managed and hidden" not in text
+
+
 class TestMenuShowsGatedProjectPlugins:
     """The TUI must show project plugins the trust gate held back."""
 

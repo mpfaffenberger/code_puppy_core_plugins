@@ -112,11 +112,69 @@ def mark_failed(session_id: Optional[str]) -> None:
 
 
 def clear() -> None:
-    """Drop ALL tracked sub-agents. Called when the top-level turn ends so a
-    root that errored/was cancelled (and thus never flushed) can't leak its
-    'completed' children into the next prompt's live block."""
+    """Drop ALL tracked sub-agents -- detached ones included. Reserved for the
+    cancel path (Ctrl+C takes forks/background agents down too) and for the
+    runtime off-switch; ordinary end-of-turn cleanup is ``pop_settled``."""
     with _LOCK:
         _AGENTS.clear()
+
+
+# Detached trees (/fork + background) outlive the turn that started them
+def is_detached(entry: Dict[str, Any]) -> bool:
+    """A ``/fork`` or ``background=True`` launch: its lifetime is its own task,
+    not the main agent's turn, so end-of-turn cleanup must leave it alone."""
+    return bool(entry.get("is_fork") or entry.get("background"))
+
+
+def _root_id(agents: Dict[str, Dict[str, Any]], session_id: str) -> str:
+    """Walk the parent chain to the tree root. A parent that isn't registered
+    (the main agent, or None) makes the row a root. Cycle-safe."""
+    seen = set()
+    while True:
+        parent = agents[session_id].get("parent")
+        if not parent or parent not in agents or parent in seen:
+            return session_id
+        seen.add(session_id)
+        session_id = parent
+
+
+def _live_detached_ids(agents: Dict[str, Dict[str, Any]]) -> set:
+    """Session ids of every row (root + descendants) in a detached tree whose
+    root is still running."""
+    live = set()
+    for sid in agents:
+        root = agents[_root_id(agents, sid)]
+        if is_detached(root) and not root.get("done"):
+            live.add(sid)
+    return live
+
+
+def foreground_busy() -> bool:
+    """True while anything OUTSIDE a live detached tree is still running --
+    i.e. the foreground swarm hasn't gone idle yet, so nothing may flush."""
+    with _LOCK:
+        live = _live_detached_ids(_AGENTS)
+        return any(
+            not entry.get("done") for sid, entry in _AGENTS.items() if sid not in live
+        )
+
+
+def pop_settled() -> List[Dict[str, Any]]:
+    """Remove and return every row NOT in a live detached tree (oldest first).
+
+    Live detached trees stay registered: a fork or background agent keeps
+    its live row across turn boundaries until it finishes at its own
+    boundary (``finish`` / ``mark_done``). Everything else -- the foreground
+    swarm, plus detached trees that already completed -- is handed back to
+    the caller to flush as frozen records (or discard at end of turn, when a
+    root that errored/was cancelled never flushed).
+    """
+    with _LOCK:
+        live = _live_detached_ids(_AGENTS)
+        settled = [entry for sid, entry in _AGENTS.items() if sid not in live]
+        for entry in settled:
+            _AGENTS.pop(entry["session_id"], None)
+        return sorted(settled, key=lambda e: e["start"])
 
 
 # Live status (stream_event updates only)

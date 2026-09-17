@@ -31,6 +31,7 @@ hook_creator
 hook_manager
 logfire_oauth
 logfire_sessions
+mcp_binding_prompt
 meta_oauth
 namespace_skill_search
 no_tools

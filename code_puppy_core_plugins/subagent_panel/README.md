@@ -56,6 +56,13 @@ Milo is thinking... (  o  )
   (The redundant core "<check> <name> completed successfully" line is suppressed.)
   Nested agents get a compact one-liner frozen record instead of the full block:
   `<elbow> name  (check) mm:ss  completed  model`.
+- **Detached rows outlive the turn.** `FORK` and `BACKGROUND` runs are their own
+  asyncio tasks, so when the main agent's turn ends only the *foreground* swarm
+  is retired from the panel -- a still-running fork/background row keeps
+  ticking at the idle prompt until it finishes at its own boundary (the
+  launcher publishes a `post_tool_call` with `{"detached": True}`; `/fork`'s
+  older `{"detached_fork": True}` spelling is honoured too). Ctrl+C still
+  clears everything, because the cancel sweep takes detached runs down as well.
 
 ## How it works (3 monkeypatches, 1 callback -- no core edits)
 
