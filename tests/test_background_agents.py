@@ -110,6 +110,62 @@ async def test_cancel_reports_and_releases_session(setup, monkeypatch):
     assert "shared-session" not in plugin._sessions
 
 
+@pytest.mark.asyncio
+async def test_publishes_detached_boundary_event(setup, monkeypatch):
+    """The panel retires a background row on this event; without it the row
+    (which now outlives the main turn) would tick forever in high-output mode."""
+    from code_puppy import callbacks
+    from code_puppy.agent_completion_inbox import pop_completion
+    from code_puppy.tools import subagent_invocation
+    from code_puppy.tools.agent_tools import AgentInvokeOutput
+
+    owner, invoke = setup
+    events = []
+
+    async def capture(*args):
+        events.append(args)
+
+    async def run(**kwargs):
+        return AgentInvokeOutput(
+            response="ok", agent_name="worker", session_id="sess-bg"
+        )
+
+    monkeypatch.setattr(subagent_invocation, "_invoke_agent_impl", run)
+    monkeypatch.setattr(callbacks, "on_post_tool_call", capture)
+    launch = await invoke(None, "worker", "do work")
+    await plugin._tasks[launch["task_id"]]
+
+    assert len(events) == 1
+    tool_name, tool_args, result, duration_ms, context = events[0]
+    assert tool_name == "invoke_agent"
+    assert tool_args == {"agent_name": "worker", "prompt": "do work"}
+    assert result.session_id == "sess-bg"
+    assert duration_ms >= 0
+    assert context == {"detached": True}
+    assert "ok" in pop_completion(owner)
+
+
+@pytest.mark.asyncio
+async def test_boundary_event_failure_does_not_eat_report(setup, monkeypatch):
+    from code_puppy import callbacks
+    from code_puppy.agent_completion_inbox import pop_completion
+    from code_puppy.tools import subagent_invocation
+    from code_puppy.tools.agent_tools import AgentInvokeOutput
+
+    owner, invoke = setup
+
+    async def run(**kwargs):
+        return AgentInvokeOutput(response="ok", agent_name="worker")
+
+    monkeypatch.setattr(subagent_invocation, "_invoke_agent_impl", run)
+    monkeypatch.setattr(
+        callbacks, "on_post_tool_call", AsyncMock(side_effect=RuntimeError("panel"))
+    )
+    launch = await invoke(None, "worker", "do work")
+    await plugin._tasks[launch["task_id"]]
+    assert "ok" in pop_completion(owner)
+
+
 def test_pydantic_tool_registration():
     from pydantic_ai import Agent
 

@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import json
+import time
 from uuid import uuid4
 
 from pydantic_ai import RunContext
@@ -11,6 +12,26 @@ from code_puppy.callbacks import register_callback
 
 _tasks: dict[str, asyncio.Task] = {}
 _sessions: set[str] = set()
+
+
+async def _publish_boundary(agent_name, prompt, result, started_at):
+    """Publish the tool-equivalent completion signal for a detached run.
+
+    ``_invoke_agent_impl`` is called directly here (not via pydantic-ai's tool
+    wrapper), so nobody fires ``post_tool_call`` for the sub-agent itself.
+    The subagent_panel relies on that event to retire the live row at the
+    run's own boundary -- without it a background row would sit on its last
+    streamed status forever (it now outlives the main turn). Mirrors /fork.
+    """
+    from code_puppy.callbacks import on_post_tool_call
+
+    await on_post_tool_call(
+        "invoke_agent",
+        {"agent_name": agent_name, "prompt": prompt},
+        result,
+        (time.monotonic() - started_at) * 1000,
+        {"detached": True},
+    )
 
 
 async def _run(task_id, owner, context, agent_name, prompt, session_id):
@@ -24,6 +45,8 @@ async def _run(task_id, owner, context, agent_name, prompt, session_id):
     if "background" in inspect.signature(_invoke_agent_impl).parameters:
         extra["background"] = True
 
+    started_at = time.monotonic()
+    result = None
     try:
         result = await _invoke_agent_impl(
             context=context,
@@ -40,6 +63,12 @@ async def _run(task_id, owner, context, agent_name, prompt, session_id):
         payload = {"agent_name": agent_name, "error": str(exc)}
     finally:
         _tasks.pop(task_id, None)
+
+    if result is not None:
+        try:
+            await _publish_boundary(agent_name, prompt, result, started_at)
+        except Exception:
+            pass  # a panel hiccup must never eat the completion report
 
     # A fixed prefix keeps output out of the REPL's command routing. JSON
     # separates provenance from untrusted child output; no attachment expansion.

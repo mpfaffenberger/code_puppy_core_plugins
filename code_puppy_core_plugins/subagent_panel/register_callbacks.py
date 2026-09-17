@@ -21,6 +21,9 @@ Install strategy (startup monkeypatches of seams with no hook + callbacks):
      but KEPT in the live tree (shown 'completed') so it never vanishes
      mid-run; the whole subtree flushes to the transcript parent-first only
      when its ROOT finishes, then is removed from the live tree.
+     DETACHED trees (/fork, background=True) outlive the main turn: end-of-
+     turn cleanup only retires the foreground swarm, so a detached row keeps
+     ticking at the idle prompt until its own ``post_tool_call`` boundary.
   4. subagent_invocation.emit_success -> suppress the redundant
      "<check> <name> completed successfully" line (it comes from the separate
      message_queue system, NOT the bus, so it must be dropped at its source).
@@ -225,25 +228,35 @@ def _handle_frozen(console, session_id):
 
 
 def _maybe_flush_group(console):
-    """Flush the WHOLE live panel to scrollback as one group (parent-first DFS),
-    then clear it -- but ONLY when no agent is still active. While any agent is
-    running, completed agents stay grouped in the live panel (shown 'completed'),
-    so the panel remains a single cohesive block pinned above the spinner.
+    """Flush the settled panel rows to scrollback as one group (parent-first
+    DFS) -- but ONLY when the foreground swarm is idle. While any foreground
+    agent is running, completed agents stay grouped in the live panel (shown
+    'completed'), so the panel remains a single cohesive block.
+
+    Detached trees (/fork, background) whose root is still running are NOT
+    part of the group: they keep their live rows and flush at their own
+    boundary, exactly like the rest of their lifecycle.
     """
-    rows = state.snapshot()
-    if not rows:
-        return
-    if any(not e.get("done") for e in rows):
+    state.snapshot()  # idle-prune before deciding
+    if state.foreground_busy():
         return  # swarm still busy -- keep the panel grouped + live
     if console is None:
         return
-    ordered = _ordered_tree(rows)
+    settled = state.pop_settled()
+    if not settled:
+        return
     console.print()  # breathing room between the transcript and the group
-    for line in _row_lines(ordered, frame=None):
+    for line in _row_lines(_ordered_tree(settled), frame=None):
         console.print(line)
-    state.clear()
-    _stop_ticker()  # last agent flushed — nothing left to clock
-    _push_panel(force=True)  # collapse the panel rows
+    _retire_ticker_if_idle()
+    _push_panel(force=True)  # collapse the flushed rows
+
+
+def _retire_ticker_if_idle() -> None:
+    """Stop the clock only once nothing is left to clock -- a live detached
+    row still needs its mm:ss advancing after the foreground flushes."""
+    if not state.has_active():
+        _stop_ticker()
 
 
 # Monkeypatch installers
@@ -442,11 +455,16 @@ async def _on_agent_run_end(
     response_text=None,
     metadata=None,
 ):
-    """When the TOP-LEVEL turn ends, wipe all tracked sub-agents so a root that
+    """When the TOP-LEVEL turn ends, retire the foreground swarm so a root that
     errored or was cancelled (never flushed) can't leak its 'completed' children
-    into the next prompt's live block. Only fires for the main agent -- sub-agent
-    runs go through temp_agent.run(), not _runtime, and is_subagent() guards the
-    rest.
+    into the next prompt's live block.
+
+    Detached trees (/fork, background) that are still running SURVIVE: their
+    task outlives the turn, so their live row does too -- the panel keeps
+    ticking at the idle prompt until they finish at their own boundary.
+
+    Only fires for the main agent -- sub-agent runs go through
+    temp_agent.run(), not _runtime, and is_subagent() guards the rest.
     """
     if not _runtime_enabled():
         return
@@ -458,10 +476,10 @@ async def _on_agent_run_end(
     except Exception:
         pass
     try:
-        state.clear()
+        state.pop_settled()  # discard foreground leftovers; detached rows stay
     except Exception:
         pass
-    _stop_ticker()  # run over — never leave an orphan clock task
+    _retire_ticker_if_idle()  # never leave an orphan clock task
     _push_panel(force=True)
 
 
@@ -481,6 +499,15 @@ async def _on_agent_run_cancel(group_id=None):
     except Exception:
         pass
     _push_panel(force=True)
+
+
+def _is_detached_context(context) -> bool:
+    """Did a detached launcher (/fork or background_agents) publish this
+    ``post_tool_call``? Both keys mean the same thing; ``detached_fork`` is
+    the older spelling kept so an older /fork plugin still retires its row."""
+    if not isinstance(context, dict):
+        return False
+    return bool(context.get("detached") or context.get("detached_fork"))
 
 
 async def _on_post_tool_call(tool_name, tool_args, result, duration_ms, context=None):
@@ -525,9 +552,10 @@ async def _on_post_tool_call(tool_name, tool_args, result, duration_ms, context=
     if not sid:
         return
     try:
-        # Keep ordinary calls until their foreground root flushes; detached forks
-        # have no root, so finish them at their own boundary.
-        if isinstance(context, dict) and context.get("detached_fork"):
+        # Keep ordinary calls until their foreground root flushes; detached
+        # runs (/fork, background) have no foreground root, so finish them at
+        # their own boundary. ``detached_fork`` is the legacy key /fork sends.
+        if _is_detached_context(context):
             state.finish(sid)
         else:
             err = getattr(result, "error", None)
