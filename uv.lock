@@ -358,7 +358,7 @@ wheels = [
 
 [[package]]
 name = "code-puppy-core-plugins"
-version = "0.0.55"
+version = "0.0.56"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
