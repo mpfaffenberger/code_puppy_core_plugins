@@ -56,7 +56,7 @@ def _handle_steer(command: str) -> bool:
 
     from code_puppy.messaging.pause_controller import get_pause_controller
 
-    # ``mode='now'`` is announced by the history processor; no duplicate ack.
+    # Delivery is silent; pending work is reflected in the status suffix.
     get_pause_controller().request_steer(text, mode="now")
     return True
 
@@ -66,18 +66,7 @@ def _handle_queue(command: str) -> bool:
     from .queue_menu import open_queue_menu_blocking
 
     open_queue_menu_blocking()
-    _emit_queue_summary()
     return True
-
-
-def _emit_queue_summary() -> None:
-    from code_puppy.messaging.pause_controller import get_pause_controller
-
-    count = len(get_pause_controller().peek_pending_steer_queued())
-    if count:
-        _emit_info(f"\u23ed {count} prompt(s) queued")
-    else:
-        _emit_info("Queue is empty")
 
 
 # Status suffix: '(N queued)'
