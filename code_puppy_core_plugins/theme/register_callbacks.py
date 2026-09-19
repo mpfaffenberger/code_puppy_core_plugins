@@ -309,9 +309,8 @@ def _handle_theme(command: str, name: str):
             emit_error(f"Theme picker failed: {e}")
             return True
         if chosen is None:
-            emit_info("🎨 Theme unchanged.")
             return True
-        _apply_theme(chosen)
+        _apply_theme(chosen, announce=False)
         return True
 
     if sub == "show":
