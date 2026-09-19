@@ -82,7 +82,23 @@ def _update_status_suffix(count: int) -> None:
     try:
         from code_puppy.messaging.bottom_bar import get_bottom_bar
 
-        get_bottom_bar().set_status_suffix(f" ({count} pending)" if count else "")
+        from code_puppy.messaging.pause_controller import get_pause_controller
+
+        controller = get_pause_controller()
+        snapshot = getattr(controller, "pending_steer_counts", None)
+        if callable(snapshot):
+            steering, queued = snapshot()
+        else:
+            # Compatibility with core releases predating the atomic snapshot.
+            queued = min(count, len(controller.peek_pending_steer_queued()))
+            steering = max(0, count - queued)
+        parts = []
+        if steering:
+            parts.append(f"{steering:,} steering")
+        if queued:
+            parts.append(f"{queued:,} queued")
+        suffix = " (" + " · ".join(parts) + ")" if parts else ""
+        get_bottom_bar().set_status_suffix(suffix)
     except Exception:
         logger.debug("pending-count paint failed", exc_info=True)
 
