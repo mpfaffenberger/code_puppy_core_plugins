@@ -5,14 +5,14 @@ loads tool metadata, extracts function signatures, and provides access
 to enabled tools for the LLM.
 """
 
+import ast
 import importlib.util
-import inspect
 import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 from . import USER_UC_DIR
 from .models import ToolMeta, UCToolInfo
@@ -98,20 +98,38 @@ class UCRegistry:
         except ValueError:
             namespace = ""
 
-        # Load the module
-        module = self._load_module(file_path)
-        if module is None:
+        try:
+            source = file_path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(file_path))
+        except (OSError, UnicodeError, SyntaxError) as e:
+            logger.warning("Failed to parse tool source %s: %s", file_path, e)
             return None
 
-        # Check for TOOL_META
-        if not hasattr(module, "TOOL_META"):
-            logger.debug(f"No TOOL_META found in {file_path}")
+        # Metadata is deliberately restricted to a top-level literal. Reading
+        # it must not execute generated code or evaluate arbitrary expressions.
+        meta_node: ast.Assign | None = None
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "TOOL_META"
+                for target in node.targets
+            ):
+                meta_node = node
+
+        if meta_node is None:
+            logger.debug("No top-level TOOL_META found in %s", file_path)
             return None
 
-        raw_meta = dict(module.TOOL_META)  # Copy to avoid mutating module constant
+        try:
+            raw_meta = ast.literal_eval(meta_node.value)
+        except (ValueError, TypeError, SyntaxError) as e:
+            logger.warning("Invalid literal TOOL_META in %s: %s", file_path, e)
+            return None
+
         if not isinstance(raw_meta, dict):
-            logger.warning(f"TOOL_META is not a dict in {file_path}")
+            logger.warning("TOOL_META is not a dict in %s", file_path)
             return None
+
+        raw_meta = dict(raw_meta)
 
         # Set namespace from directory structure
         raw_meta["namespace"] = namespace
@@ -123,25 +141,38 @@ class UCRegistry:
             logger.warning(f"Invalid TOOL_META in {file_path}: {e}")
             return None
 
-        # Find the callable function
-        func, func_name = self._find_tool_function(module, meta.name)
-        if func is None:
-            logger.warning(f"No callable function found in {file_path}")
+        function_nodes = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        func_name = next(
+            (
+                candidate
+                for candidate in (meta.name, "run", "execute")
+                if candidate in function_nodes
+            ),
+            None,
+        )
+        if func_name is None:
+            public_names = sorted(
+                name for name in function_nodes if not name.startswith("_")
+            )
+            func_name = public_names[0] if public_names else None
+
+        if func_name is None:
+            logger.warning("No top-level function found in %s", file_path)
             return None
 
-        # Extract signature
+        function_node = function_nodes[func_name]
         try:
-            sig = inspect.signature(func)
-            signature_str = f"{func_name}{sig}"
-        except (ValueError, TypeError):
+            signature_str = f"{func_name}({ast.unparse(function_node.args)})"
+            if function_node.returns is not None:
+                signature_str += f" -> {ast.unparse(function_node.returns)}"
+        except (AttributeError, ValueError):
             signature_str = f"{func_name}(...)"
 
-        # Extract docstring
-        docstring = inspect.getdoc(func)
-
-        # Store module reference for later calls
-        full_name = f"{namespace}.{meta.name}" if namespace else meta.name
-        self._modules[full_name] = module
+        docstring = ast.get_docstring(function_node, clean=True)
 
         return UCToolInfo(
             meta=meta,
@@ -160,56 +191,39 @@ class UCRegistry:
         Returns:
             Loaded module or None if failed.
         """
-        module_name = f"uc_tool_{file_path.stem}_{hash(str(file_path))}"
+        baseline_path = list(sys.path)
+        module: ModuleType | None = None
+        module_name: str | None = None
 
         try:
+            source_hash = hash(file_path.read_bytes())
+            module_name = (
+                f"uc_tool_{file_path.stem}_{hash((str(file_path), source_hash))}"
+            )
             spec = importlib.util.spec_from_file_location(module_name, file_path)
             if spec is None or spec.loader is None:
+                logger.warning("Could not create import spec for UC tool %s", file_path)
                 return None
 
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
-            spec.loader.exec_module(module)
+            source = file_path.read_text(encoding="utf-8")
+            code = compile(source, str(file_path), "exec")
+            exec(code, module.__dict__)
+
+            additions = []
+            for entry in sys.path:
+                if entry not in baseline_path and entry not in additions:
+                    additions.append(entry)
+            sys.path[:] = baseline_path + additions
             return module
-        except Exception:
+
+        except Exception as e:
+            sys.path[:] = baseline_path
+            if module_name is not None:
+                sys.modules.pop(module_name, None)
+            logger.warning("Failed to execute UC tool module %s: %s", file_path, e)
             return None
-
-    def _find_tool_function(
-        self, module: ModuleType, tool_name: str
-    ) -> Tuple[Optional[Callable], str]:
-        """Find the callable function in a tool module.
-
-        Looks for:
-        1. A function with the same name as the tool
-        2. A function named 'run'
-        3. A function named 'execute'
-        4. Any public function (not starting with _)
-
-        Args:
-            module: The loaded module.
-            tool_name: The tool name from metadata.
-
-        Returns:
-            Tuple of (function, function_name) or (None, "") if not found.
-        """
-        # Priority order for finding the function
-        candidates = [tool_name, "run", "execute"]
-
-        for name in candidates:
-            if hasattr(module, name):
-                func = getattr(module, name)
-                if callable(func) and not isinstance(func, type):
-                    return func, name
-
-        # Fall back to first public callable
-        for name in dir(module):
-            if name.startswith("_"):
-                continue
-            obj = getattr(module, name)
-            if callable(obj) and not isinstance(obj, type):
-                return obj, name
-
-        return None, ""
 
     def list_tools(self, include_disabled: bool = False) -> List[UCToolInfo]:
         """List all discovered tools.
@@ -256,11 +270,18 @@ class UCRegistry:
         if tool is None:
             return None
 
-        module = self._modules.get(name)
+        module = self.load_tool_module(name)
         if module is None:
             return None
 
-        func, _ = self._find_tool_function(module, tool.meta.name)
+        func = getattr(module, tool.function_name, None)
+        if func is None or not callable(func) or isinstance(func, type):
+            logger.warning(
+                "Selected function %s is not callable in UC tool %s",
+                tool.function_name,
+                tool.source_path,
+            )
+            return None
         return func
 
     def load_tool_module(self, name: str) -> Optional[ModuleType]:
@@ -272,10 +293,17 @@ class UCRegistry:
         Returns:
             Module or None if not found.
         """
-        if not self._tools:
-            self.scan()
+        tool = self.get_tool(name)
+        if tool is None:
+            return None
 
-        return self._modules.get(name)
+        module = self._modules.get(name)
+        if module is None:
+            module = self._load_module(Path(tool.source_path))
+            if module is None:
+                return None
+            self._modules[name] = module
+        return module
 
     def reload(self) -> int:
         """Force a rescan of all tools.
