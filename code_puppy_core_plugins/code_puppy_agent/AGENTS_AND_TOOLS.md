@@ -106,7 +106,7 @@ during agent build. It:
 |----------|-------|
 | **File ops** | `list_files`, `read_file`, `grep` |
 | **File mods** | `create_file`, `replace_in_file`, `delete_snippet`, `delete_file` |
-| **Shell** | `agent_run_shell_command`, `agent_share_your_reasoning` |
+| **Shell** | `shell`, `agent_share_your_reasoning` |
 | **Sub-agents** | `list_agents`, `invoke_agent`, `invoke_agent_with_model` |
 | **Skills** | `activate_skill`, `list_or_search_skills` |
 | **User** | `ask_user_question`, `load_image_for_analysis` |

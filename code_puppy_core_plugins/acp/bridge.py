@@ -53,7 +53,7 @@ _TOOL_KINDS = {
     "replace_in_file": "edit",
     "delete_snippet": "edit",
     "delete_file": "delete",
-    "agent_run_shell_command": "execute",
+    "shell": "execute",
     "agent_share_your_reasoning": "think",
 }
 
@@ -220,7 +220,7 @@ class EventBridge:
     @staticmethod
     def _title_for(tool_name: str, tool_args: Any) -> str:
         """Build a human-friendly tool-call title (e.g. ``Edit foo.py``)."""
-        if tool_name == "agent_run_shell_command" and isinstance(tool_args, dict):
+        if tool_name == "shell" and isinstance(tool_args, dict):
             command = str(tool_args.get("command", "")).strip()
             if command:
                 short = command if len(command) <= 60 else command[:57] + "..."

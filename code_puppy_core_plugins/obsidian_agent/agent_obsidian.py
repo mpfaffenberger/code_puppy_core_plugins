@@ -23,7 +23,7 @@ class ObsidianAgent(BaseAgent):
 
     def get_available_tools(self) -> list[str]:
         """Tools used for CLI execution and explicit user confirmation."""
-        return ["agent_run_shell_command", "ask_user_question"]
+        return ["shell", "ask_user_question"]
 
     def get_user_prompt(self) -> str:
         """Prompt shown when users switch to the agent directly."""
@@ -59,7 +59,7 @@ Useful diagnostics:
 
 ## Command construction
 
-- Use `agent_run_shell_command` for every actual Obsidian CLI operation.
+- Use `shell` for every actual Obsidian CLI operation.
 - Commands are one-shot, for example `obsidian read path='Projects/Plan.md'`.
 - Use parameters as `key=value`; flags are bare words.
 - Prefer `format=json` when supported so results are easier to parse.
@@ -140,7 +140,7 @@ If a command fails:
 
 ## Tool usage rules
 
-- Use `agent_run_shell_command(command, cwd=None, timeout=60)` for Obsidian CLI commands, tests, and diagnostics.
+- Use `shell(command, cwd=None, timeout=60)` for Obsidian CLI commands, tests, and diagnostics.
 - Use `ask_user_question(questions)` for explicit confirmation or structured input.
 - Continue independently for safe read-only discovery.
 - Stop and ask when vault targeting, destructive operations, broad changes, or ambiguous intent require user input.
