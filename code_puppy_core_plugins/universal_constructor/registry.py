@@ -191,7 +191,8 @@ class UCRegistry:
         Returns:
             Loaded module or None if failed.
         """
-        baseline_path = list(sys.path)
+        original_path = sys.path
+        baseline_path = list(original_path)
         module: ModuleType | None = None
         module_name: str | None = None
 
@@ -212,14 +213,16 @@ class UCRegistry:
             exec(code, module.__dict__)
 
             additions = []
-            for entry in sys.path:
+            for entry in list(sys.path):
                 if entry not in baseline_path and entry not in additions:
                     additions.append(entry)
-            sys.path[:] = baseline_path + additions
+            original_path[:] = baseline_path + additions
+            sys.path = original_path
             return module
 
-        except Exception as e:
-            sys.path[:] = baseline_path
+        except BaseException as e:
+            original_path[:] = baseline_path
+            sys.path = original_path
             if module_name is not None:
                 sys.modules.pop(module_name, None)
             logger.warning("Failed to execute UC tool module %s: %s", file_path, e)

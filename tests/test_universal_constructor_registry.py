@@ -209,6 +209,11 @@ lambda_tool = lambda: 1
 class Tool:
     def method(self):
         return 1
+
+def _container():
+    def nested():
+        return 1
+    return nested
 """,
         encoding="utf-8",
     )
@@ -262,6 +267,26 @@ def tool(value: int) -> int:
     assert function(1) == 2
 
 
+def test_get_tool_function_does_not_fall_back_at_runtime(tmp_path):
+    _write_tool(
+        tmp_path / "tool.py",
+        """
+def tool():
+    return "selected"
+
+del tool
+
+def fallback():
+    return "wrong"
+""",
+    )
+    registry = UCRegistry(tools_dir=tmp_path)
+
+    assert registry.scan() == 1
+    assert registry.get_tool("tool").function_name == "tool"
+    assert registry.get_tool_function("tool") is None
+
+
 def test_successful_load_preserves_original_sys_path_precedence(tmp_path):
     dependency_dir = tmp_path / "dependency"
     dependency_dir.mkdir()
@@ -271,7 +296,7 @@ def test_successful_load_preserves_original_sys_path_precedence(tmp_path):
         tool,
         f"""
 import sys
-sys.path.insert(0, {str(dependency_dir)!r})
+sys.path = [{str(dependency_dir)!r}, *sys.path]
 
 def tool():
     from helper_dep import VALUE
@@ -279,16 +304,19 @@ def tool():
 """,
     )
     registry = UCRegistry(tools_dir=tmp_path)
-    before = list(sys.path)
+    original_path = sys.path
+    before = list(original_path)
     sys.modules.pop("helper_dep", None)
 
     try:
         assert registry.scan() == 1
         function = registry.get_tool_function("tool")
+        assert sys.path is original_path
         assert sys.path[: len(before)] == before
         assert sys.path[-1] == str(dependency_dir)
         assert function() == 42
     finally:
+        sys.path = original_path
         sys.path[:] = before
         sys.modules.pop("helper_dep", None)
 
@@ -324,6 +352,42 @@ def broken():
         assert str(tool) in caplog.text
         assert "boom" in caplog.text
     finally:
+        sys.path[:] = before
+
+
+def test_failed_load_restores_rebound_sys_path(tmp_path, caplog):
+    poison_path = tmp_path / "poison"
+    tool = tmp_path / "broken.py"
+    _write_tool(
+        tool,
+        f"""
+import sys
+sys.path = [{str(poison_path)!r}]
+raise SystemExit("stop")
+
+def broken():
+    return 1
+""",
+        name="broken",
+    )
+    registry = UCRegistry(tools_dir=tmp_path)
+    original_path = sys.path
+    before = list(original_path)
+
+    try:
+        assert registry.scan() == 1
+        with caplog.at_level("WARNING"):
+            assert registry.load_tool_module("broken") is None
+        assert sys.path is original_path
+        assert sys.path == before
+        assert not any(
+            getattr(module, "__file__", None) == str(tool)
+            for module in sys.modules.values()
+            if module is not None
+        )
+        assert "stop" in caplog.text
+    finally:
+        sys.path = original_path
         sys.path[:] = before
 
 
