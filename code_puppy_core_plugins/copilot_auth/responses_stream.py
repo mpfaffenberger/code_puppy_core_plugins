@@ -14,7 +14,7 @@ brand-new part: tool calls come through with empty ``arguments`` (the
 ``read_file ... Field required: file_path`` failure) and assistant text is
 split into one part per delta.
 
-This module wraps the httpx response byte-stream and rewrites each event so
+This module wraps the httpx2 response byte-stream and rewrites each event so
 every item keeps the first id seen for its ``output_index``.  Bytes that
 are not SSE ``data:`` JSON events pass through untouched.  The wrapper
 follows the ``_OpaqueCapturingStream`` pattern in ``reasoning_client``.
@@ -26,8 +26,8 @@ import json
 import logging
 from typing import Any, Dict
 
-import httpx
-from httpx import AsyncByteStream
+import httpx2
+from httpx2 import AsyncByteStream
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class _StableIdStream(AsyncByteStream):
     Buffers bytes, splits on newlines, rewrites ``data:`` JSON events via
     :func:`normalise_event_ids`, and re-emits them.  Everything else (event
     lines, blank separators, ``[DONE]``, unparseable payloads) is forwarded
-    verbatim.  Inherits ``httpx.AsyncByteStream`` so ``Response.aclose()``
+    verbatim.  Inherits ``httpx2.AsyncByteStream`` so ``Response.aclose()``
     treats it as an async stream.
     """
 
@@ -166,7 +166,7 @@ class _StableIdStream(AsyncByteStream):
         return b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8")
 
 
-def _is_responses_sse(request: httpx.Request, response: httpx.Response) -> bool:
+def _is_responses_sse(request: httpx2.Request, response: httpx2.Response) -> bool:
     if request.method != "POST" or not request.url.path.rstrip("/").endswith(
         "/responses"
     ):
@@ -175,7 +175,7 @@ def _is_responses_sse(request: httpx.Request, response: httpx.Response) -> bool:
     return "text/event-stream" in content_type.lower()
 
 
-def patch_client_for_stable_ids(client: httpx.AsyncClient) -> None:
+def patch_client_for_stable_ids(client: httpx2.AsyncClient) -> None:
     """Monkey-patch *client* so ``/responses`` SSE streams carry stable ids.
 
     Call after creating the client and before handing it to
@@ -186,8 +186,8 @@ def patch_client_for_stable_ids(client: httpx.AsyncClient) -> None:
     original_send = client.send
 
     async def _patched_send(
-        request: httpx.Request, *args: Any, **kwargs: Any
-    ) -> httpx.Response:
+        request: httpx2.Request, *args: Any, **kwargs: Any
+    ) -> httpx2.Response:
         response = await original_send(request, *args, **kwargs)
         if (
             response.status_code == 200

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-import httpx
+import httpx2
 import pytest
 
 from code_puppy_core_plugins.copilot_auth.responses_stream import (
@@ -23,8 +23,8 @@ def _sse(event: dict) -> bytes:
     return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
 
 
-class _FakeInner(httpx.AsyncByteStream):
-    """Async byte stream over pre-cut chunks (httpx reads bytes content eagerly,
+class _FakeInner(httpx2.AsyncByteStream):
+    """Async byte stream over pre-cut chunks (httpx2 reads bytes content eagerly,
     so mock responses must carry a real stream to exercise the shim)."""
 
     def __init__(self, chunks):
@@ -316,14 +316,14 @@ class TestStableIdStream:
         assert inner.closed
 
     def test_is_httpx_async_byte_stream(self):
-        assert isinstance(_StableIdStream(_FakeInner([])), httpx.AsyncByteStream)
+        assert isinstance(_StableIdStream(_FakeInner([])), httpx2.AsyncByteStream)
 
 
 class TestPatchClientForStableIds:
     def _client_with(self, handler):
-        client = httpx.AsyncClient(
+        client = httpx2.AsyncClient(
             base_url="https://api.githubcopilot.com",
-            transport=httpx.MockTransport(handler),
+            transport=httpx2.MockTransport(handler),
         )
         patch_client_for_stable_ids(client)
         return client
@@ -333,7 +333,7 @@ class TestPatchClientForStableIds:
         raw = b"".join(_sse(e) for e in TOOL_CALL_EVENTS)
 
         def handler(request):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 stream=_FakeInner([raw]),
@@ -361,7 +361,7 @@ class TestPatchClientForStableIds:
         raw = _sse(TOOL_CALL_EVENTS[1])
 
         def handler(request):
-            return httpx.Response(
+            return httpx2.Response(
                 200, headers={"content-type": ctype}, stream=_FakeInner([raw])
             )
 
@@ -374,7 +374,7 @@ class TestPatchClientForStableIds:
     @pytest.mark.asyncio
     async def test_error_responses_untouched(self):
         def handler(request):
-            return httpx.Response(
+            return httpx2.Response(
                 400,
                 headers={"content-type": "text/event-stream"},
                 content=b'data: {"error": "nope"}\n\n',
