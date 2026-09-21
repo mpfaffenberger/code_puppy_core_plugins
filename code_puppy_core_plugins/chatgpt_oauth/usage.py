@@ -28,7 +28,7 @@ class CodexUsage:
     def format_status(self) -> str:
         parts: list[str] = []
         if self.primary_remaining is not None:
-            parts.append(f"5h {self.primary_remaining}% remaining")
+            parts.append(f"{self.primary_remaining}% remaining")
         if self.secondary_remaining is not None:
             parts.append(f"week {self.secondary_remaining}% remaining")
         return " · ".join(parts)

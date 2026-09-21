@@ -542,7 +542,6 @@ class SkillsInstallMenu:
         if self.result == "pending_install" and self.pending_entry:
             return _prompt_and_install(self.pending_entry)
 
-        emit_info("Exited skills install browser")
         return False
 
 
