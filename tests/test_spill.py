@@ -73,7 +73,7 @@ def test_result_under_cap_is_untouched():
     result = {"stdout": "small", "exit_code": 0}
     original = result.copy()
 
-    _call("agent_run_shell_command", result)
+    _call("shell", result)
 
     assert result == original
 
@@ -84,7 +84,7 @@ def test_oversized_field_is_spilled_and_bounded(_spill_root):
     full_output = "head\n" + "x" * 1800 + "\ntail"
     result = {"stdout": full_output, "exit_code": 0}
 
-    _call("agent_run_shell_command", result)
+    _call("shell", result)
 
     replacement = result["stdout"]
     files = list(_spill_root.glob("session-*/*"))
@@ -116,7 +116,7 @@ def test_multiple_fields_spill_largest_first_until_under_cap(monkeypatch):
         return Path("/tmp/spill-result")
 
     monkeypatch.setattr(store, "save_text", recording_save)
-    _call("agent_run_shell_command", result)
+    _call("shell", result)
 
     assert saved_contents == ["a" * 2000, "b" * 1200]
     assert "Full output stored at:" in result["largest"]

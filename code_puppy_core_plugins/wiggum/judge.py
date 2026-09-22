@@ -35,7 +35,7 @@ _READ_ONLY_TOOLS = {
     "list_files",
     "read_file",
     "grep",
-    "agent_run_shell_command",
+    "shell",
     "load_image_for_analysis",
     "list_agents",
     "invoke_agent",

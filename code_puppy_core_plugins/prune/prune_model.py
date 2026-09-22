@@ -18,7 +18,7 @@ _WRITE_TOOLS = {
     "delete_snippet",
     "delete_file",
 }
-_SHELL_TOOLS = {"agent_run_shell_command"}
+_SHELL_TOOLS = {"shell"}
 _BROWSER_PREFIX = "browser_"
 _TERMINAL_PREFIX = "terminal_"
 
