@@ -13,10 +13,11 @@ This module speaks herdr's newline-delimited JSON socket protocol far
 enough to call ``pane.report_agent`` / ``pane.report_agent_session`` /
 ``pane.report_metadata`` / ``pane.release_agent`` -- plus ``tab.get`` /
 ``tab.rename`` for the workspace-tab label (only while the tab holds a
-single pane). It reads herdr's ack (and retries a few times if it
-doesn't come) so an authoritative state edge is never silently lost, but
-it never raises into the caller: reporting agent state must never be
-able to disturb the agent itself.
+single pane), and ``pane.get`` to read back a stored native session
+reference (:meth:`HerdrClient.get_agent_session`). It reads herdr's ack
+(and retries a few times if it doesn't come) so an authoritative state
+edge is never silently lost, but it never raises into the caller:
+reporting agent state must never be able to disturb the agent itself.
 
 Delivery runs on a single daemon worker thread fed by **coalescing
 mailbox slots** rather than an unbounded queue:
@@ -78,6 +79,7 @@ _M_STATE = "pane.report_agent"
 _M_SESSION = "pane.report_agent_session"
 _M_METADATA = "pane.report_metadata"
 _M_RELEASE = "pane.release_agent"
+_M_PANE_GET = "pane.get"
 _M_TAB_GET = "tab.get"
 _M_TAB_RENAME = "tab.rename"
 
@@ -135,6 +137,10 @@ class HerdrClient:
     def active(self) -> bool:
         return self._active
 
+    @property
+    def pane_id(self) -> Optional[str]:
+        return self._pane_id
+
     def _start_worker(self) -> None:
         self._worker = threading.Thread(
             target=self._run,
@@ -171,6 +177,31 @@ class HerdrClient:
         if message:
             params["message"] = message
         self._put("_state" if critical else "_message", params)
+
+    def get_agent_session(self) -> Optional[Dict[str, Any]]:
+        """Read herdr's stored native session reference for this pane.
+
+        Returns the ``agent_session`` object (``{"source", "agent", "kind",
+        "value"}``) when herdr has one stored for this pane, else ``None``.
+
+        This is the only *read* the plugin performs for restore. It is
+        bounded (one request/response on a fresh connection, 0.5s timeout)
+        and degrades to ``None`` on any failure -- a herdr version that does
+        not store a reference for us (code-puppy is not an *official* herdr
+        agent, so herdr 0.9.x stores nothing here) simply returns ``None``
+        and the caller falls back to its own store.
+        """
+        if not self._active:
+            return None
+        reply = self._request(_M_PANE_GET, {"pane_id": self._pane_id})
+        if not isinstance(reply, dict):
+            return None
+        result = reply.get("result")
+        pane = result.get("pane") if isinstance(result, dict) else None
+        if not isinstance(pane, dict):
+            return None
+        session = pane.get("agent_session")
+        return session if isinstance(session, dict) else None
 
     def report_session(
         self,
