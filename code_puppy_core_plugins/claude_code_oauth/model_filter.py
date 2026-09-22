@@ -34,6 +34,9 @@ def filter_latest_claude_models(
     family_models: Dict[str, List[Tuple[str, int, int, int]]] = {}
 
     for model_name in models:
+        if model_name == "claude-opus-5-5":
+            family_models.setdefault("opus", []).append((model_name, 5, 5, 0))
+            continue
         if model_name == "claude-opus-5":
             family_models.setdefault("opus", []).append((model_name, 5, 0, 0))
             continue
