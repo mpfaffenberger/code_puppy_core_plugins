@@ -41,9 +41,9 @@ import threading
 import time
 from typing import Optional, Tuple
 
-from .client import HerdrClient
 from . import restore
 from . import sources
+from .client import HerdrClient
 
 logger = logging.getLogger(__name__)
 
@@ -153,9 +153,7 @@ class HerdrReporter:
             # Keep a local pane -> session map so a restored pane can resume
             # this conversation even though herdr itself stores no reference
             # for a non-official agent. See restore.py.
-            restore.remember_session(
-                getattr(self._client, "pane_id", None), ref[0], ref[1]
-            )
+            restore.remember_session(self._client.pane_id, ref[0], ref[1])
 
     # -- lifecycle handlers (all sync; safe from async or worker threads) --
 
@@ -223,7 +221,6 @@ class HerdrReporter:
         with self._lock:
             self._activity = THINKING
         self._sync()
-
 
     def on_turn_end(self) -> None:
         with self._lock:

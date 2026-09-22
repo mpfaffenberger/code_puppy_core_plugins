@@ -28,10 +28,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from .client import HerdrClient
+
+try:  # pragma: no cover - POSIX only
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
 
 logger = logging.getLogger(__name__)
 
@@ -70,15 +76,63 @@ def _read_store() -> dict:
 
 
 def _write_store(store: dict) -> None:
-    """Atomically write the map. Faults are swallowed (never raises)."""
+    """Atomically write the map through a writer-private temp file.
+
+    Never raises: fail-soft is this module's contract, and both callers treat a
+    failed write as "we simply do not auto-resume next boot".
+
+    The temp name is scoped by PID on purpose. A shared ``.tmp`` name lets two
+    code-puppy processes interleave writes into the same file before either
+    renames it, which silently drops *other* panes' entries -- and herdr's
+    whole point is running many panes at once.
+    """
     path = _state_path()
     if path is None:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w", encoding="utf-8") as file:
-        json.dump(store, file)
-    tmp.replace(path)
+    tmp: Optional[Path] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        with tmp.open("w", encoding="utf-8") as file:
+            json.dump(store, file)
+        tmp.replace(path)
+    except Exception:
+        logger.debug("herdr: could not write pane-session store", exc_info=True)
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                logger.debug("herdr: could not clean temp store", exc_info=True)
+
+
+def _locked_update(mutate: Callable[[dict], None]) -> None:
+    """Run a read-modify-write of the store under an exclusive lock.
+
+    The store is shared by every code-puppy process on the box, so concurrent
+    writers are the *normal* case here. Without the lock a stale reader
+    clobbers a newer writer's entry, and that pane silently loses its
+    auto-resume -- the exact feature this module exists to provide. The lock
+    lives in a sibling ``.lock`` file so ``replace()`` never swaps it out from
+    under us. ``fcntl`` is POSIX-only; elsewhere we degrade to best effort
+    rather than crash. Never raises.
+    """
+    path = _state_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.with_name(path.name + ".lock").open("a+") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                store = _read_store()
+                mutate(store)
+                _write_store(store)
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+    except Exception:
+        logger.debug("herdr: could not update pane-session map", exc_info=True)
 
 
 def remember_session(
@@ -93,28 +147,25 @@ def remember_session(
     """
     if not pane_id or not session_name:
         return
-    try:
-        store = _read_store()
+
+    def _mutate(store: dict) -> None:
         store[pane_id] = {
             "session_name": session_name,
             "session_path": str(session_path or ""),
         }
-        _write_store(store)
-    except Exception:
-        logger.debug("herdr: could not persist pane-session map", exc_info=True)
+
+    _locked_update(_mutate)
 
 
 def forget_session(pane_id: Optional[str]) -> None:
     """Drop ``pane_id``'s entry (used when its session is gone). Fail-soft."""
     if not pane_id:
         return
-    try:
-        store = _read_store()
-        if pane_id in store:
-            store.pop(pane_id, None)
-            _write_store(store)
-    except Exception:
-        logger.debug("herdr: could not update pane-session map", exc_info=True)
+
+    def _mutate(store: dict) -> None:
+        store.pop(pane_id, None)
+
+    _locked_update(_mutate)
 
 
 def _from_herdr(client: HerdrClient) -> Optional[SessionRef]:
@@ -176,8 +227,6 @@ def resume_session(client: HerdrClient) -> bool:
     session_name, session_dir = ref
 
     try:
-        from pathlib import Path
-
         from code_puppy.agents.agent_manager import get_current_agent
         from code_puppy.config import AUTOSAVE_DIR, pin_current_session_name
         from code_puppy.session_storage import load_session

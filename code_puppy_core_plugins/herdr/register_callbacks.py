@@ -179,7 +179,6 @@ def _on_tool_complete(*_args, **_kw):
     return None
 
 
-
 def _on_awaiting_user_input(*args, **_kw) -> None:
     # Keep the public callback's historical one-argument signature. Notification
     # intent is read synchronously from command_runner's current wait state.
