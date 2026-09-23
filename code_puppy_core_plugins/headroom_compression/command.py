@@ -4,9 +4,12 @@ allowlisted passthrough for read-only diagnostics.
 Enable/disable/restart/status are handled directly (they touch this plugin's
 own config + proxy lifecycle). A deliberately small, explicit allowlist of
 headroom's own read-only diagnostic subcommands (doctor/savings/
-output-savings/perf/dashboard) is forwarded to the real ``headroom`` binary
-so users get the same verification workflow they'd use standalone, without
-dropping to a raw shell.
+output-savings/perf/dashboard/telemetry/rollout) is forwarded to the real
+``headroom`` binary so users get the same verification workflow they'd use
+standalone, without dropping to a raw shell. Each entry was individually
+verified against ``headroom <cmd> --help`` to have no destructive or
+state-mutating flag reachable through forwarded args -- not just a plausible
+name.
 
 This is intentionally NOT a blanket passthrough. headroom's CLI also ships
 subcommands that would be actively harmful to expose here uncurated: ones
@@ -15,15 +18,22 @@ that start their own untracked long-running proxy/server
 this plugin's own proxy lifecycle), ones that mutate *other* tools' configs
 (``wrap``/``unwrap``/``install``/``init`` -- for Claude Code/Cursor/Codex,
 not us), one that mutates the headroom binary itself mid-session
-(``update``), and several that are simply moot here because this plugin
-always runs headroom with ``--stateless`` (``memory``, ``inspect`` read a
-disk-backed history that ``--stateless`` disables). Anything not on the
-allowlist is rejected with a warning rather than silently forwarded --
-never pass an arbitrary user-typed subcommand straight into
+(``update``), ones that make real LLM calls or run long benchmark suites
+(``learn`` -- also has a ``--apply`` flag that writes to project files;
+``evals``), one that handles privacy-sensitive raw MITM-captured traffic
+(``capture``), one that only audits *other* tools' transcript formats
+(``audit-reads`` -- Claude Code/Codex, not code-puppy's own), one that
+merges/recovers on-disk state (``recover``), and several that are simply
+moot here because this plugin always runs headroom with ``--stateless``
+(``memory`` -- disk-backed history is disabled; ``inspect`` -- its own
+``--help`` states it requires the proxy to be started with
+``--log-messages``/``--log-file``, which this plugin never does). Anything
+not on the allowlist is rejected with a warning rather than silently
+forwarded -- never pass an arbitrary user-typed subcommand straight into
 ``subprocess.run``.
 
 Adding a new command to the allowlist should be a deliberate, reviewed
-decision, not a default.
+decision verified against that command's own ``--help``, not a default.
 """
 
 from __future__ import annotations
@@ -39,7 +49,7 @@ from . import config, proxy
 # debugging headroom-in-code-puppy. See the module docstring for why the
 # rest of headroom's CLI surface is deliberately excluded.
 _PASSTHROUGH_ALLOWLIST = frozenset(
-    {"doctor", "savings", "output-savings", "perf", "dashboard"}
+    {"doctor", "savings", "output-savings", "perf", "dashboard", "telemetry", "rollout"}
 )
 
 
@@ -134,6 +144,7 @@ def get_headroom_command_help() -> list:
             "headroom",
             "Route a custom Anthropic endpoint through a local headroom "
             "compression proxy -- /headroom enable <url> | disable | status | "
-            "restart | doctor | savings | output-savings | perf | dashboard",
+            "restart | doctor | savings | output-savings | perf | dashboard | "
+            "telemetry | rollout",
         )
     ]

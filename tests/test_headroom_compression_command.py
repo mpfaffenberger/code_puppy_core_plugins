@@ -124,6 +124,25 @@ def test_unrecognized_subcommand_passes_through_to_headroom_cli():
     mock_run.assert_called_once_with(["/fake/headroom", "doctor"])
 
 
+def test_telemetry_and_rollout_are_allowlisted():
+    """Both verified read-only against their own --help: telemetry only
+    prints what the beacon would send, rollout only resolves and prints a
+    hypothetical config -- neither has a flag that persists anything."""
+    for cmd in ("telemetry", "rollout"):
+        with (
+            patch(
+                "code_puppy_core_plugins.headroom_compression.command.proxy._headroom_bin",
+                return_value="/fake/headroom",
+            ),
+            patch(
+                "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
+            ) as mock_run,
+        ):
+            result = handle_headroom_command(f"/headroom {cmd}", "headroom")
+        assert result is True
+        mock_run.assert_called_once_with(["/fake/headroom", cmd])
+
+
 def test_passthrough_forwards_extra_args_for_allowlisted_command():
     with (
         patch(
@@ -141,11 +160,30 @@ def test_passthrough_forwards_extra_args_for_allowlisted_command():
 def test_non_allowlisted_subcommand_is_rejected_not_forwarded():
     """Regression guard: headroom ships subcommands that start their own
     untracked proxy/server (proxy, mcp, deploy), mutate other tools'
-    configs (wrap/unwrap/install/init), or mutate the headroom binary
-    itself (update). None of these may ever reach subprocess.run just
-    because a user typed them -- only the explicit allowlist may.
+    configs (wrap/unwrap/install/init), mutate the headroom binary itself
+    (update), make real LLM calls or run benchmark suites (learn, evals),
+    handle privacy-sensitive raw traffic (capture), only audit other
+    tools' transcript formats (audit-reads), merge/recover on-disk state
+    (recover), or are moot under --stateless (memory, inspect). None of
+    these may ever reach subprocess.run just because a user typed them --
+    only the explicit allowlist may.
     """
-    for dangerous in ("proxy", "mcp", "deploy", "update", "wrap", "install", "memory"):
+    for dangerous in (
+        "proxy",
+        "mcp",
+        "deploy",
+        "update",
+        "wrap",
+        "install",
+        "memory",
+        "learn",
+        "evals",
+        "capture",
+        "audit-reads",
+        "recover",
+        "inspect",
+        "agent-savings",
+    ):
         with (
             patch(
                 "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
