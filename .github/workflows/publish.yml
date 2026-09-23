@@ -27,13 +27,13 @@ jobs:
           uv pip install -e . --group dev
       - name: Quality
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
       - name: Tests
         env:
           CI: '1'
           CODE_PUPPY_TEST_FAST: '1'
-        run: uv run pytest -q
+        run: uv run --no-sync pytest -q
 
   build-publish:
     runs-on: ubuntu-latest

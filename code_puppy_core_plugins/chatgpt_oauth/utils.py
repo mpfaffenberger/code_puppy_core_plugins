@@ -23,9 +23,11 @@ from .config import (
     get_token_storage_path,
 )
 from .model_catalog import (
+    SUPPLEMENTAL_CODEX_MODELS,
     CodexModelInfo,
     fallback_catalog,
     parse_model_catalog,
+    supplement_model_catalog,
 )
 
 logger = logging.getLogger(__name__)
@@ -379,8 +381,7 @@ def exchange_code_for_tokens(
 # and shell-scripts/codex-call.sh).
 DEFAULT_CODEX_MODELS = [
     "gpt-6-astra",
-    "gpt-6-luna",
-    "gpt-6-sol",
+    *SUPPLEMENTAL_CODEX_MODELS,
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
@@ -493,7 +494,7 @@ def fetch_chatgpt_models(access_token: str, account_id: str) -> List[CodexModelI
             try:
                 catalog = parse_model_catalog(response.json())
                 if catalog:
-                    return catalog
+                    return supplement_model_catalog(catalog)
             except (json.JSONDecodeError, ValueError) as exc:
                 logger.warning("Failed to parse models response: %s", exc)
             logger.info(
