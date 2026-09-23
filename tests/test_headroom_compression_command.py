@@ -128,23 +128,27 @@ def test_unrecognized_subcommand_passes_through_to_headroom_cli():
     mock_run.assert_called_once_with(["/fake/headroom", "doctor"])
 
 
-def test_telemetry_and_rollout_are_allowlisted():
-    """Both verified read-only against their own --help: telemetry only
-    prints what the beacon would send, rollout only resolves and prints a
-    hypothetical config -- neither has a flag that persists anything."""
+def test_safe_but_not_in_session_useful_commands_are_still_rejected():
+    """telemetry and rollout are individually verified read-only/safe
+    against their own --help (see module docstring) -- but safety alone
+    isn't the bar. Neither is something a user would reach for without
+    leaving a code-puppy session (one-off audit of headroom's telemetry
+    disclosure, or headroom's own internal feature-rollout policy), so
+    both stay excluded even though nothing would go wrong if forwarded.
+    """
     for cmd in ("telemetry", "rollout"):
         with (
             patch(
-                "code_puppy_core_plugins.headroom_compression.command.proxy._headroom_bin",
-                return_value="/fake/headroom",
-            ),
-            patch(
                 "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
             ) as mock_run,
+            patch(
+                "code_puppy_core_plugins.headroom_compression.command.emit_warning"
+            ) as mock_warning,
         ):
             result = handle_headroom_command(f"/headroom {cmd}", "headroom")
         assert result is True
-        mock_run.assert_called_once_with(["/fake/headroom", cmd])
+        mock_run.assert_not_called()
+        mock_warning.assert_called_once()
 
 
 def test_passthrough_forwards_extra_args_for_allowlisted_command():
@@ -187,6 +191,8 @@ def test_non_allowlisted_subcommand_is_rejected_not_forwarded():
         "recover",
         "inspect",
         "agent-savings",
+        "telemetry",
+        "rollout",
     ):
         with (
             patch(

@@ -4,12 +4,23 @@ allowlisted passthrough for read-only diagnostics.
 Enable/disable/restart/status are handled directly (they touch this plugin's
 own config + proxy lifecycle). A deliberately small, explicit allowlist of
 headroom's own read-only diagnostic subcommands (doctor/savings/
-output-savings/perf/dashboard/telemetry/rollout) is forwarded to the real
-``headroom`` binary so users get the same verification workflow they'd use
-standalone, without dropping to a raw shell. Each entry was individually
-verified against ``headroom <cmd> --help`` to have no destructive or
-state-mutating flag reachable through forwarded args -- not just a plausible
-name.
+output-savings/perf/dashboard) is forwarded to the real ``headroom`` binary
+so users get the same verification workflow they'd use standalone, without
+dropping to a raw shell.
+
+The bar for this allowlist is two-part, and BOTH parts are required:
+  1. Safe -- individually verified against ``headroom <cmd> --help`` to have
+     no destructive or state-mutating flag reachable through forwarded args.
+  2. Actually useful *inside a code-puppy session specifically* -- something
+     a user would reasonably want without breaking their coding flow to
+     drop to a shell ("is my routing/savings working right now"). Safety
+     alone is NOT sufficient: this list is intentionally not exhaustive,
+     and does not grow just because a command turns out to be harmless.
+     Anything safe-but-niche (e.g. headroom's own internal feature-rollout
+     inspection, or its telemetry-disclosure command) is left off on
+     purpose -- those are one-off audit actions a user can run directly via
+     ``headroom <cmd>`` in a terminal, not something that benefits from
+     living inside a coding session.
 
 This is intentionally NOT a blanket passthrough. headroom's CLI also ships
 subcommands that would be actively harmful to expose here uncurated: ones
@@ -23,17 +34,19 @@ not us), one that mutates the headroom binary itself mid-session
 ``evals``), one that handles privacy-sensitive raw MITM-captured traffic
 (``capture``), one that only audits *other* tools' transcript formats
 (``audit-reads`` -- Claude Code/Codex, not code-puppy's own), one that
-merges/recovers on-disk state (``recover``), and several that are simply
-moot here because this plugin always runs headroom with ``--stateless``
+merges/recovers on-disk state (``recover``), several that are simply moot
+here because this plugin always runs headroom with ``--stateless``
 (``memory`` -- disk-backed history is disabled; ``inspect`` -- its own
 ``--help`` states it requires the proxy to be started with
-``--log-messages``/``--log-file``, which this plugin never does). Anything
-not on the allowlist is rejected with a warning rather than silently
-forwarded -- never pass an arbitrary user-typed subcommand straight into
-``subprocess.run``.
+``--log-messages``/``--log-file``, which this plugin never does), and two
+that are perfectly safe but fail the in-session-utility bar rather than the
+safety bar (``telemetry``, ``rollout`` -- one-off audit/debug actions, not
+something a coding session benefits from). Anything not on the allowlist is
+rejected with a warning rather than silently forwarded -- never pass an
+arbitrary user-typed subcommand straight into ``subprocess.run``.
 
 Adding a new command to the allowlist should be a deliberate, reviewed
-decision verified against that command's own ``--help``, not a default.
+decision verified against both criteria above, not a default.
 """
 
 from __future__ import annotations
@@ -45,25 +58,27 @@ from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warni
 
 from . import config, proxy
 
-# Read-only headroom CLI diagnostics known to be useful for verifying/
-# debugging headroom-in-code-puppy. See the module docstring for why the
-# rest of headroom's CLI surface is deliberately excluded.
+# Read-only headroom CLI diagnostics known to be both safe AND genuinely
+# useful to run without leaving a code-puppy session. See the module
+# docstring for why the rest of headroom's CLI surface -- including some
+# individually-safe commands -- is deliberately excluded.
 _PASSTHROUGH_ALLOWLIST = frozenset(
-    {"doctor", "savings", "output-savings", "perf", "dashboard", "telemetry", "rollout"}
+    {"doctor", "savings", "output-savings", "perf", "dashboard"}
 )
 
 # Every other real headroom subcommand as of headroom-ai 0.38.0, deliberately
-# reviewed and rejected -- see the module docstring for the reason behind
-# each one. This set exists so the drift helpers below can tell "genuinely
+# reviewed and rejected -- either for safety (see module docstring) or
+# because it fails the in-session-utility bar despite being safe (telemetry,
+# rollout). This set exists so the drift helpers below can tell "genuinely
 # new, never seen" apart from "seen and deliberately excluded" -- without
-# it, a drift check would re-flag the same 21 known-excluded names forever
+# it, a drift check would re-flag the same 23 known-excluded names forever
 # instead of only the ones that actually need a human decision.
 _KNOWN_EXCLUDED = frozenset(
     {
         "agent-savings", "audit-reads", "capture", "copilot-auth", "deploy",
         "diff", "evals", "init", "inspect", "install", "learn", "loc", "mcp",
-        "memory", "proxy", "recover", "sg", "tools", "unwrap", "update",
-        "wrap",
+        "memory", "proxy", "recover", "rollout", "sg", "telemetry", "tools",
+        "unwrap", "update", "wrap",
     }
 )
 
@@ -211,7 +226,6 @@ def get_headroom_command_help() -> list:
             "headroom",
             "Route a custom Anthropic endpoint through a local headroom "
             "compression proxy -- /headroom enable <url> | disable | status | "
-            "restart | doctor | savings | output-savings | perf | dashboard | "
-            "telemetry | rollout",
+            "restart | doctor | savings | output-savings | perf | dashboard",
         )
     ]

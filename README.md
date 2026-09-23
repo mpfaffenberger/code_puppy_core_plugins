@@ -58,17 +58,23 @@ Other built-in subcommands: `/headroom disable`, `/headroom status`,
 
 A small, explicit allowlist of headroom's own read-only diagnostic
 subcommands is also forwarded to the real `headroom` binary: `doctor`,
-`savings`, `output-savings`, `perf`, `dashboard`, `telemetry`, `rollout`
-(e.g. `/headroom doctor` to verify routing). This is deliberately *not* a
-blanket passthrough -- headroom ships other subcommands that start their own
-untracked proxy/server, mutate other tools' configs, make real LLM calls,
-handle privacy-sensitive raw traffic, or mutate the `headroom` binary
-itself, none of which belong behind an unreviewed allowlist entry. Note
-that because this plugin always runs the proxy with `--stateless`,
-`savings`/`dashboard`'s on-disk history will show nothing even while
-compression is actively happening -- `/headroom doctor`'s own savings check
-reads the proxy's live in-memory stats instead and is the reliable source
-of truth.
+`savings`, `output-savings`, `perf`, `dashboard` (e.g. `/headroom doctor` to
+verify routing). This is deliberately *not* a blanket passthrough, and the
+bar for inclusion is two-part: a command must be both safe (individually
+verified against its own `--help`, no destructive flag reachable through
+forwarded args) *and* something a user would actually want without leaving
+a coding session -- "is my routing/savings working right now." Safety alone
+isn't enough to earn a slot: headroom ships other commands that are
+perfectly safe but purely one-off audit/debug actions (its telemetry
+disclosure, its internal feature-rollout inspector) -- those are left out on
+purpose and can just be run directly via `headroom <cmd>` in a terminal.
+Other excluded subcommands start their own untracked proxy/server, mutate
+other tools' configs, make real LLM calls, handle privacy-sensitive raw
+traffic, or mutate the `headroom` binary itself. Note that because this
+plugin always runs the proxy with `--stateless`, `savings`/`dashboard`'s
+on-disk history will show nothing even while compression is actively
+happening -- `/headroom doctor`'s own savings check reads the proxy's live
+in-memory stats instead and is the reliable source of truth.
 
 ## Completion notifications
 
