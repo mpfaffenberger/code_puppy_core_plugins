@@ -457,7 +457,7 @@ def _build_model_entry(model_name: str, access_token: str, context_length: int) 
             "headers": {
                 "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
                 "x-app": "cli",
-                "User-Agent": "claude-cli/2.0.61 (external, cli)",
+                "User-Agent": "claude-cli/2.1.280 (external, cli)",
             },
         },
         "context_length": context_length,

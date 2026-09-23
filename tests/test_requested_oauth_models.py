@@ -30,6 +30,9 @@ def test_opus_5_5_survives_family_filter():
     entry = _build_model_entry("claude-opus-5-5", "test-token", 200000)
     assert entry["name"] == "claude-opus-5-5"
     assert "effort" in entry["supported_settings"]
+    assert entry["custom_endpoint"]["headers"]["User-Agent"].startswith(
+        "claude-cli/2.1.280 "
+    )
 
 
 @pytest.mark.parametrize("name", ["gpt-6-luna", "gpt-6-sol"])
