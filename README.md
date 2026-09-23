@@ -51,8 +51,22 @@ This requires the `headroom` binary to already be installed
 (`pip install headroom-ai`) -- the plugin detects it but does not install it
 for you, since it can't safely guess your Python toolchain (pip/uv/pipx/etc).
 If the proxy becomes unreachable mid-session, requests fall back to the
-direct endpoint automatically and a warning is shown. Other subcommands:
-`/headroom disable`, `/headroom status`, `/headroom restart`.
+direct endpoint automatically and a warning is shown.
+
+Other built-in subcommands: `/headroom disable`, `/headroom status`,
+`/headroom restart`.
+
+A small, explicit allowlist of headroom's own read-only diagnostic
+subcommands is also forwarded to the real `headroom` binary: `doctor`,
+`savings`, `output-savings`, `perf`, `dashboard` (e.g. `/headroom doctor` to
+verify routing). This is deliberately *not* a blanket passthrough -- headroom
+ships other subcommands that start their own untracked proxy/server, mutate
+other tools' configs, or mutate the `headroom` binary itself, none of which
+belong behind an unreviewed allowlist entry. Note that because this plugin
+always runs the proxy with `--stateless`, `savings`/`dashboard`'s on-disk
+history will show nothing even while compression is actively happening --
+`/headroom doctor`'s own savings check reads the proxy's live in-memory
+stats instead and is the reliable source of truth.
 
 ## Completion notifications
 

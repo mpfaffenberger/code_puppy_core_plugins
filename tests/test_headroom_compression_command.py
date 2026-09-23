@@ -124,7 +124,7 @@ def test_unrecognized_subcommand_passes_through_to_headroom_cli():
     mock_run.assert_called_once_with(["/fake/headroom", "doctor"])
 
 
-def test_passthrough_forwards_extra_args():
+def test_passthrough_forwards_extra_args_for_allowlisted_command():
     with (
         patch(
             "code_puppy_core_plugins.headroom_compression.command.proxy._headroom_bin",
@@ -134,8 +134,30 @@ def test_passthrough_forwards_extra_args():
             "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
         ) as mock_run,
     ):
-        handle_headroom_command("/headroom memory list", "headroom")
-    mock_run.assert_called_once_with(["/fake/headroom", "memory", "list"])
+        handle_headroom_command("/headroom perf --since 1h", "headroom")
+    mock_run.assert_called_once_with(["/fake/headroom", "perf", "--since", "1h"])
+
+
+def test_non_allowlisted_subcommand_is_rejected_not_forwarded():
+    """Regression guard: headroom ships subcommands that start their own
+    untracked proxy/server (proxy, mcp, deploy), mutate other tools'
+    configs (wrap/unwrap/install/init), or mutate the headroom binary
+    itself (update). None of these may ever reach subprocess.run just
+    because a user typed them -- only the explicit allowlist may.
+    """
+    for dangerous in ("proxy", "mcp", "deploy", "update", "wrap", "install", "memory"):
+        with (
+            patch(
+                "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
+            ) as mock_run,
+            patch(
+                "code_puppy_core_plugins.headroom_compression.command.emit_warning"
+            ) as mock_warning,
+        ):
+            result = handle_headroom_command(f"/headroom {dangerous}", "headroom")
+        assert result is True
+        mock_run.assert_not_called()
+        mock_warning.assert_called_once()
 
 
 def test_passthrough_warns_when_headroom_not_installed():

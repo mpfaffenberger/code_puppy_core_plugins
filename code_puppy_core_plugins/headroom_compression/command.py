@@ -1,12 +1,29 @@
-"""``/headroom`` command -- enable, disable, restart, status, plus passthrough.
+"""``/headroom`` command -- enable, disable, restart, status, plus a small
+allowlisted passthrough for read-only diagnostics.
 
 Enable/disable/restart/status are handled directly (they touch this plugin's
-own config + proxy lifecycle). Everything else (``doctor``, ``perf``,
-``dashboard``, ``savings``, ``memory list``, ... any current or future
-headroom CLI subcommand) is forwarded verbatim to the real ``headroom``
-binary -- no code changes needed here when headroom adds new commands, and
-users keep their existing muscle memory (e.g. ``headroom doctor`` to verify
-routing) without having to drop out to a raw shell.
+own config + proxy lifecycle). A deliberately small, explicit allowlist of
+headroom's own read-only diagnostic subcommands (doctor/savings/
+output-savings/perf/dashboard) is forwarded to the real ``headroom`` binary
+so users get the same verification workflow they'd use standalone, without
+dropping to a raw shell.
+
+This is intentionally NOT a blanket passthrough. headroom's CLI also ships
+subcommands that would be actively harmful to expose here uncurated: ones
+that start their own untracked long-running proxy/server
+(``proxy``, ``mcp``, ``deploy`` -- would hang the session or desync from
+this plugin's own proxy lifecycle), ones that mutate *other* tools' configs
+(``wrap``/``unwrap``/``install``/``init`` -- for Claude Code/Cursor/Codex,
+not us), one that mutates the headroom binary itself mid-session
+(``update``), and several that are simply moot here because this plugin
+always runs headroom with ``--stateless`` (``memory``, ``inspect`` read a
+disk-backed history that ``--stateless`` disables). Anything not on the
+allowlist is rejected with a warning rather than silently forwarded --
+never pass an arbitrary user-typed subcommand straight into
+``subprocess.run``.
+
+Adding a new command to the allowlist should be a deliberate, reviewed
+decision, not a default.
 """
 
 from __future__ import annotations
@@ -17,6 +34,13 @@ from typing import Optional
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
 
 from . import config, proxy
+
+# Read-only headroom CLI diagnostics known to be useful for verifying/
+# debugging headroom-in-code-puppy. See the module docstring for why the
+# rest of headroom's CLI surface is deliberately excluded.
+_PASSTHROUGH_ALLOWLIST = frozenset(
+    {"doctor", "savings", "output-savings", "perf", "dashboard"}
+)
 
 
 def handle_headroom_command(command: str, name: str) -> Optional[bool]:
@@ -60,17 +84,27 @@ def handle_headroom_command(command: str, name: str) -> Optional[bool]:
         _show_status()
         return True
 
-    _run_passthrough([subcommand] + parts[2:])
+    if subcommand in _PASSTHROUGH_ALLOWLIST:
+        _run_passthrough([subcommand] + parts[2:])
+        return True
+
+    emit_warning(
+        f"'{subcommand}' isn't a supported /headroom subcommand.\n"
+        f"  Built-in: enable <url> | disable | restart | status\n"
+        f"  Diagnostics: {', '.join(sorted(_PASSTHROUGH_ALLOWLIST))}\n"
+        "  Anything else: run `headroom <subcommand>` directly in a shell."
+    )
     return True
 
 
 def _run_passthrough(args: list) -> None:
-    """Run ``headroom <args>`` and stream its output straight to the terminal.
+    """Run an allowlisted ``headroom <args>`` and stream output to the terminal.
 
-    No timeout is applied -- some headroom subcommands are long-running or
-    open a browser and exit on their own (``dashboard``), or stream results
-    of unknown size (``memory list``); a fixed timeout would kill those
-    mid-flight.
+    No timeout is applied -- ``dashboard`` opens a browser and exits on its
+    own, and log/history sizes for ``perf``/``savings`` are unbounded; a
+    fixed timeout would kill those mid-flight. Safe specifically because
+    every caller of this function has already been checked against
+    ``_PASSTHROUGH_ALLOWLIST`` -- never call it with an unvalidated arg.
     """
     bin_path = proxy._headroom_bin()
     if not bin_path:
@@ -100,6 +134,6 @@ def get_headroom_command_help() -> list:
             "headroom",
             "Route a custom Anthropic endpoint through a local headroom "
             "compression proxy -- /headroom enable <url> | disable | status | "
-            "restart | <any headroom CLI subcommand, e.g. doctor, perf, savings>",
+            "restart | doctor | savings | output-savings | perf | dashboard",
         )
     ]
