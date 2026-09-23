@@ -23,7 +23,8 @@ nothing for herdr to guess.
 
 Callback -> effect:
 
-* ``startup`` ......................................... resync (-> idle)
+* ``startup`` ......................................... resync (-> idle) + auto-resume
+* ``handle_cli_args`` ................................ capture -r / --quick-resume intent
 * ``session_end`` / ``shutdown`` ..................... release pane authority
 * ``user_prompt_submit`` ............................. refresh durable session
 * ``agent_run_start`` / ``agent_run_end`` ............ run-depth +/- 1
@@ -62,6 +63,7 @@ import signal
 
 from code_puppy.callbacks import register_callback
 
+from . import restore
 from .client import HerdrClient
 from .reporter import HerdrReporter
 
@@ -82,13 +84,58 @@ _TERMINATING_SIGNALS = tuple(
 _client = HerdrClient()
 _reporter = HerdrReporter(_client)
 
+#: Set from ``handle_cli_args`` so startup auto-resume yields to an explicit
+#: ``-r`` / ``--quick-resume``. The plugin cannot see the parsed args from the
+#: ``startup`` callback, and that hook fires *before* ``-r`` is applied -- so
+#: we capture the intent here rather than re-parsing ``sys.argv`` (DRY).
+_cli_resume_requested = False
+_cli_headless = False
+
 
 def _arg(args: tuple, index: int):
     return args[index] if len(args) > index else None
 
 
+def _on_handle_cli_args(args) -> None:
+    """Record whether the user asked for an explicit resume / headless run.
+
+    Runs after ``parse_args()`` and before ``startup``. Never handles the args
+    itself; returning ``None`` lets normal startup proceed.
+    """
+    global _cli_resume_requested, _cli_headless
+    try:
+        _cli_resume_requested = bool(getattr(args, "resume", None)) or (
+            getattr(args, "quick_resume", None) is not None
+        )
+        _cli_headless = bool(getattr(args, "prompt", None))
+    except Exception:
+        _cli_resume_requested = False
+        _cli_headless = False
+    return None
+
+
+def _maybe_auto_resume() -> None:
+    """Resume this pane's previous session unless the user asked otherwise.
+
+    Yields to an explicit ``-r`` / ``--quick-resume``, skips headless ``-p``
+    runs, and honours ``HERDR_NO_AUTO_RESUME=1`` as an escape hatch for
+    anyone who wants a deliberately fresh session in a reused pane.
+    """
+    if _cli_resume_requested or _cli_headless:
+        return
+    if os.environ.get("HERDR_NO_AUTO_RESUME", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    restore.resume_session(_client)
+
+
 def _on_startup(*_args, **_kw) -> None:
     _reporter.on_startup()
+    _maybe_auto_resume()
 
 
 def _on_user_prompt(*_args, **_kw) -> None:
@@ -209,6 +256,7 @@ def _install_exit_guards() -> None:
 
 
 if _reporter.active:
+    register_callback("handle_cli_args", _on_handle_cli_args)
     register_callback("startup", _on_startup)
     register_callback("user_prompt_submit", _on_user_prompt)
     register_callback("agent_run_start", _on_run_start)

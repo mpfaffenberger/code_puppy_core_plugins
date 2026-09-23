@@ -166,6 +166,58 @@ async def test_boundary_event_failure_does_not_eat_report(setup, monkeypatch):
     assert "ok" in pop_completion(owner)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_boundary", [False, True])
+async def test_completion_wakes_owner_before_boundary_finishes(
+    setup, monkeypatch, cancel_boundary
+):
+    from code_puppy import callbacks
+    from code_puppy.agent_completion_inbox import (
+        pop_completion,
+        wait_for_completion_or_input,
+    )
+    from code_puppy.tools import subagent_invocation
+    from code_puppy.tools.agent_tools import AgentInvokeOutput
+
+    owner, invoke = setup
+    boundary_started = asyncio.Event()
+    release_boundary = asyncio.Event()
+
+    async def boundary(*args):
+        boundary_started.set()
+        await release_boundary.wait()
+
+    monkeypatch.setattr(
+        subagent_invocation,
+        "_invoke_agent_impl",
+        AsyncMock(return_value=AgentInvokeOutput(response="ok", agent_name="worker")),
+    )
+    monkeypatch.setattr(callbacks, "on_post_tool_call", boundary)
+    waiter = asyncio.create_task(wait_for_completion_or_input(owner, asyncio.Queue()))
+    launch = await invoke(None, "worker", "work", "boundary-session")
+    task = plugin._tasks[launch["task_id"]]
+    try:
+        await asyncio.wait_for(boundary_started.wait(), 1)
+        assert "completed" in await asyncio.wait_for(waiter, 1)
+        assert "ok" in pop_completion(owner)
+        assert pop_completion(owner) is None
+        # Shutdown must still be able to find a task blocked in callbacks.
+        assert plugin._tasks[launch["task_id"]] is task
+        if cancel_boundary:
+            await plugin._shutdown()
+        else:
+            release_boundary.set()
+            await task
+    finally:
+        release_boundary.set()
+        await asyncio.gather(task, return_exceptions=True)
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+    assert launch["task_id"] not in plugin._tasks
+    assert "boundary-session" not in plugin._sessions
+    assert pop_completion(owner) is None
+
+
 def test_pydantic_tool_registration():
     from pydantic_ai import Agent
 

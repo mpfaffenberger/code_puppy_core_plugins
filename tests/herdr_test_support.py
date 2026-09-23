@@ -12,14 +12,24 @@ from __future__ import annotations
 class FakeClient:
     """Records report calls instead of touching a socket."""
 
-    def __init__(self, active: bool = True) -> None:
+    def __init__(
+        self,
+        active: bool = True,
+        pane_id: str | None = None,
+        agent_session: dict | None = None,
+    ) -> None:
         self._active = active
+        self.pane_id = pane_id
+        self._agent_session = agent_session
         self.states: list[tuple[str, str | None]] = []
         self.activity: list[tuple[str, str | None, bool]] = []
         self.sessions: list[tuple[str, str]] = []
         self.metadata: list[dict] = []
         self.tab_labels: list[tuple[str | None, str | None]] = []
         self.closed = False
+
+    def get_agent_session(self):
+        return self._agent_session
 
     def report_state(
         self, state, agent_session_id=None, *, message=None, critical=True

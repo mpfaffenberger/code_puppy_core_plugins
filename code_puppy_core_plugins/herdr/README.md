@@ -92,8 +92,41 @@ durable autosave name and pickle path) via `pane.report_agent_session` --
 not the per-run `group_id`, which changes every turn. It re-reports only
 when the reference actually changes (after `/clear`, `/session new`,
 `/autosave_load`, `/load_context`, a quick resume, or an agent switch).
-This is a stable *reference*; automatic process restoration from it is
-**unverified** and not claimed here.
+
+## Auto-resume on launch
+
+A herdr server restart kills pane processes, and herdr only *restores*
+panes whose agent reported a native session reference through an **official**
+herdr integration. code-puppy is not one of those today, so herdr stores
+nothing for us -- verified against herdr 0.9.1: `pane.report_agent_session`
+is accepted, but `pane.get` exposes no `agent_session` for the `codepuppy`
+agent (the identical call for `codex` does).
+
+So the plugin is self-sufficient. Whenever it reports a session reference it
+also records a tiny **pane -> session map** (`herdr_pane_sessions.json`) under
+`XDG_STATE_HOME` -- never inside the plugin dir, which would self-tamper the
+trust hash. On startup inside a pane it resolves the previous session and
+loads it into the agent, exactly like `-r`:
+
+1. herdr's own stored reference via `pane.get` (forward-compatible: the day
+   herdr recognises codepuppy, or grows a custom-integration hook, this wins);
+2. else the local pane map.
+
+An explicit `-r` / `--quick-resume` always wins (the plugin captures the
+intent from the `handle_cli_args` hook), and headless `-p` runs never
+auto-resume. Set `HERDR_NO_AUTO_RESUME=1` for a deliberately fresh session
+in a reused pane. Everything is fail-soft: a missing socket, a vanished
+session file, or an unreadable map simply yields a fresh session.
+
+Net effect: restart herdr, start code-puppy in the restored pane, and your
+conversation is already back on screen.
+
+> This ships in the `code-puppy-core-plugins` bundle. Most people run code-puppy
+> through `uvx`, so nothing to install locally: the change reaches them on the
+> next PyPI release. Because `code-puppy` depends on the bundle by range
+> (`>=0.0.58`), a fresh resolve picks the new version up automatically -- but
+> `uvx` reuses a warm cache, so a user may need `uvx --refresh code-puppy`
+> (or `uvx -U code-puppy`) once.
 
 ## Conversation titles
 
@@ -199,6 +232,7 @@ state, metadata, and activity.
 | `client.py`             | herdr socket transport (JSON, worker thread)|
 | `reporter.py`           | event -> state machine (refcount + dedup)   |
 | `sources.py`            | fail-soft adapters (tokens / title / session / msg) |
+| `restore.py`            | pane -> session map + auto-resume on startup |
 | `register_callbacks.py` | callback wiring + env activation guard       |
 | `smoke.py`              | manual live smoke test (disposable pane + tab) |
 
