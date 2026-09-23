@@ -1,0 +1,260 @@
+"""headroom proxy lifecycle -- start, stop, health-check, URL redirect.
+
+Generic by design: the upstream URL to proxy is whatever the user explicitly
+configured via ``/headroom enable <url>`` (config.py), never a hardcoded
+hostname. The subprocess inherits the full parent environment unmodified, so
+any org-specific CA bundle / corporate proxy already set in the user's shell
+carries through automatically -- this plugin does not need to know about it.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import time
+from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
+
+logger = logging.getLogger(__name__)
+
+_PROXY_PORT = 8787
+_PROXY_URL = f"http://127.0.0.1:{_PROXY_PORT}"
+
+_proxy_process: Optional[subprocess.Popen] = None
+_proxy_active: bool = False
+_upstream_url: str = ""
+
+
+def _headroom_bin() -> Optional[str]:
+    """Return path to the headroom binary if installed, else None."""
+    candidate = os.path.join(sys.prefix, "bin", "headroom")
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return shutil.which("headroom")
+
+
+def _is_proxy_healthy() -> bool:
+    try:
+        import httpx
+
+        r = httpx.get(f"{_PROXY_URL}/health", timeout=2.0)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+def start_proxy(upstream_url: str) -> bool:
+    """Start the headroom proxy in front of ``upstream_url``.
+
+    Returns True if the proxy is confirmed healthy, False otherwise -- the
+    caller always continues either way (never bricks code-puppy).
+
+    Deliberately does NOT short-circuit on "something healthy is already on
+    the port" -- a stale orphaned process (or an unrelated dev server) from
+    a prior session could be listening there for a *different* upstream,
+    and silently adopting it would misroute this session's credentialed
+    requests to the wrong host. Only a process this same instance already
+    started, for this same upstream, is treated as "already running"; any
+    other occupant of the port causes the fresh Popen below to fail to bind
+    and start_proxy returns False (loud and safe) rather than adopting.
+    """
+    global _proxy_process, _proxy_active, _upstream_url
+
+    headroom = _headroom_bin()
+    if not headroom:
+        return False
+
+    if (
+        _proxy_process is not None
+        and _upstream_url == upstream_url
+        and _proxy_process.poll() is None
+        and _is_proxy_healthy()
+    ):
+        _proxy_active = True
+        return True
+
+    try:
+        _proxy_process = subprocess.Popen(
+            [
+                headroom,
+                "proxy",
+                "--port",
+                str(_PROXY_PORT),
+                "--anthropic-api-url",
+                upstream_url,
+                "--stateless",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        logger.debug("headroom_compression: failed to start proxy: %s", exc)
+        return False
+
+    for _ in range(10):
+        if _is_proxy_healthy():
+            _proxy_active = True
+            _upstream_url = upstream_url
+            return True
+        time.sleep(0.5)
+
+    _kill_proxy_process()
+    return False
+
+
+def _kill_proxy_process() -> None:
+    """Terminate, escalating to kill(), so the child can never outlive us
+    holding the port -- that's the precondition for the adoption hazard
+    start_proxy's docstring describes."""
+    global _proxy_process
+    if _proxy_process is None:
+        return
+    try:
+        _proxy_process.terminate()
+        _proxy_process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            _proxy_process.kill()
+            _proxy_process.wait(timeout=5)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    _proxy_process = None
+
+
+def stop_proxy() -> None:
+    global _proxy_active
+    _proxy_active = False
+    _kill_proxy_process()
+
+
+def restart_proxy() -> bool:
+    from . import config
+
+    upstream = _upstream_url or config.get_upstream_url()
+    stop_proxy()
+    return start_proxy(upstream) if upstream else False
+
+
+def is_active() -> bool:
+    return _proxy_active
+
+
+def check_and_fallback() -> bool:
+    """If the proxy was active but is now unhealthy, deactivate it.
+
+    Returns True if fallback was applied (caller should warn the user).
+    """
+    global _proxy_active
+    if not _proxy_active:
+        return False
+    if not _is_proxy_healthy():
+        _proxy_active = False
+        return True
+    return False
+
+
+_CONNECTION_FAILURE_MARKERS = (
+    "connection",
+    "connect",
+    "timeout",
+    "network",
+    "readerror",
+    "remoteprotocolerror",
+    "proxyerror",
+)
+
+
+def _looks_like_connection_failure(exception, _depth: int = 0) -> bool:
+    """Check the exception's own type AND its __cause__/__context__ chain --
+    pydantic-ai commonly wraps the real transport error (e.g.
+    UnexpectedModelBehavior wrapping an httpx.ConnectError)."""
+    if _depth > 5 or exception is None:
+        return False
+    exc_type = type(exception)
+    haystack = f"{exc_type.__module__}.{exc_type.__name__}".lower()
+    if isinstance(exception, (ConnectionError, TimeoutError, OSError)):
+        return True
+    if any(m in haystack for m in _CONNECTION_FAILURE_MARKERS):
+        return True
+    return _looks_like_connection_failure(
+        exception.__cause__ or exception.__context__, _depth + 1
+    )
+
+
+def on_agent_exception_check_proxy(
+    exception: BaseException, *_: object, **__: object
+) -> None:
+    """Registered on the generic ``agent_exception`` hook (already in core).
+
+    Detects proxy failure on connection-flavored exceptions and deactivates
+    the redirect (and stops the proxy) so the next call goes direct to the
+    real upstream.
+    """
+    if not _proxy_active:
+        return None
+    if not _looks_like_connection_failure(exception):
+        return None
+    if check_and_fallback():
+        stop_proxy()
+        try:
+            from code_puppy.messaging import emit_warning
+
+            emit_warning(
+                "headroom proxy is unreachable -- switched to direct upstream.\n"
+                "  Run /headroom restart to re-enable compression."
+            )
+        except Exception:
+            pass
+    return None
+
+
+def _origin_and_path(url: str):
+    """Return ((scheme, host, port), path) with scheme-default ports filled
+    in, so ``https://x`` and ``https://x:443`` compare equal."""
+    parts = urlsplit(url)
+    default_port = {"http": 80, "https": 443}.get(parts.scheme)
+    port = parts.port or default_port
+    return (parts.scheme, parts.hostname, port), parts.path
+
+
+def resolve_custom_endpoint_url(url: str) -> Optional[str]:
+    """Registered on the core ``resolve_custom_endpoint_url`` phase.
+
+    Only rewrites URLs matching the explicitly configured upstream's scheme,
+    host, port, AND path prefix (see config.enable()) -- host-only matching
+    would false-positive on a shared multi-API gateway (e.g. the same host
+    serving both /anthropic and /openai behind different paths) and ship
+    that other API's credentials into this proxy. Any endpoint that isn't
+    an exact origin + path-prefix match is left untouched. Returns None
+    whenever the proxy isn't active or the URL isn't ours.
+    """
+    if not _proxy_active or not _upstream_url:
+        return None
+
+    upstream_origin, upstream_path = _origin_and_path(_upstream_url)
+    if upstream_origin[1] is None:
+        return None  # malformed upstream URL (e.g. no scheme) -- never match
+
+    url_origin, url_path = _origin_and_path(url)
+    if url_origin != upstream_origin:
+        return None
+    trimmed = upstream_path.rstrip("/")
+    if not (url_path == upstream_path or url_path.startswith(trimmed + "/")):
+        return None
+
+    parts = urlsplit(url)
+    proxy_parts = urlsplit(_PROXY_URL)
+    return urlunsplit(
+        (
+            proxy_parts.scheme,
+            proxy_parts.netloc,
+            parts.path,
+            parts.query,
+            parts.fragment,
+        )
+    )

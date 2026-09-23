@@ -35,6 +35,25 @@ The package deliberately does not depend on `code-puppy` in its own metadata.
 `code-puppy` depends on this bundle; adding the reverse edge would create a
 packaging dependency cycle. Plugin CI installs the core runtime separately.
 
+## Headroom compression
+
+The `headroom_compression` plugin is disabled by default and requires a
+code-puppy version that includes the `resolve_custom_endpoint_url` core hook.
+It routes a custom Anthropic-shaped endpoint through a local
+[headroom](https://pypi.org/project/headroom-ai/) proxy for context
+compression:
+
+```text
+/headroom enable https://your-endpoint.example.com/anthropic
+```
+
+This requires the `headroom` binary to already be installed
+(`pip install headroom-ai`) -- the plugin detects it but does not install it
+for you, since it can't safely guess your Python toolchain (pip/uv/pipx/etc).
+If the proxy becomes unreachable mid-session, requests fall back to the
+direct endpoint automatically and a warning is shown. Other subcommands:
+`/headroom disable`, `/headroom status`, `/headroom restart`.
+
 ## Completion notifications
 
 The `completion_notification` plugin is disabled by default. Enable a native,
