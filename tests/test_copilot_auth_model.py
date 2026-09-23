@@ -8,7 +8,7 @@ the Copilot session token before every HTTP request, preventing the
 from dataclasses import dataclass
 from unittest.mock import patch
 
-import httpx
+import httpx2
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -46,7 +46,7 @@ def _model_config(name: str = "gpt-4o", host: str = "github.com") -> dict:
 
 
 class TestCopilotAuth:
-    """Test the _CopilotAuth httpx.Auth subclass injected per-request."""
+    """Test the _CopilotAuth httpx2.Auth subclass injected per-request."""
 
     def _make_auth(self, oauth_token: str = "ghp_fake123", host: str = "github.com"):
         """Import and instantiate _CopilotAuth from within _create_copilot_model's closure.
@@ -55,7 +55,7 @@ class TestCopilotAuth:
         it here for direct unit testing.  The integration test below validates
         the real wiring.
         """
-        import httpx as _httpx
+        import httpx2 as _httpx
 
         from code_puppy_core_plugins.copilot_auth.utils import get_valid_session_token
 
@@ -78,11 +78,11 @@ class TestCopilotAuth:
         mock_get_token.return_value = "fresh_session_token_abc"
 
         auth = self._make_auth("ghp_oauth_token", "github.com")
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.githubcopilot.com/chat/completions"
         )
 
-        # Exhaust the generator (httpx auth_flow protocol)
+        # Exhaust the generator (httpx2 auth_flow protocol)
         flow = auth.auth_flow(request)
         modified_request = next(flow)
 
@@ -98,7 +98,7 @@ class TestCopilotAuth:
         mock_get_token.return_value = None
 
         auth = self._make_auth("ghp_dead_token", "github.com")
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.githubcopilot.com/chat/completions"
         )
 
@@ -116,7 +116,7 @@ class TestCopilotAuth:
         auth = self._make_auth()
 
         for i, expected in enumerate(["token_1", "token_2", "token_3"], 1):
-            request = httpx.Request(
+            request = httpx2.Request(
                 "POST", "https://api.githubcopilot.com/chat/completions"
             )
             flow = auth.auth_flow(request)
@@ -131,7 +131,7 @@ class TestCopilotAuth:
         mock_get_token.return_value = "ghe_token"
 
         auth = self._make_auth("ghp_enterprise", "github.enterprise.com")
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.githubcopilot.com/chat/completions"
         )
 
@@ -220,7 +220,7 @@ class TestCreateCopilotModel:
         assert hasattr(result, "_provider")
 
         # Verify the HTTP client has auth attached
-        # _provider.client is AsyncOpenAI; _provider.client._client is the httpx client
+        # _provider.client is AsyncOpenAI; _provider.client._client is the httpx2 client
         http_client = result._provider.client._client
         assert http_client.auth is not None
         # The auth should be an instance of the inner _CopilotAuth class
