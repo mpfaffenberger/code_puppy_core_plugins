@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from code_puppy_core_plugins.headroom_compression import command as command_module
+from code_puppy_core_plugins.headroom_compression import proxy
 from code_puppy_core_plugins.headroom_compression.command import (
     get_headroom_command_help,
     handle_headroom_command,
@@ -220,3 +224,55 @@ def test_passthrough_warns_when_headroom_not_installed():
 def test_get_headroom_command_help_advertises_command():
     entries = get_headroom_command_help()
     assert entries[0][0] == "headroom"
+
+
+class TestAllowlistDriftDetection:
+    """Dynamically discovers headroom's *real* subcommand list (by parsing
+    `headroom --help`) and cross-checks it against our static classification.
+
+    This does NOT auto-approve anything -- see the module docstring for why
+    that would be a bad idea (a command can look safe by name and still
+    hide a destructive flag, as `agent-savings` did). It only tells us WHEN
+    a human needs to go read a new command's --help and make a deliberate
+    call, and catches the case where headroom renames/removes a command we
+    already allowlisted (which would otherwise fail silently -- the
+    passthrough would just warn 'unsupported subcommand' forever with no
+    one noticing why).
+
+    Skipped entirely if headroom isn't installed in the current
+    environment -- this is meant to run wherever a real headroom binary is
+    available (e.g. local dev), not to require headroom-ai (with its heavy
+    torch/transformers deps) as a permanent CI dependency just for this.
+    """
+
+    @pytest.fixture
+    def headroom_bin(self):
+        bin_path = proxy._headroom_bin()
+        if not bin_path:
+            pytest.skip("headroom not installed in this environment")
+        return bin_path
+
+    def test_no_stale_allowlist_entries(self, headroom_bin):
+        stale = command_module.find_stale_allowlist_entries(headroom_bin)
+        if stale is None:
+            pytest.skip("could not parse headroom --help output")
+        assert not stale, (
+            f"Allowlisted command(s) {sorted(stale)} no longer exist in "
+            "the installed headroom CLI -- headroom likely renamed or "
+            "removed them. Update _PASSTHROUGH_ALLOWLIST."
+        )
+
+    def test_no_unreviewed_new_subcommands(self, headroom_bin):
+        unreviewed = command_module.find_unreviewed_headroom_subcommands(
+            headroom_bin
+        )
+        if unreviewed is None:
+            pytest.skip("could not parse headroom --help output")
+        assert not unreviewed, (
+            f"headroom now ships {sorted(unreviewed)}, not yet classified "
+            "here. Run `headroom <cmd> --help` for each, then add it to "
+            "either _PASSTHROUGH_ALLOWLIST (if genuinely read-only with no "
+            "destructive flag reachable through forwarded args) or "
+            "_KNOWN_EXCLUDED (with a one-line reason) in command.py. Never "
+            "add to the allowlist without reading its --help first."
+        )

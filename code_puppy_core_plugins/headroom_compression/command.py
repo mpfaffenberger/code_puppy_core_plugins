@@ -52,6 +52,73 @@ _PASSTHROUGH_ALLOWLIST = frozenset(
     {"doctor", "savings", "output-savings", "perf", "dashboard", "telemetry", "rollout"}
 )
 
+# Every other real headroom subcommand as of headroom-ai 0.38.0, deliberately
+# reviewed and rejected -- see the module docstring for the reason behind
+# each one. This set exists so the drift helpers below can tell "genuinely
+# new, never seen" apart from "seen and deliberately excluded" -- without
+# it, a drift check would re-flag the same 21 known-excluded names forever
+# instead of only the ones that actually need a human decision.
+_KNOWN_EXCLUDED = frozenset(
+    {
+        "agent-savings", "audit-reads", "capture", "copilot-auth", "deploy",
+        "diff", "evals", "init", "inspect", "install", "learn", "loc", "mcp",
+        "memory", "proxy", "recover", "sg", "tools", "unwrap", "update",
+        "wrap",
+    }
+)
+
+
+def _discover_live_headroom_subcommands(bin_path: str) -> Optional[frozenset]:
+    """Best-effort parse of ``headroom --help``'s ``Commands:`` section.
+
+    Returns None (never raises) if headroom can't be run or its help output
+    doesn't look like the Click format we expect -- callers should treat
+    that as "couldn't check," not "no subcommands exist."
+    """
+    try:
+        result = subprocess.run(
+            [bin_path, "--help"], capture_output=True, text=True, timeout=10
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    lines = result.stdout.splitlines()
+    try:
+        start = lines.index("Commands:")
+    except ValueError:
+        return None
+    names = set()
+    for line in lines[start + 1 :]:
+        if not line.strip():
+            continue
+        if not line.startswith("  "):
+            break
+        names.add(line.strip().split()[0])
+    return frozenset(names) if names else None
+
+
+def find_unreviewed_headroom_subcommands(bin_path: str) -> Optional[frozenset]:
+    """Subcommands headroom now ships that we've never classified as
+    allow/exclude. None means discovery failed (headroom missing or its
+    --help format changed) rather than "nothing new" -- don't conflate the
+    two in a caller.
+    """
+    live = _discover_live_headroom_subcommands(bin_path)
+    if live is None:
+        return None
+    return live - _PASSTHROUGH_ALLOWLIST - _KNOWN_EXCLUDED
+
+
+def find_stale_allowlist_entries(bin_path: str) -> Optional[frozenset]:
+    """Allowlisted subcommands that no longer exist in the live headroom
+    CLI (renamed or removed upstream). None means discovery failed.
+    """
+    live = _discover_live_headroom_subcommands(bin_path)
+    if live is None:
+        return None
+    return _PASSTHROUGH_ALLOWLIST - live
+
 
 def handle_headroom_command(command: str, name: str) -> Optional[bool]:
     if name != "headroom":
