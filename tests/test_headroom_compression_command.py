@@ -109,13 +109,52 @@ def test_status_defaults_when_no_subcommand():
     mock_status.assert_called_once()
 
 
-def test_unknown_subcommand_warns():
-    with patch(
-        "code_puppy_core_plugins.headroom_compression.command.emit_warning"
-    ) as mock_warning:
-        result = handle_headroom_command("/headroom bogus", "headroom")
+def test_unrecognized_subcommand_passes_through_to_headroom_cli():
+    with (
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.proxy._headroom_bin",
+            return_value="/fake/headroom",
+        ),
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
+        ) as mock_run,
+    ):
+        result = handle_headroom_command("/headroom doctor", "headroom")
+    assert result is True
+    mock_run.assert_called_once_with(["/fake/headroom", "doctor"])
+
+
+def test_passthrough_forwards_extra_args():
+    with (
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.proxy._headroom_bin",
+            return_value="/fake/headroom",
+        ),
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
+        ) as mock_run,
+    ):
+        handle_headroom_command("/headroom memory list", "headroom")
+    mock_run.assert_called_once_with(["/fake/headroom", "memory", "list"])
+
+
+def test_passthrough_warns_when_headroom_not_installed():
+    with (
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.proxy._headroom_bin",
+            return_value=None,
+        ),
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
+        ) as mock_run,
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.emit_warning"
+        ) as mock_warning,
+    ):
+        result = handle_headroom_command("/headroom doctor", "headroom")
     assert result is True
     mock_warning.assert_called_once()
+    mock_run.assert_not_called()
 
 
 def test_get_headroom_command_help_advertises_command():

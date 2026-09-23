@@ -94,7 +94,16 @@ def start_proxy(upstream_url: str) -> bool:
         logger.debug("headroom_compression: failed to start proxy: %s", exc)
         return False
 
-    for _ in range(10):
+    # Wait up to 30s for the proxy to become healthy. headroom's own
+    # imports (torch, transformers, tree-sitter-language-pack for its
+    # code-aware compression) are heavy -- measured cold-start on a normal
+    # dev machine is ~13s, so a shorter budget silently fails on a fresh
+    # install even though the proxy would have come up fine given a moment
+    # longer. Bail early if the subprocess exits outright instead of
+    # polling a corpse for the full budget.
+    for _ in range(60):
+        if _proxy_process.poll() is not None:
+            break
         if _is_proxy_healthy():
             _proxy_active = True
             _upstream_url = upstream_url

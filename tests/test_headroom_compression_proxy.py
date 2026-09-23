@@ -83,6 +83,7 @@ def test_start_proxy_reuses_own_process_for_same_upstream():
 
 def test_start_proxy_kills_child_when_never_becomes_healthy():
     fake_proc = MagicMock(spec=subprocess.Popen)
+    fake_proc.poll.return_value = None  # stays alive the whole time
     with (
         patch.object(hp, "_headroom_bin", return_value="/bin/headroom"),
         patch("subprocess.Popen", return_value=fake_proc),
@@ -92,6 +93,44 @@ def test_start_proxy_kills_child_when_never_becomes_healthy():
         assert hp.start_proxy("https://example.com/anthropic") is False
     fake_proc.terminate.assert_called_once()
     assert hp._proxy_process is None
+
+
+def test_start_proxy_bails_early_when_process_exits_instead_of_polling_full_budget():
+    fake_proc = MagicMock(spec=subprocess.Popen)
+    # Alive for 2 checks, then dead -- must not keep polling for the full 60.
+    fake_proc.poll.side_effect = [None, None, 1, 1, 1, 1, 1, 1, 1, 1]
+    with (
+        patch.object(hp, "_headroom_bin", return_value="/bin/headroom"),
+        patch("subprocess.Popen", return_value=fake_proc),
+        patch.object(hp, "_is_proxy_healthy", return_value=False) as mock_healthy,
+        patch("time.sleep"),
+    ):
+        assert hp.start_proxy("https://example.com/anthropic") is False
+    assert mock_healthy.call_count <= 3
+
+
+def test_start_proxy_succeeds_past_the_old_5s_budget():
+    # Regression test: headroom's own cold-start (torch/transformers/
+    # tree-sitter imports) measured ~13s on a real dev machine -- the old
+    # 10-iteration/5s budget silently failed every time. This simulates 20
+    # unhealthy ticks (~10s at 0.5s/tick) before the proxy comes up, which
+    # the old budget could never survive.
+    fake_proc = MagicMock(spec=subprocess.Popen)
+    fake_proc.poll.return_value = None
+    healthy_after = 20
+    calls = {"n": 0}
+
+    def _healthy():
+        calls["n"] += 1
+        return calls["n"] > healthy_after
+
+    with (
+        patch.object(hp, "_headroom_bin", return_value="/bin/headroom"),
+        patch("subprocess.Popen", return_value=fake_proc),
+        patch.object(hp, "_is_proxy_healthy", side_effect=_healthy),
+        patch("time.sleep"),
+    ):
+        assert hp.start_proxy("https://example.com/anthropic") is True
 
 
 def test_stop_proxy_terminates_and_waits():
