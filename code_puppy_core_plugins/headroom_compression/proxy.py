@@ -36,12 +36,39 @@ def _headroom_bin() -> Optional[str]:
     return shutil.which("headroom")
 
 
-def _is_proxy_healthy() -> bool:
+def _is_proxy_healthy(expected_upstream: Optional[str] = None) -> bool:
+    """Health-check the proxy on our fixed port, verifying it's actually OURS.
+
+    A bare ``GET /health`` returning < 500 can't tell "our subprocess is
+    healthy" apart from "something else entirely is healthy on this port" --
+    headroom's own cold start (torch/transformers imports) takes ~13s before
+    it even attempts to bind, so during that window a stale orphaned proxy,
+    or a totally unrelated standalone ``headroom proxy``/``headroom wrap``
+    someone else is running (8787 is also headroom's own default port), can
+    answer in our subprocess's place -- reporting false success while our
+    real child is still starting up (and will shortly die on the bind
+    conflict, unnoticed, since its stdout/stderr are discarded).
+
+    When ``expected_upstream`` is given, this also confirms the proxy's own
+    reported ``config.anthropic_api_url`` matches what we asked it to front.
+    Loopback callers (this always is one) get that config block in the
+    response (see headroom's ``/health`` route); a missing or mismatched
+    field means "not proven to be ours" and counts as unhealthy, never as
+    healthy-by-default.
+    """
     try:
         import httpx
 
         r = httpx.get(f"{_PROXY_URL}/health", timeout=2.0)
-        return r.status_code < 500
+        if r.status_code >= 500:
+            return False
+        if expected_upstream is None:
+            return True
+        payload = r.json()
+        if payload.get("service") != "headroom-proxy":
+            return False
+        reported = (payload.get("config") or {}).get("anthropic_api_url") or ""
+        return reported.rstrip("/") == expected_upstream.rstrip("/")
     except Exception:
         return False
 
@@ -49,17 +76,18 @@ def _is_proxy_healthy() -> bool:
 def start_proxy(upstream_url: str) -> bool:
     """Start the headroom proxy in front of ``upstream_url``.
 
-    Returns True if the proxy is confirmed healthy, False otherwise -- the
-    caller always continues either way (never bricks code-puppy).
+    Returns True if the proxy is confirmed healthy AND confirmed to be
+    fronting ``upstream_url`` specifically, False otherwise -- the caller
+    always continues either way (never bricks code-puppy).
 
-    Deliberately does NOT short-circuit on "something healthy is already on
-    the port" -- a stale orphaned process (or an unrelated dev server) from
-    a prior session could be listening there for a *different* upstream,
-    and silently adopting it would misroute this session's credentialed
-    requests to the wrong host. Only a process this same instance already
-    started, for this same upstream, is treated as "already running"; any
-    other occupant of the port causes the fresh Popen below to fail to bind
-    and start_proxy returns False (loud and safe) rather than adopting.
+    Does NOT short-circuit on "something healthy is already on the port" --
+    a stale orphaned process (or an unrelated headroom instance someone else
+    is running -- 8787 is headroom's own default port too) could be
+    listening there for a *different* upstream, and silently adopting it
+    would misroute this session's credentialed requests to the wrong host.
+    ``_is_proxy_healthy`` is always called with the expected upstream so a
+    foreign occupant of the port is never mistaken for ours, regardless of
+    whether it answers before or after our own child finishes starting.
     """
     global _proxy_process, _proxy_active, _upstream_url
 
@@ -71,7 +99,7 @@ def start_proxy(upstream_url: str) -> bool:
         _proxy_process is not None
         and _upstream_url == upstream_url
         and _proxy_process.poll() is None
-        and _is_proxy_healthy()
+        and _is_proxy_healthy(upstream_url)
     ):
         _proxy_active = True
         return True
@@ -104,7 +132,7 @@ def start_proxy(upstream_url: str) -> bool:
     for _ in range(60):
         if _proxy_process.poll() is not None:
             break
-        if _is_proxy_healthy():
+        if _is_proxy_healthy(upstream_url):
             _proxy_active = True
             _upstream_url = upstream_url
             return True
@@ -115,9 +143,8 @@ def start_proxy(upstream_url: str) -> bool:
 
 
 def _kill_proxy_process() -> None:
-    """Terminate, escalating to kill(), so the child can never outlive us
-    holding the port -- that's the precondition for the adoption hazard
-    start_proxy's docstring describes."""
+    """Terminate, escalating to kill(), so our own child can never outlive
+    us holding the port."""
     global _proxy_process
     if _proxy_process is None:
         return
@@ -153,6 +180,27 @@ def is_active() -> bool:
     return _proxy_active
 
 
+def _rebuild_agent_model() -> None:
+    """Best-effort rebuild of the main agent's cached model client.
+
+    code-puppy builds the pydantic-ai model client once and caches it
+    (``BaseAgent._code_generation_agent``) until something forces a rebuild
+    -- a model switch, but not a proxy enable/disable/restart/fallback.
+    Without this, ``/headroom disable`` kills the proxy but every later turn
+    (and every retry, which reuses the same cached client) still points at
+    ``127.0.0.1:<port>`` and fails to connect for the rest of the session.
+    Never raises: on an older code-puppy without this API, or before any
+    agent has been built yet, the change simply takes effect on the next
+    natural rebuild instead -- same as before this fix, not worse.
+    """
+    try:
+        from code_puppy.agents.agent_manager import get_current_agent
+
+        get_current_agent().reload_code_generation_agent()
+    except Exception:
+        pass
+
+
 def check_and_fallback() -> bool:
     """If the proxy was active but is now unhealthy, deactivate it.
 
@@ -161,7 +209,7 @@ def check_and_fallback() -> bool:
     global _proxy_active
     if not _proxy_active:
         return False
-    if not _is_proxy_healthy():
+    if not _is_proxy_healthy(_upstream_url):
         _proxy_active = False
         return True
     return False
@@ -210,6 +258,7 @@ def on_agent_exception_check_proxy(
         return None
     if check_and_fallback():
         stop_proxy()
+        _rebuild_agent_model()
         try:
             from code_puppy.messaging import emit_warning
 
@@ -241,6 +290,20 @@ def resolve_custom_endpoint_url(url: str) -> Optional[str]:
     that other API's credentials into this proxy. Any endpoint that isn't
     an exact origin + path-prefix match is left untouched. Returns None
     whenever the proxy isn't active or the URL isn't ours.
+
+    The rewritten path is the request's path with the upstream's own prefix
+    STRIPPED, not the original full path. headroom's dedicated
+    ``/v1/messages`` route reconstructs the full upstream URL itself from
+    ``--anthropic-api-url`` (the exact ``upstream_url`` this plugin passed
+    at proxy startup) plus whatever path the proxy receives -- so forwarding
+    the untouched original path double-prepends the prefix for any upstream
+    whose path isn't empty (``https://gw/llm/claude`` + incoming
+    ``/llm/claude/v1/messages`` would hit the proxy at
+    ``/llm/claude/v1/messages`` and get forwarded to
+    ``https://gw/llm/claude/llm/claude/v1/messages``). Stripping the prefix
+    first means the proxy always receives the bare ``/v1/messages``-shaped
+    suffix and headroom reconstructs the correct, undoubled upstream URL
+    for every configured prefix, not just the empty-prefix case.
     """
     if not _proxy_active or not _upstream_url:
         return None
@@ -256,13 +319,17 @@ def resolve_custom_endpoint_url(url: str) -> Optional[str]:
     if not (url_path == upstream_path or url_path.startswith(trimmed + "/")):
         return None
 
+    suffix = url_path[len(trimmed):] or "/"
+    if not suffix.startswith("/"):
+        suffix = "/" + suffix
+
     parts = urlsplit(url)
     proxy_parts = urlsplit(_PROXY_URL)
     return urlunsplit(
         (
             proxy_parts.scheme,
             proxy_parts.netloc,
-            parts.path,
+            suffix,
             parts.query,
             parts.fragment,
         )

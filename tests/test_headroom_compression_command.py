@@ -161,8 +161,27 @@ def test_passthrough_forwards_extra_args_for_allowlisted_command():
             "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
         ) as mock_run,
     ):
-        handle_headroom_command("/headroom perf --since 1h", "headroom")
-    mock_run.assert_called_once_with(["/fake/headroom", "perf", "--since", "1h"])
+        handle_headroom_command("/headroom perf --hours 1", "headroom")
+    mock_run.assert_called_once_with(["/fake/headroom", "perf", "--hours", "1"])
+
+
+def test_passthrough_rejects_destructive_flag_not_forwarded():
+    """Regression guard for the real headroom-ai 0.38.0 `savings --reset`
+    flag, which deletes the on-disk savings ledger. `savings` itself is
+    allowlisted as a read-only report, but that must not make every flag
+    forwarded after it safe by association -- the subcommand-level
+    allowlist alone is not enough."""
+    with (
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.proxy._headroom_bin",
+            return_value="/fake/headroom",
+        ),
+        patch(
+            "code_puppy_core_plugins.headroom_compression.command.subprocess.run"
+        ) as mock_run,
+    ):
+        handle_headroom_command("/headroom savings --reset", "headroom")
+    mock_run.assert_not_called()
 
 
 def test_non_allowlisted_subcommand_is_rejected_not_forwarded():

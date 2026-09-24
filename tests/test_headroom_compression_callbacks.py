@@ -65,4 +65,41 @@ def test_end_to_end_through_the_core_hook(monkeypatch):
     monkeypatch.setattr(proxy, "_proxy_active", True)
     monkeypatch.setattr(proxy, "_upstream_url", "https://example.com/anthropic")
     result = on_resolve_custom_endpoint_url("https://example.com/anthropic/v1/messages")
-    assert result == "http://127.0.0.1:8787/anthropic/v1/messages"
+    assert result == "http://127.0.0.1:8787/v1/messages"
+
+
+def test_register_all_registers_nothing_when_core_hook_missing():
+    """Regression test: on a code-puppy build without the
+    resolve_custom_endpoint_url hook, register_callback raises ValueError
+    for that phase. Nothing else -- startup (which would spawn a proxy
+    subprocess), the /headroom command, agent_exception, or shutdown/atexit
+    cleanup -- may be registered in that case, or the proxy leaks with no
+    cleanup path. Uses an injected fake register_callback instead of
+    reimporting the real module, so this doesn't touch (or pollute) the
+    real global callback registry other tests depend on."""
+    calls = []
+
+    def fake_register_callback(phase, func):
+        if phase == "resolve_custom_endpoint_url":
+            raise ValueError("unknown phase")
+        calls.append(phase)
+
+    assert rc._register_all(register_callback=fake_register_callback) is False
+    assert calls == []
+
+
+def test_register_all_registers_everything_when_core_hook_present():
+    calls = []
+
+    def fake_register_callback(phase, func):
+        calls.append(phase)
+
+    assert rc._register_all(register_callback=fake_register_callback) is True
+    assert calls == [
+        "resolve_custom_endpoint_url",
+        "startup",
+        "custom_command_help",
+        "custom_command",
+        "agent_exception",
+        "shutdown",
+    ]

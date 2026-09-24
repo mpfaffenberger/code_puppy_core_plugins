@@ -66,6 +66,23 @@ _PASSTHROUGH_ALLOWLIST = frozenset(
     {"doctor", "savings", "output-savings", "perf", "dashboard"}
 )
 
+# Flags allowed per allowlisted subcommand, individually verified against
+# each command's own ``--help`` (headroom-ai 0.38.0). The subcommand-level
+# allowlist above is NOT enough on its own: ``savings`` is otherwise a
+# read-only report, but it also has a ``--reset`` flag that deletes the
+# on-disk savings ledger -- a genuinely destructive action that would sail
+# straight through if we only checked the subcommand name and forwarded
+# every arg after it unfiltered. Any forwarded token that looks like a flag
+# (starts with "-") and isn't in this set is rejected outright rather than
+# silently dropped or forwarded -- see _validate_passthrough_args.
+_ALLOWED_FLAGS = {
+    "doctor": frozenset({"-p", "--port", "--json", "-?", "--help"}),
+    "savings": frozenset({"--json", "--days", "-?", "--help"}),  # NOT --reset
+    "output-savings": frozenset({"-?", "--help"}),
+    "perf": frozenset({"--hours", "--raw", "--format", "-?", "--help"}),
+    "dashboard": frozenset({"-p", "--port", "--no-open", "-?", "--help"}),
+}
+
 # Every other real headroom subcommand as of headroom-ai 0.38.0, deliberately
 # reviewed and rejected -- either for safety (see module docstring) or
 # because it fails the in-session-utility bar despite being safe (telemetry,
@@ -151,6 +168,7 @@ def handle_headroom_command(command: str, name: str) -> Optional[bool]:
             emit_error(f"Not a valid http(s) URL: {url}")
             return True
         if proxy.start_proxy(url):
+            proxy._rebuild_agent_model()
             emit_success(f"headroom proxy active, routing {url} through it.")
         else:
             emit_warning(
@@ -162,13 +180,16 @@ def handle_headroom_command(command: str, name: str) -> Optional[bool]:
     if subcommand == "disable":
         config.disable()
         proxy.stop_proxy()
+        proxy._rebuild_agent_model()
         emit_info("headroom compression disabled; requests go direct.")
         return True
 
     if subcommand == "restart":
         if proxy.restart_proxy():
+            proxy._rebuild_agent_model()
             emit_success("headroom proxy restarted.")
         else:
+            proxy._rebuild_agent_model()
             emit_error("Failed to restart headroom proxy.")
         return True
 
@@ -177,7 +198,16 @@ def handle_headroom_command(command: str, name: str) -> Optional[bool]:
         return True
 
     if subcommand in _PASSTHROUGH_ALLOWLIST:
-        _run_passthrough([subcommand] + parts[2:])
+        extra_args = parts[2:]
+        rejected = _rejected_flags(subcommand, extra_args)
+        if rejected:
+            emit_error(
+                f"'{subcommand} {' '.join(rejected)}' isn't allowed here "
+                f"(allowed flags: {', '.join(sorted(_ALLOWED_FLAGS[subcommand])) or 'none'}).\n"
+                f"  Run `headroom {subcommand} --help` directly in a shell for the full flag set."
+            )
+            return True
+        _run_passthrough([subcommand] + extra_args)
         return True
 
     emit_warning(
@@ -189,14 +219,23 @@ def handle_headroom_command(command: str, name: str) -> Optional[bool]:
     return True
 
 
+def _rejected_flags(subcommand: str, args: list) -> list:
+    """Return any forwarded token that looks like a flag but isn't on this
+    subcommand's verified-safe allowlist (see _ALLOWED_FLAGS). Positional
+    args aren't checked -- none of the 5 allowlisted commands take any."""
+    allowed = _ALLOWED_FLAGS.get(subcommand, frozenset())
+    return [a for a in args if a.startswith("-") and a.split("=", 1)[0] not in allowed]
+
+
 def _run_passthrough(args: list) -> None:
     """Run an allowlisted ``headroom <args>`` and stream output to the terminal.
 
     No timeout is applied -- ``dashboard`` opens a browser and exits on its
     own, and log/history sizes for ``perf``/``savings`` are unbounded; a
     fixed timeout would kill those mid-flight. Safe specifically because
-    every caller of this function has already been checked against
-    ``_PASSTHROUGH_ALLOWLIST`` -- never call it with an unvalidated arg.
+    every caller of this function has already been checked against both
+    ``_PASSTHROUGH_ALLOWLIST`` and ``_ALLOWED_FLAGS`` -- never call it with
+    an unvalidated arg list.
     """
     bin_path = proxy._headroom_bin()
     if not bin_path:
