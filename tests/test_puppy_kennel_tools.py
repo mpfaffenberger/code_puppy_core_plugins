@@ -39,13 +39,36 @@ def kennel_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+def test_kennel_read_tools_opt_in_to_speculation() -> None:
+    from pydantic_ai import Agent
+
+    from code_puppy_core_plugins.puppy_kennel import tools
+
+    agent = Agent("test")
+    for register in (
+        tools.register_kennel_recall,
+        tools.register_kennel_recent,
+        tools.register_kennel_list_wings,
+        tools.register_kennel_stats,
+        tools.register_kennel_remember,
+    ):
+        register(agent)
+
+    registered = agent._function_toolset.tools
+    for name in ("kennel_recall", "kennel_recent", "kennel_list_wings", "kennel_stats"):
+        assert registered[name].metadata["speculatable"] is True
+    assert not (registered["kennel_remember"].metadata or {}).get("speculatable", False)
+
+
 class _FakeAgent:
     """Captures @agent.tool-decorated functions for direct invocation."""
 
     def __init__(self) -> None:
         self.registered: dict[str, Any] = {}
 
-    def tool(self, fn):
+    def tool(self, fn=None, **_kwargs):
+        if fn is None:
+            return lambda function: self.tool(function)
         self.registered[fn.__name__] = fn
         return fn
 

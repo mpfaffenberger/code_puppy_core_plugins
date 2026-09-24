@@ -355,11 +355,23 @@ def test_reasoning_gates_by_gpt_generation(name, xhigh, max_effort, responses_co
     assert utils._supports_responses_reasoning_controls(name) is responses_controls
 
 
+def test_codex_imagegen_is_speculatable():
+    from pydantic_ai import Agent
+
+    agent = Agent("test")
+    image_tool.register_codex_imagegen(agent)
+    assert (
+        agent._function_toolset.tools["codex_imagegen"].metadata["speculatable"] is True
+    )
+
+
 def test_codex_imagegen_agent_tool(tmp_path):
     registered = {}
 
     class FakeAgent:
-        def tool(self, function):
+        def tool(self, function=None, **_kwargs):
+            if function is None:
+                return lambda fn: self.tool(fn)
             registered[function.__name__] = function
             return function
 
@@ -385,7 +397,9 @@ def test_codex_imagegen_agent_tool_forwards_reference_images(tmp_path):
     registered = {}
 
     class FakeAgent:
-        def tool(self, function):
+        def tool(self, function=None, **_kwargs):
+            if function is None:
+                return lambda fn: self.tool(fn)
             registered[function.__name__] = function
             return function
 

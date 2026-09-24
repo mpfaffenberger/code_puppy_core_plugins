@@ -19,7 +19,7 @@ TOOL_NAME = "codex_imagegen"
 def register_codex_imagegen(agent: Any) -> None:
     """Register image generation on a pydantic-ai agent."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def codex_imagegen(
         context: RunContext,
         prompt: str,

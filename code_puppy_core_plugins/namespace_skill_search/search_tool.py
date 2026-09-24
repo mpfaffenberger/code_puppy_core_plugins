@@ -58,7 +58,7 @@ def _query_terms(query: Optional[str]) -> List[str]:
 def register_browse_skill_namespace(agent):
     """Register the browse_skill_namespace tool on an agent."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def browse_skill_namespace(
         context: RunContext,
         namespace: Optional[str] = None,

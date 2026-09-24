@@ -52,7 +52,9 @@ class _FakeAgent:
     def __init__(self) -> None:
         self.registered: dict[str, Any] = {}
 
-    def tool(self, fn):
+    def tool(self, fn=None, **_kwargs):
+        if fn is None:
+            return lambda function: self.tool(function)
         self.registered[fn.__name__] = fn
         return fn
 

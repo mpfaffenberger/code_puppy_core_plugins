@@ -11,7 +11,9 @@ def _make_agent():
     agent = MagicMock()
     captured = {}
 
-    def tool(fn):
+    def tool(fn=None, **_kwargs):
+        if fn is None:
+            return lambda function: tool(function)
         captured["fn"] = fn
         return fn
 

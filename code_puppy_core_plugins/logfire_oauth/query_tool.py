@@ -47,7 +47,7 @@ async def _query_mcp(
 def register_logfire_query(agent: Any) -> None:
     """Register the ``logfire_query`` tool on an agent."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def logfire_query(
         context: RunContext,
         query: str = Field(description="Read-only SQL query over Logfire records."),

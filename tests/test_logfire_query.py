@@ -14,7 +14,9 @@ class FakeAgent:
     def __init__(self) -> None:
         self.registered: Any = None
 
-    def tool(self, function):
+    def tool(self, function=None, **_kwargs):
+        if function is None:
+            return lambda fn: self.tool(fn)
         self.registered = function
         return function
 
