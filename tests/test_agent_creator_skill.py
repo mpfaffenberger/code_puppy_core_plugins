@@ -136,9 +136,13 @@ assert content is not None
 assert 'invoke_agent(agent_name="agent-creator"' in content
 
 class FakeAgent:
-    def tool(self, function):
-        self.activate_skill = function
-        return function
+    # Mirror pydantic-ai: supports both @agent.tool and @agent.tool(metadata=...).
+    def tool(self, function=None, **_kwargs):
+        def register(function):
+            self.activate_skill = function
+            return function
+
+        return register if function is None else register(function)
 
 agent = FakeAgent()
 register_activate_skill(agent)
