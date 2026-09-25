@@ -50,6 +50,7 @@ puppy_kennel
 puppy_spinner
 qa_kitten_skill
 quick_resume
+requesty
 resume_hint
 review_pr
 session_namer
