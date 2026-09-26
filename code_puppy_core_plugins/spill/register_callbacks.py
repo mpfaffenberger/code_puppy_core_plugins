@@ -1,12 +1,13 @@
-"""Plugin: spill oversized dict-shaped tool results to private files.
+"""Plugin: spill oversized dict- and BaseModel-shaped tool results to files.
 
 Ported from DeepSeek Harness's MIT-licensed spill design. See
 ``LICENSE.deepseek`` in this package for its copyright and license notice.
 
-The post-tool hook receives the same dict reference that Code Puppy later
+The post-tool hook receives the same result object that Code Puppy later
 serializes for the model, so this plugin can replace top-level string fields
-in place. Non-dict results (notably plain strings) cannot be replaced through
-this hook and are deliberately left untouched.
+in place — for dicts via item assignment, for Pydantic ``BaseModel`` results
+via attribute assignment. Other results (notably plain strings) cannot be
+replaced through this hook and are deliberately left untouched.
 
 When the combined UTF-8 size of top-level string values exceeds the configured
 cap, fields are considered largest-first. Their full text is saved verbatim,
@@ -32,6 +33,8 @@ import logging
 import math
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel
 
 from code_puppy.callbacks import register_callback, unregister_callback
 
@@ -190,9 +193,37 @@ def _build_replacement(
         budget = max(0, budget - max(1, replacement_bytes - limit))
 
 
-def _spill_result(
-    tool_name: str, result: dict[Any, Any], session_id: str | None = None
-) -> None:
+def _field_map(result: Any) -> dict | None:
+    """Return a mutable mapping view of a dict or BaseModel result."""
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, BaseModel):
+        try:
+            return dict(result)
+        except Exception:
+            return None
+    return None
+
+
+def _commit_replacements(result: Any, replacements: dict) -> None:
+    if isinstance(result, dict):
+        result.update(replacements)
+        return
+    applied: dict = {}
+    try:
+        for key, value in replacements.items():
+            applied[key] = getattr(result, key)
+            setattr(result, key, value)
+    except Exception:
+        for key, value in applied.items():
+            try:
+                setattr(result, key, value)
+            except Exception:
+                pass
+        raise
+
+
+def _spill_result(tool_name: str, result: Any, session_id: str | None = None) -> None:
     cap = _get_int(MAX_INLINE_KEY, DEFAULT_MAX_INLINE_BYTES)
     if cap <= 0 or tool_name in _get_skip_tools():
         return
@@ -205,11 +236,14 @@ def _spill_result(
         )
         preview_bytes = DEFAULT_PREVIEW_BYTES
 
-    fields = [
-        (key, value, _byte_size(value))
-        for key, value in result.items()
-        if isinstance(value, str)
-    ]
+    fields = []
+    field_map = _field_map(result)
+    if field_map is not None:
+        fields = [
+            (key, value, _byte_size(value))
+            for key, value in field_map.items()
+            if isinstance(value, str)
+        ]
     total = sum(size for _, _, size in fields)
     if total <= cap:
         return
@@ -262,7 +296,7 @@ def _spill_result(
     # Commit atomically. A partial preview set that still exceeds the cap is
     # neither bounded nor graceful; keep every original inline in that case.
     if total <= cap:
-        result.update(replacements)
+        _commit_replacements(result, replacements)
 
 
 async def _on_post_tool_call(
@@ -275,7 +309,10 @@ async def _on_post_tool_call(
     """Spill oversized string fields off the event loop without breaking calls."""
     _ = tool_args, duration_ms, context
     try:
-        if not isinstance(result, dict) or set(result) == {"error"}:
+        if not isinstance(result, (dict, BaseModel)):
+            return
+        field_map = _field_map(result)
+        if field_map is None or set(field_map) == {"error"}:
             return
         spill_config = _get_executing_agent_spill_config()
         if not _is_enabled_for_executing_agent(spill_config):
