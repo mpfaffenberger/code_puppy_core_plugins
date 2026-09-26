@@ -186,8 +186,6 @@ class SkillsMenu:
         lines.append(("", "Add Dir  "))
         lines.append(("class:tui.help-key", "  Ctrl+D  "))
         lines.append(("", "Show Dirs\n"))
-        lines.append(("class:tui.help-key", "  i  "))
-        lines.append(("", "Install from catalog\n"))
         lines.append(("class:tui.help-key", "  r  "))
         lines.append(("", "Refresh  "))
         lines.append(("class:tui.help-key", "  q  "))
@@ -347,9 +345,6 @@ class SkillsMenu:
         elif key == "ctrl-d":
             self.result = "show_directories"
             return True
-        elif key == "i":
-            self.result = "install"
-            return True
         elif key in ("q", "escape", "ctrl-c"):
             self.result = "quit"
             return True
@@ -477,16 +472,6 @@ def show_skills_menu() -> bool:
                 changes_made = True
             # Re-run the menu
             continue
-
-        elif result == "install":
-            from code_puppy_core_plugins.agent_skills.skills_install_menu import (
-                run_skills_install_menu,
-            )
-
-            install_result = run_skills_install_menu()
-            if install_result:
-                changes_made = True
-            continue  # Re-run the skills menu after install
 
         elif result == "changed":
             changes_made = True
