@@ -1,24 +1,13 @@
 from __future__ import annotations
 
 import time
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from code_puppy_core_plugins.logfire_oauth import query_tool
 from code_puppy_core_plugins.logfire_oauth.oauth import OAuthTokens
-
-
-class FakeAgent:
-    def __init__(self) -> None:
-        self.registered: Any = None
-
-    def tool(self, function=None, **_kwargs):
-        if function is None:
-            return lambda fn: self.tool(fn)
-        self.registered = function
-        return function
+from tests.agent_test_support import FakeAgent
 
 
 @pytest.mark.asyncio
@@ -27,7 +16,7 @@ async def test_query_requires_authentication(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(query_tool, "load_tokens", lambda: None)
     query_tool.register_logfire_query(agent)
 
-    result = await agent.registered(None, "SELECT 1")
+    result = await agent.registered["logfire_query"](None, "SELECT 1")
 
     assert result.error == "Logfire is not authenticated. Run /logfire auth first."
 
@@ -51,7 +40,7 @@ async def test_query_forwards_bounded_arguments(
     monkeypatch.setattr(query_tool, "_query_mcp", call)
     query_tool.register_logfire_query(agent)
 
-    result = await agent.registered(
+    result = await agent.registered["logfire_query"](
         None,
         " SELECT 42 LIMIT 1 ",
         project="puppy",
@@ -86,6 +75,6 @@ async def test_query_rejects_expired_token(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(query_tool, "load_tokens", lambda: tokens)
     query_tool.register_logfire_query(agent)
 
-    result = await agent.registered(None, "SELECT 1")
+    result = await agent.registered["logfire_query"](None, "SELECT 1")
 
     assert "expired" in result.error

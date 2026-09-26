@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from tests.agent_test_support import FakeAgent
+
 
 @pytest.fixture
 def kennel_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -58,19 +60,6 @@ def test_kennel_read_tools_opt_in_to_speculation() -> None:
     for name in ("kennel_recall", "kennel_recent", "kennel_list_wings", "kennel_stats"):
         assert registered[name].metadata["speculatable"] is True
     assert not (registered["kennel_remember"].metadata or {}).get("speculatable", False)
-
-
-class _FakeAgent:
-    """Captures @agent.tool-decorated functions for direct invocation."""
-
-    def __init__(self) -> None:
-        self.registered: dict[str, Any] = {}
-
-    def tool(self, fn=None, **_kwargs):
-        if fn is None:
-            return lambda function: self.tool(function)
-        self.registered[fn.__name__] = fn
-        return fn
 
 
 def _ctx(agent_name: str = "code-puppy") -> Any:
@@ -121,7 +110,7 @@ def test_kennel_remember_writes_to_repo_wing_by_default(kennel_root: Path) -> No
     """
     from code_puppy_core_plugins.puppy_kennel import kennel, tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_remember(agent)
     remember = agent.registered["kennel_remember"]
 
@@ -137,7 +126,7 @@ def test_kennel_remember_writes_to_repo_wing_by_default(kennel_root: Path) -> No
 def test_kennel_remember_wing_shortcuts(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_remember(agent)
     remember = agent.registered["kennel_remember"]
 
@@ -156,7 +145,7 @@ def test_kennel_remember_wing_shortcuts(kennel_root: Path) -> None:
 def test_kennel_remember_explicit_wing_passes_through(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_remember(agent)
     remember = agent.registered["kennel_remember"]
 
@@ -167,7 +156,7 @@ def test_kennel_remember_explicit_wing_passes_through(kennel_root: Path) -> None
 def test_kennel_remember_empty_content_returns_error(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import kennel, tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_remember(agent)
     remember = agent.registered["kennel_remember"]
 
@@ -180,7 +169,7 @@ def test_kennel_remember_empty_content_returns_error(kennel_root: Path) -> None:
 def test_kennel_remember_blank_room_falls_back_to_notes(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_remember(agent)
     remember = agent.registered["kennel_remember"]
 
@@ -214,7 +203,7 @@ def test_kennel_recent_returns_newest_first(kennel_root: Path) -> None:
         response_text="Second memory.",
     )
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_recent(agent)
     recent = agent.registered["kennel_recent"]
 
@@ -227,7 +216,7 @@ def test_kennel_recent_returns_newest_first(kennel_root: Path) -> None:
 def test_kennel_recent_scope_user(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_remember(agent)
     tools.register_kennel_recent(agent)
     remember = agent.registered["kennel_remember"]
@@ -247,7 +236,7 @@ def test_kennel_recent_scope_user(kennel_root: Path) -> None:
 def test_kennel_recent_top_k_clamped(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_recent(agent)
     recent = agent.registered["kennel_recent"]
 
@@ -258,7 +247,7 @@ def test_kennel_recent_top_k_clamped(kennel_root: Path) -> None:
 def test_kennel_recent_empty_kennel(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_recent(agent)
     recent = agent.registered["kennel_recent"]
 
@@ -275,7 +264,7 @@ def test_kennel_recent_empty_kennel(kennel_root: Path) -> None:
 def test_list_wings_empty_kennel(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import tools
 
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_list_wings(agent)
     fn = agent.registered["kennel_list_wings"]
 
@@ -294,7 +283,7 @@ def test_list_wings_with_counts(kennel_root: Path) -> None:
         success=True,
         response_text="hello",
     )
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_list_wings(agent)
     fn = agent.registered["kennel_list_wings"]
 
@@ -322,7 +311,7 @@ def test_kennel_stats_basic(kennel_root: Path) -> None:
         success=True,
         response_text="x",
     )
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_stats(agent)
     fn = agent.registered["kennel_stats"]
 

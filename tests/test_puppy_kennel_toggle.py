@@ -19,6 +19,8 @@ from typing import Any
 
 import pytest
 
+from tests.agent_test_support import FakeAgent
+
 
 @pytest.fixture
 def kennel_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -46,17 +48,6 @@ def kennel_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     importlib.reload(commands_mod)
     kennel_mod.initialize()
     return root
-
-
-class _FakeAgent:
-    def __init__(self) -> None:
-        self.registered: dict[str, Any] = {}
-
-    def tool(self, fn=None, **_kwargs):
-        if fn is None:
-            return lambda function: self.tool(function)
-        self.registered[fn.__name__] = fn
-        return fn
 
 
 def _ctx(agent_name: str = "code-puppy") -> Any:
@@ -139,7 +130,7 @@ def test_all_tools_return_disabled_error_when_off(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import state, tools
 
     state.set_enabled(False)
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_recall(agent)
     tools.register_kennel_remember(agent)
     tools.register_kennel_recent(agent)
@@ -163,7 +154,7 @@ def test_tools_resume_after_re_enable(kennel_root: Path) -> None:
     from code_puppy_core_plugins.puppy_kennel import kennel, state, tools
 
     state.set_enabled(False)
-    agent = _FakeAgent()
+    agent = FakeAgent()
     tools.register_kennel_remember(agent)
     remember = agent.registered["kennel_remember"]
 
