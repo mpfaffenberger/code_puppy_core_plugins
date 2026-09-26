@@ -12,6 +12,7 @@ from code_puppy_core_plugins.chatgpt_oauth.utils import (
 )
 from code_puppy_core_plugins.claude_code_oauth.config import CLAUDE_CODE_OAUTH_CONFIG
 from code_puppy_core_plugins.claude_code_oauth.model_filter import (
+    _parse_model,
     filter_latest_claude_models,
 )
 from code_puppy_core_plugins.claude_code_oauth.utils import _build_model_entry
@@ -33,6 +34,25 @@ def test_opus_5_5_survives_family_filter():
     assert entry["custom_endpoint"]["headers"]["User-Agent"].startswith(
         "claude-cli/2.1.280 "
     )
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("claude-opus-5", ("opus", 5, 0, 0)),
+        ("claude-opus-5-5", ("opus", 5, 5, 0)),
+        ("claude-fable-5-1", ("fable", 5, 1, 0)),
+        ("claude-sonnet-4-6", ("sonnet", 4, 6, 0)),
+        ("claude-opus-4-1-20250805", ("opus", 4, 1, 20250805)),
+        ("claude-sonnet-4.5-20250929", ("sonnet", 4, 5, 20250929)),
+        # A date must never be misread as a minor version (4.20).
+        ("claude-opus-4-20250514", ("opus", 4, 0, 20250514)),
+        ("claude-3-5-sonnet-20241022", None),
+        ("gpt-6-sol", None),
+    ],
+)
+def test_parse_model_handles_optional_minor_and_date(name, expected):
+    assert _parse_model(name) == expected
 
 
 @pytest.mark.parametrize("name", ["gpt-6-luna", "gpt-6-sol"])
@@ -85,4 +105,5 @@ def test_opus_5_5_is_registered_and_retained_on_load(monkeypatch, tmp_path):
     )
     loaded = utils.load_claude_models_filtered()
     assert "claude-code-claude-opus-5-5" in loaded
+    assert "claude-code-claude-opus-5-5-long" in loaded
     assert "claude-code-claude-opus-4-7" not in loaded
