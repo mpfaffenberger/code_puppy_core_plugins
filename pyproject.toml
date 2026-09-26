@@ -65,6 +65,7 @@ mcp_binding_prompt = "code_puppy_core_plugins.mcp_binding_prompt.register_callba
 meta_oauth = "code_puppy_core_plugins.meta_oauth.register_callbacks"
 namespace_skill_search = "code_puppy_core_plugins.namespace_skill_search.register_callbacks"
 no_tools = "code_puppy_core_plugins.no_tools.register_callbacks"
+notifier = "code_puppy_core_plugins.notifier.register_callbacks"
 obsidian_agent = "code_puppy_core_plugins.obsidian_agent.register_callbacks"
 ollama = "code_puppy_core_plugins.ollama.register_callbacks"
 ollama_setup = "code_puppy_core_plugins.ollama_setup.register_callbacks"
