@@ -1,6 +1,6 @@
 ---
 name: codex-imagegen
-description: Generate raster images with gpt-image-2 through Codex OAuth. Activate when the user asks to create a photo, illustration, icon, sprite, texture, product image, banner, or other raster artwork.
+description: Generate raster images with gpt-image-2.1 through Codex OAuth. Activate when the user asks to create a photo, illustration, icon, sprite, texture, product image, banner, or other raster artwork.
 version: "1.0"
 author: code-puppy
 tags:
@@ -13,7 +13,7 @@ tags:
 # Codex Image Generation
 
 Use the `codex_imagegen` tool when the user asks you to create raster artwork.
-The tool uses `gpt-image-2` through the user's existing Codex OAuth session,
+The tool uses `gpt-image-2.1` through the user's existing Codex OAuth session,
 saves the resulting PNG, and displays it inline when iTerm2 supports doing so.
 
 ## Decision rules

@@ -44,7 +44,7 @@ def test_codex_image_generation_posts_codex_payload(tmp_path):
     assert call.kwargs["json"] == {
         "prompt": "a red fox",
         "background": "auto",
-        "model": "gpt-image-2",
+        "model": "gpt-image-2.1",
         "quality": "auto",
         "size": "auto",
     }
@@ -83,7 +83,7 @@ def test_codex_image_generation_with_references_posts_edits_payload(tmp_path):
     payload = call.kwargs["json"]
     assert payload["images"] == [{"image_url": f"data:image/png;base64,{expected_b64}"}]
     assert payload["prompt"] == "a red fox"
-    assert payload["model"] == "gpt-image-2"
+    assert payload["model"] == "gpt-image-2.1"
     # `background` is not accepted by the edits endpoint.
     assert "background" not in payload
 
