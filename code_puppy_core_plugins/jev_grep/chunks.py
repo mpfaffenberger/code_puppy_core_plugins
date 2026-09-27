@@ -1,21 +1,24 @@
 """Discovery and chunking: turn a directory into judgeable source snippets.
 
-Python files are split along the
-AST (functions and methods stay whole; declarations longer than
-``SPLIT_LINES`` are split into the blocks inside them so each snippet is one
-behaviour). Every other file falls back to overlapping line windows. Line
-coverage is exact: every non-blank line lands in at least one snippet.
+Source files are split along their syntax tree (see ``structure.py``):
+functions and methods stay whole, long declarations split into the blocks
+inside them. Python uses the stdlib ``ast``; JavaScript/TypeScript, Go, Rust
+and Java use tree-sitter (``treesitter.py``). Everything else, and any file
+that does not parse, falls back to overlapping line windows. Line coverage
+is exact: every non-blank line lands in at least one snippet.
 """
 
 from __future__ import annotations
 
-import ast
 import os
 import subprocess
 from collections import Counter
 from dataclasses import dataclass, field
 
 from code_puppy.tools.ripgrep import find_ripgrep
+
+from .structure import Range, python_ranges
+from .treesitter import treesitter_ranges
 
 # Discovery is bounded by files and bytes only. Snippet count is not capped:
 # only the ranked shortlist is judged, and local BM25 over the ~24k snippets
@@ -25,7 +28,6 @@ MAX_FILE_BYTES = 1024 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_CHUNK_CHARS = 12_000
 WHOLE_DECLARATION_LINES = 160
-SPLIT_LINES = 24
 WINDOW, OVERLAP = 60, 10
 
 
@@ -48,13 +50,6 @@ class Discovery:
     files: int = 0
     skipped: list[tuple[str, str]] = field(default_factory=list)
     parsers: Counter = field(default_factory=Counter)
-
-
-@dataclass
-class _Range:
-    start: int
-    end: int
-    symbol: str | None
 
 
 def windows(
@@ -90,99 +85,8 @@ def windows(
     return out
 
 
-def _begin(node: ast.AST) -> int:
-    decorators = getattr(node, "decorator_list", [])
-    return min([node.lineno, *(d.lineno for d in decorators)])
-
-
-def _partition(node: ast.AST, start: int, end: int, symbol, depth: int = 0):
-    """Split a long body into its blocks, covering every line of [start, end]."""
-    body = getattr(node, "body", None)
-    if not isinstance(body, list) or end - start < SPLIT_LINES:
-        return None
-    stmts = [s for s in body if hasattr(s, "end_lineno")]
-    if not stmts:
-        return None
-    if len(stmts) == 1:
-        return (
-            _partition(stmts[0], start, end, symbol, depth + 1) if depth < 3 else None
-        )
-
-    out: list[_Range] = []
-    cursor = start
-    group: list[ast.stmt] = []
-
-    def flush(last: bool) -> None:
-        nonlocal cursor
-        if not group:
-            return
-        stop = end if last else min(end, group[-1].end_lineno)
-        if stop >= cursor:
-            inner = None
-            if len(group) == 1 and depth < 3:
-                inner = _partition(group[0], cursor, stop, symbol, depth + 1)
-            out.extend(inner or [_Range(cursor, stop, symbol)])
-            cursor = stop + 1
-        group.clear()
-
-    for stmt in stmts:
-        span = stmt.end_lineno - _begin(stmt) + 1
-        if group and (span >= 6 or stmt.end_lineno - cursor + 1 > 20):
-            flush(False)
-        group.append(stmt)
-        if span >= 6 and stmt is not stmts[-1]:
-            flush(False)
-    flush(True)
-    return out if len(out) > 1 else None
-
-
-def _python_ranges(text: str) -> list[_Range]:
-    tree = ast.parse(text)
-    ranges: list[_Range] = []
-
-    def emit(node: ast.AST, start: int, symbol: str | None) -> None:
-        ranges.extend(
-            _partition(node, start, node.end_lineno, symbol)
-            or [_Range(start, node.end_lineno, symbol)]
-        )
-
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef):
-            ranges.append(_Range(_begin(node), node.body[0].lineno - 1, node.name))
-            for member in node.body:
-                name = getattr(member, "name", "body")
-                emit(member, _begin(member), f"{node.name}.{name}")
-        else:
-            emit(node, _begin(node), getattr(node, "name", None))
-    return _merge_short_neighbours(ranges)
-
-
-def _merge_short_neighbours(ranges: list[_Range]) -> list[_Range]:
-    """Fold runs of imports/one-liners into one target (each costs a judgment)."""
-
-    def mergeable(r: _Range) -> bool:
-        return r.end - r.start <= 1 and "." not in (r.symbol or "")
-
-    merged: list[_Range] = []
-    for r in ranges:
-        last = merged[-1] if merged else None
-        if (
-            last
-            and mergeable(last)
-            and mergeable(r)
-            and r.start <= last.end + 1
-            and r.end - last.start < 12
-            and len(f"{last.symbol} {r.symbol}") < 60
-        ):
-            names = dict.fromkeys(s for s in (last.symbol, r.symbol) if s)
-            last.end, last.symbol = r.end, ", ".join(names) or None
-        else:
-            merged.append(_Range(r.start, r.end, r.symbol))
-    return merged
-
-
 def _chunks_from_ranges(
-    lines: list[str], path: str, ranges: list[_Range]
+    lines: list[str], path: str, ranges: list[Range]
 ) -> list[Chunk]:
     out: list[Chunk] = []
     next_line = 1
@@ -208,11 +112,14 @@ def source_chunks(text: str, path: str) -> tuple[list[Chunk], str]:
     lines = text.splitlines()
     if path.endswith(".py"):
         try:
-            ranges = _python_ranges(text)
+            ranges = python_ranges(text)
         except (SyntaxError, ValueError, RecursionError):
             ranges = []
         if ranges:
             return _chunks_from_ranges(lines, path, ranges), "python"
+    elif parsed := treesitter_ranges(text, path):
+        ranges, parser = parsed
+        return _chunks_from_ranges(lines, path, ranges), parser
     return windows(lines, path), "overlapping-lines"
 
 
