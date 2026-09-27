@@ -33,9 +33,34 @@ jobs:
           CODE_PUPPY_TEST_FAST: '1'
         run: uv run --no-sync pytest -q
 
+  # smart_grep ships native code (tree-sitter + grammar wheels) and shells out
+  # to the rg.exe bundled with Code Puppy core, so prove it on Windows.
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install tooling and Code Puppy core
+        run: |
+          pip install uv
+          uv venv
+          uv pip install "code-puppy @ git+https://github.com/mpfaffenberger/code_puppy.git@main"
+          uv pip install -e . --group dev
+      - name: smart_grep tests
+        env:
+          CI: '1'
+          CODE_PUPPY_TEST_FAST: '1'
+        run: uv run --no-sync pytest -q --no-cov tests/test_jev_grep.py tests/test_smart_grep_treesitter.py
+
   build-publish:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, windows]
     if: github.event_name == 'push'
     concurrency:
       group: pypi-publish

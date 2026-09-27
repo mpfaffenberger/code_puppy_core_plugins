@@ -7,6 +7,7 @@ real without a network or an API key.
 
 from __future__ import annotations
 
+import os
 import textwrap
 from dataclasses import dataclass, field
 
@@ -230,7 +231,7 @@ async def test_semantic_search_ranks_labels_and_reports_coverage(tmp_path):
         FakeJev("expired"), "reject expired sessions", str(repo)
     )
     assert out.error is None
-    paths = [m.file_path.rsplit("/", 1)[-1] for m in out.matches]
+    paths = [os.path.basename(m.file_path) for m in out.matches]  # \ on Windows
     assert set(paths) == {"auth.py", "test_auth.py"}
     test_match = next(m for m in out.matches if m.file_path.endswith("test_auth.py"))
     assert test_match.kind == "test"
