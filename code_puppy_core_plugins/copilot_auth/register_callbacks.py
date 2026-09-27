@@ -371,11 +371,11 @@ def _create_copilot_model(model_name: str, model_config: Dict, config: Dict) -> 
     GPT-5.6 family, Codex, Grok, ...) are built as ``OpenAIResponsesModel``;
     everything else keeps using Chat Completions.
     """
-    import httpx
+    import httpx2
     from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
-    from code_puppy.http_utils import create_async_client
+    from code_puppy.httpx2_utils import create_async_client
 
     # Discover token — match against the host stored in the model config
     host = model_config.get("copilot_host", "github.com")
@@ -405,14 +405,14 @@ def _create_copilot_model(model_name: str, model_config: Dict, config: Dict) -> 
         "Openai-Intent": COPILOT_AUTH_CONFIG["openai_intent"],
     }
 
-    class _CopilotAuth(httpx.Auth):
-        """httpx auth flow that refreshes the Copilot session token per-request."""
+    class _CopilotAuth(httpx2.Auth):
+        """httpx2 auth flow that refreshes the Copilot session token per-request."""
 
         def __init__(self, oauth_token: str, token_host: str):
             self._oauth_token = oauth_token
             self._host = token_host
 
-        def auth_flow(self, request: httpx.Request):
+        def auth_flow(self, request: httpx2.Request):
             token = get_valid_session_token(self._oauth_token, self._host)
             if token:
                 request.headers["Authorization"] = f"Bearer {token}"
@@ -447,7 +447,7 @@ def _create_copilot_model(model_name: str, model_config: Dict, config: Dict) -> 
         from .reasoning_client import patch_client_for_reasoning_opaque
 
         # Field-mode so thinking persists across tool calls; the reasoning_opaque
-        # interceptor (patched onto the httpx client) re-injects the encrypted blob
+        # interceptor (patched onto the httpx2 client) re-injects the encrypted blob
         # into subsequent requests, preventing 400s.
         profile = OpenAIModelProfile(
             openai_chat_thinking_field="reasoning_text",

@@ -10,7 +10,7 @@ pydantic-ai's ``openai_chat_send_back_thinking_parts="field"`` mode preserves
 ``reasoning_opaque``.  The Copilot API returns **400 Bad Request** if
 ``reasoning_text`` is sent without the accompanying ``reasoning_opaque``.
 
-This module monkey-patches the httpx client to transparently:
+This module monkey-patches the httpx2 client to transparently:
 
 1. Capture ``reasoning_opaque`` (keyed by ``reasoning_text``) from responses
 2. Inject the matching ``reasoning_opaque`` into outgoing request messages
@@ -25,8 +25,8 @@ import json
 import logging
 from typing import Any, Dict
 
-import httpx
-from httpx import AsyncByteStream
+import httpx2
+from httpx2 import AsyncByteStream
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +57,8 @@ class _OpaqueCapturingStream(AsyncByteStream):
     lines, parses JSON, and pairs ``reasoning_text`` chunks with
     ``reasoning_opaque`` chunks for storage in *opaque_cache*.
 
-    Inherits from ``httpx.AsyncByteStream`` so that
-    ``httpx.Response.aclose()`` recognises us as an async stream and
+    Inherits from ``httpx2.AsyncByteStream`` so that
+    ``httpx2.Response.aclose()`` recognises us as an async stream and
     doesn't blow up with *"Attempted to call an async close on an sync
     stream"*.  Ask me how I know.
     """
@@ -188,9 +188,9 @@ def _capture_from_content(
 
 
 def _rebuild_request_body(
-    request: httpx.Request,
+    request: httpx2.Request,
     body: dict,
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
 ) -> None:
     """Replace the request body in-place (mirrors ChatGPTCodexAsyncClient)."""
     new_body = json.dumps(body).encode("utf-8")
@@ -210,9 +210,9 @@ def _rebuild_request_body(
 
 
 def _inject_opaque_into_request(
-    request: httpx.Request,
+    request: httpx2.Request,
     opaque_cache: Dict[str, str],
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     thinking_field: str,
 ) -> None:
     """Add stored ``reasoning_opaque`` to assistant messages that need it.
@@ -288,8 +288,8 @@ def _inject_opaque_into_request(
 
 
 def _strip_all_reasoning_fields(
-    request: httpx.Request,
-    client: httpx.AsyncClient,
+    request: httpx2.Request,
+    client: httpx2.AsyncClient,
     thinking_field: str,
 ) -> bool:
     """Remove ALL reasoning fields from the request body.
@@ -340,17 +340,17 @@ def _strip_all_reasoning_fields(
 
 
 def patch_client_for_reasoning_opaque(
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     thinking_field: str = "reasoning_text",
 ) -> None:
     """Monkey-patch *client* to round-trip ``reasoning_opaque`` transparently.
 
     Call **after** creating the client but **before** handing it to
-    ``OpenAIProvider``.  Works with plain ``httpx.AsyncClient`` and the
+    ``OpenAIProvider``.  Works with plain ``httpx2.AsyncClient`` and the
     ``RetryingAsyncClient`` subclass returned by ``create_async_client``.
 
     Args:
-        client: The httpx async client to patch.
+        client: The httpx2 async client to patch.
         thinking_field: JSON field name that carries the thinking content
             (default ``"reasoning_text"`` — the Copilot Claude convention).
     """
@@ -358,8 +358,8 @@ def patch_client_for_reasoning_opaque(
     original_send = client.send
 
     async def _patched_send(
-        request: httpx.Request, *args: Any, **kwargs: Any
-    ) -> httpx.Response:
+        request: httpx2.Request, *args: Any, **kwargs: Any
+    ) -> httpx2.Response:
         # 1) Inject reasoning_opaque into outgoing POST bodies.
         #    Also strips orphaned reasoning_text with no cached opaque.
         if request.method == "POST":

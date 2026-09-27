@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-import httpx
+import httpx2
 import pytest
 
 from code_puppy_core_plugins.copilot_auth.reasoning_client import (
@@ -231,11 +231,11 @@ class TestInjectOpaqueIntoRequest:
             {"role": "assistant", "reasoning_text": thinking_text, "content": "Hello!"},
         ]
         body = _make_request_body(messages)
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         _inject_opaque_into_request(request, cache, client, "reasoning_text")
 
         result_body = json.loads(request.content)
@@ -255,11 +255,11 @@ class TestInjectOpaqueIntoRequest:
             },
         ]
         body = _make_request_body(messages)
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         _inject_opaque_into_request(request, cache, client, "reasoning_text")
 
         result_body = json.loads(request.content)
@@ -270,12 +270,12 @@ class TestInjectOpaqueIntoRequest:
         cache = {_text_key("stuff"): "opaque"}
         messages = [{"role": "user", "content": "Hi", "reasoning_text": "stuff"}]
         body = _make_request_body(messages)
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
 
         original_content = request.content
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         _inject_opaque_into_request(request, cache, client, "reasoning_text")
 
         # Content should be unchanged (user messages don't get opaque)
@@ -292,11 +292,11 @@ class TestInjectOpaqueIntoRequest:
             },
         ]
         body = _make_request_body(messages)
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         _inject_opaque_into_request(request, cache, client, "reasoning_text")
 
         result_body = json.loads(request.content)
@@ -307,19 +307,19 @@ class TestInjectOpaqueIntoRequest:
 
     def test_handles_empty_body_gracefully(self):
         cache = {_text_key("x"): "y"}
-        request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
-        client = httpx.AsyncClient()
+        request = httpx2.Request("POST", "https://api.example.com/v1/chat/completions")
+        client = httpx2.AsyncClient()
         # Should not raise
         _inject_opaque_into_request(request, cache, client, "reasoning_text")
 
     def test_handles_non_json_body_gracefully(self):
         cache = {_text_key("x"): "y"}
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST",
             "https://api.example.com/v1/chat/completions",
             content=b"not json",
         )
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         _inject_opaque_into_request(request, cache, client, "reasoning_text")
 
 
@@ -346,10 +346,10 @@ class TestStripAllReasoningFields:
             },
         ]
         body = _make_request_body(messages)
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
 
         result = _strip_all_reasoning_fields(request, client, "reasoning_text")
 
@@ -368,10 +368,10 @@ class TestStripAllReasoningFields:
             {"role": "assistant", "content": "Hello!"},
         ]
         body = _make_request_body(messages)
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
 
         result = _strip_all_reasoning_fields(request, client, "reasoning_text")
         assert result is False
@@ -381,17 +381,17 @@ class TestStripAllReasoningFields:
             {"role": "user", "content": "Hi", "reasoning_text": "sneaky"},
         ]
         body = _make_request_body(messages)
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
 
         result = _strip_all_reasoning_fields(request, client, "reasoning_text")
         assert result is False
 
     def test_handles_empty_body(self):
-        request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
-        client = httpx.AsyncClient()
+        request = httpx2.Request("POST", "https://api.example.com/v1/chat/completions")
+        client = httpx2.AsyncClient()
         result = _strip_all_reasoning_fields(request, client, "reasoning_text")
         assert result is False
 
@@ -412,7 +412,7 @@ class TestRetryOn400:
         call_count = 0
         sent_bodies: list[dict] = []
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
 
         # Patch client.send directly (no opaque cache = prevention kicks in)
         from code_puppy_core_plugins.copilot_auth.reasoning_client import (
@@ -430,7 +430,7 @@ class TestRetryOn400:
             call_count += 1
             body = json.loads(request.content) if request.content else {}
             sent_bodies.append(body)
-            return httpx.Response(200, content=b'{"choices": []}', request=request)
+            return httpx2.Response(200, content=b'{"choices": []}', request=request)
 
         client.send = tracking_send
 
@@ -443,7 +443,7 @@ class TestRetryOn400:
             },
         ]
         body = json.dumps({"model": "claude-sonnet-4", "messages": messages}).encode()
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
 
@@ -473,7 +473,7 @@ class TestRetryOn400:
         # Seed cache with BAD opaque — will pass prevention but API rejects
         opaque_cache = {_text_key(thinking_text): "stale_bad_opaque"}
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
 
         async def fake_send(request, *args, **kwargs):
             nonlocal call_count
@@ -485,12 +485,12 @@ class TestRetryOn400:
             )
             if has_opaque:
                 # API rejects stale opaque
-                return httpx.Response(
+                return httpx2.Response(
                     400,
                     content=b'{"error": "invalid reasoning_opaque"}',
                     request=request,
                 )
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 content=b'{"choices": [{"message": {"content": "ok"}}]}',
                 request=request,
@@ -516,7 +516,7 @@ class TestRetryOn400:
             {"role": "user", "content": "Now what?"},
         ]
         body = json.dumps({"model": "claude-sonnet-4", "messages": messages}).encode()
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST", "https://api.example.com/v1/chat/completions", content=body
         )
 
@@ -551,18 +551,18 @@ class TestPatchClientIntegration:
         async def fake_send(request, *args, **kwargs):
             if request.method == "POST" and request.content:
                 captured_requests.append(json.loads(request.content))
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 content=_make_non_streaming_response(thinking, opaque),
                 request=request,
             )
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         client.send = fake_send  # Captured as original_send by patch
         patch_client_for_reasoning_opaque(client)
 
         # 1st call — seeds the opaque cache from the response
-        req1 = httpx.Request(
+        req1 = httpx2.Request(
             "POST",
             "https://api.example.com/chat/completions",
             content=_make_request_body([{"role": "user", "content": "Hi"}]),
@@ -571,7 +571,7 @@ class TestPatchClientIntegration:
 
         # 2nd call — assistant message with reasoning_text should get
         # the cached opaque injected before reaching fake_send
-        req2 = httpx.Request(
+        req2 = httpx2.Request(
             "POST",
             "https://api.example.com/chat/completions",
             content=_make_request_body(
@@ -600,13 +600,13 @@ class TestPatchClientIntegration:
 
         async def fake_send(request, *args, **kwargs):
             received_methods.append(request.method)
-            return httpx.Response(200, content=b'{"ok": true}', request=request)
+            return httpx2.Response(200, content=b'{"ok": true}', request=request)
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         client.send = fake_send
         patch_client_for_reasoning_opaque(client)
 
-        req = httpx.Request("GET", "https://api.example.com/models")
+        req = httpx2.Request("GET", "https://api.example.com/models")
         resp = await client.send(req)
 
         assert resp.status_code == 200
@@ -629,31 +629,31 @@ class TestPatchClientIntegration:
             )
             if call_count == 1:
                 # Seed call — return opaque so it's cached
-                return httpx.Response(
+                return httpx2.Response(
                     200,
                     content=_make_non_streaming_response(thinking, opaque),
                     request=request,
                 )
             if has_opaque:
                 # API rejects stale opaque
-                return httpx.Response(
+                return httpx2.Response(
                     400,
                     content=b'{"error": "invalid reasoning_opaque"}',
                     request=request,
                 )
             # After strip, no opaque → success
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 content=b'{"choices": [{"message": {"content": "ok"}}]}',
                 request=request,
             )
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         client.send = fake_send
         patch_client_for_reasoning_opaque(client)
 
         # Seed the cache
-        req1 = httpx.Request(
+        req1 = httpx2.Request(
             "POST",
             "https://api.example.com/chat/completions",
             content=_make_request_body([{"role": "user", "content": "Hi"}]),
@@ -662,7 +662,7 @@ class TestPatchClientIntegration:
 
         # Now send with reasoning_text — opaque will be injected (stale),
         # API returns 400, recovery strips and retries → 200
-        req2 = httpx.Request(
+        req2 = httpx2.Request(
             "POST",
             "https://api.example.com/chat/completions",
             content=_make_request_body(
@@ -700,31 +700,31 @@ class TestPatchClientIntegration:
             call_count += 1
             if call_count == 1:
                 # Seed call
-                return httpx.Response(
+                return httpx2.Response(
                     200,
                     content=_make_non_streaming_response(thinking, opaque),
                     request=request,
                 )
             if call_count == 2:
                 # First real call: 400 (stale opaque)
-                return httpx.Response(
+                return httpx2.Response(
                     400,
                     content=b'{"error": "bad opaque"}',
                     request=request,
                 )
             # Retry after strip: ALSO fails with a distinct status
-            return httpx.Response(
+            return httpx2.Response(
                 502,
                 content=b'{"error": "gateway timeout"}',
                 request=request,
             )
 
-        client = httpx.AsyncClient()
+        client = httpx2.AsyncClient()
         client.send = fake_send
         patch_client_for_reasoning_opaque(client)
 
         # Seed
-        req1 = httpx.Request(
+        req1 = httpx2.Request(
             "POST",
             "https://api.example.com/chat/completions",
             content=_make_request_body([{"role": "user", "content": "Hi"}]),
@@ -732,7 +732,7 @@ class TestPatchClientIntegration:
         await client.send(req1)
 
         # Trigger: 400 → strip → retry → 502
-        req2 = httpx.Request(
+        req2 = httpx2.Request(
             "POST",
             "https://api.example.com/chat/completions",
             content=_make_request_body(
