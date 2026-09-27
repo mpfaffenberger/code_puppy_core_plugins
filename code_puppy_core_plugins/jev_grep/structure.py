@@ -10,7 +10,10 @@ One algorithm for every parser. A language plugs in by implementing
   them, so each range is one behaviour. Splits cover every line of the
   original range, so coverage is unchanged;
 * runs of short neighbours (imports, one-liners) merge into one range,
-  since each range costs a relevance judgment.
+  since each range costs a relevance judgment;
+* a node the parser could not read cleanly is not split or trusted: it
+  becomes a ``window`` range, cut into overlapping line windows like an
+  unparsed file. One bad macro costs its own region, not the whole file.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ class Range:
     start: int
     end: int
     symbol: str | None
+    window: bool = False  # parse error inside: use line windows, not one blob
 
 
 class Syntax(Protocol):
@@ -45,6 +49,9 @@ class Syntax(Protocol):
 
     def statements(self, node: Any) -> Sequence[Any] | None:
         """The statements of ``node``'s body, if it has one."""
+
+    def broken(self, node: Any) -> bool:
+        """True when the parser could not read ``node`` cleanly."""
 
 
 def partition(node: Any, start: int, end: int, symbol, syntax: Syntax, depth=0):
@@ -106,6 +113,9 @@ def structure_ranges(nodes: Sequence[Any], syntax: Syntax) -> list[Range]:
             if ranges and ranges[-1].end < end:
                 ranges[-1].end = end
             return
+        if syntax.broken(node):
+            ranges.append(Range(start, end, symbol, window=True))
+            return
         ranges.extend(
             partition(node, start, end, symbol, syntax) or [Range(start, end, symbol)]
         )
@@ -139,7 +149,7 @@ def merge_short_neighbours(ranges: list[Range]) -> list[Range]:
             names = dict.fromkeys(s for s in (last.symbol, r.symbol) if s)
             last.end, last.symbol = r.end, ", ".join(names) or None
         else:
-            merged.append(Range(r.start, r.end, r.symbol))
+            merged.append(Range(r.start, r.end, r.symbol, r.window))
     return merged
 
 
@@ -161,6 +171,9 @@ class PythonSyntax:
         if not isinstance(body, list):
             return None
         return [s for s in body if hasattr(s, "end_lineno")]
+
+    def broken(self, node: ast.AST) -> bool:
+        return False  # ast.parse either succeeds for the whole file or raises
 
 
 def python_ranges(text: str) -> list[Range]:

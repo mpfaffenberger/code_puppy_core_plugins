@@ -225,10 +225,277 @@ def test_windows_line_endings_give_identical_snippets(text, path):
     assert _ranges(text, path) == _ranges(text.replace("\n", "\r\n"), path)
 
 
-def test_unparseable_file_falls_back_to_windows():
+def test_unparseable_region_uses_line_windows():
     ranges, parser = _ranges("export function oops( {\n  return 1;\n", "broken.ts")
-    assert parser == "overlapping-lines"
+    assert parser == "typescript-partial"
     assert ranges == [(1, 2, None)]
+
+
+def test_parse_error_costs_its_region_not_the_whole_file():
+    """C macros commonly defeat the grammar; the clean functions around one
+    must keep their structure and names."""
+    text = textwrap.dedent(
+        """\
+        static int ok(int a) {
+          return a + 1;
+        }
+
+        FOREACH(item, list) {
+          use(item)
+        }
+
+        int also_ok(void) {
+          return 2;
+        }
+        """
+    )
+    ranges, parser = _ranges(text, "macro.c")
+    assert parser == "c-partial"
+    symbols = {symbol for _, _, symbol in ranges}
+    assert {"ok", "also_ok"} <= symbols
+    broken = [r for r in treesitter.treesitter_ranges(text, "macro.c")[0] if r.window]
+    assert broken and all(5 <= r.start <= 7 for r in broken)
+    _assert_exact_coverage(text, "macro.c")
+
+
+def test_header_falls_back_to_c_grammar():
+    """K&R definitions are C, not C++: .h retries the C grammar."""
+    text = "int add(a, b)\nint a;\nint b;\n{\n  return a + b;\n}\n"
+    ranges, parser = _ranges(text, "old.h")
+    assert parser == "c"
+    assert ranges[0][2] == "add"
+
+
+def test_container_of_one_liners_stays_whole():
+    text = "class Point {\n  int x;\n  int y;\n}\n"
+    assert _ranges(text, "Point.java")[0] == [(1, 4, "Point")]
+
+
+def test_short_tail_joins_last_range_long_tail_does_not():
+    code = "export function f() {\n  return 1;\n}\n"
+    assert _ranges(code + "// done\n", "a.ts")[0] == [(1, 4, "f")]
+    long_tail = code + "".join(f"// note {i}\n" for i in range(10))
+    assert _ranges(long_tail, "a.ts")[0] == [(1, 3, "f"), (4, 13, None)]
+
+
+# Realistic code per newly supported language: (path, parser, source, symbols
+# that must be found). Every sample must also cover every line exactly.
+MORE_LANGUAGES = [
+    (
+        "server.c",
+        "c",
+        """\
+#include <stdlib.h>
+
+static int *make_buf(size_t n) {
+    int *buf = calloc(n, sizeof(int));
+    return buf;
+}
+
+int main(void) {
+    return make_buf(4) != NULL;
+}
+""",
+        {"make_buf", "main"},
+    ),
+    (
+        "server.cpp",
+        "cpp",
+        """\
+#include <string>
+
+namespace net {
+
+class Server {
+ public:
+  explicit Server(int port) : port_(port) {}
+
+  void serve() {
+    while (running_) {
+      accept();
+    }
+  }
+
+ private:
+  int port_;
+};
+
+int Server::port() const {
+  return port_;
+}
+
+}  // namespace net
+""",
+        {"Server", "Server.serve", "Server.port"},
+    ),
+    (
+        "UserService.cs",
+        "csharp",
+        """\
+using System;
+
+namespace App.Services
+{
+    public class UserService
+    {
+        private readonly Repo _repo;
+
+        public UserService(Repo repo)
+        {
+            _repo = repo;
+        }
+
+        public User Find(long id)
+        {
+            return _repo.Get(id);
+        }
+    }
+}
+""",
+        {"UserService", "UserService.UserService", "UserService.Find"},
+    ),
+    (
+        "invoice.rb",
+        "ruby",
+        """\
+require 'json'
+
+module Billing
+  class Invoice
+    def initialize(total)
+      @total = total
+    end
+
+    def paid?
+      status == :paid
+    end
+  end
+end
+""",
+        {"Billing.Invoice.initialize", "Billing.Invoice.paid?"},
+    ),
+    (
+        "UserController.php",
+        "php",
+        """\
+<?php
+namespace App;
+
+class UserController
+{
+    public function show(int $id)
+    {
+        return $this->repo->find($id);
+    }
+}
+
+function helper($x)
+{
+    return $x;
+}
+""",
+        {"UserController.show", "helper"},
+    ),
+    (
+        "Cache.kt",
+        "kotlin",
+        """\
+package app
+
+class Cache(private val size: Int) {
+    fun get(key: String): Int? {
+        return map[key]
+    }
+}
+
+fun topLevel(x: Int): Int {
+    return x + 1
+}
+""",
+        {"Cache.get", "topLevel"},
+    ),
+    (
+        "Session.swift",
+        "swift",
+        """\
+import Foundation
+
+class Session {
+    var expiresAt: Date
+
+    func isExpired() -> Bool {
+        return expiresAt < Date()
+    }
+}
+""",
+        {"Session", "Session.isExpired"},
+    ),
+    (
+        "Cache.scala",
+        "scala",
+        """\
+package app
+
+class Cache(size: Int) {
+  def get(key: String): Option[Int] = {
+    map.get(key)
+  }
+}
+""",
+        {"Cache", "Cache.get"},
+    ),
+    (
+        "deploy.sh",
+        "bash",
+        """\
+#!/usr/bin/env bash
+set -euo pipefail
+
+deploy() {
+  echo "deploying"
+  rsync -a . host:/srv
+}
+
+deploy
+""",
+        {"deploy"},
+    ),
+    (
+        "account.lua",
+        "lua",
+        """\
+local M = {}
+
+function M.greet(name)
+  return "hi " .. name
+end
+
+function Account:deposit(v)
+  self.balance = self.balance + v
+end
+
+return M
+""",
+        {"M.greet", "Account.deposit"},
+    ),
+]
+
+
+@pytest.mark.parametrize("path, parser, text, symbols", MORE_LANGUAGES)
+def test_more_languages_are_structured(path, parser, text, symbols):
+    ranges, used = _ranges(text, path)
+    assert used == parser
+    assert symbols <= {symbol for _, _, symbol in ranges}
+    _assert_exact_coverage(text, path)
+
+
+def test_call_sites_and_namespaces_are_not_symbols():
+    bash = next(t for p, _, t, _ in MORE_LANGUAGES if p == "deploy.sh")
+    assert "set" not in {s for _, _, s in _ranges(bash, "deploy.sh")[0]}
+    cpp = next(t for p, _, t, _ in MORE_LANGUAGES if p == "server.cpp")
+    assert not any(
+        s and s.startswith("net") for _, _, s in _ranges(cpp, "server.cpp")[0]
+    )
 
 
 def test_unsupported_extension_uses_windows():

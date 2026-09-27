@@ -2,10 +2,11 @@
 
 Source files are split along their syntax tree (see ``structure.py``):
 functions and methods stay whole, long declarations split into the blocks
-inside them. Python uses the stdlib ``ast``; JavaScript/TypeScript, Go, Rust
-and Java use tree-sitter (``treesitter.py``). Everything else, and any file
-that does not parse, falls back to overlapping line windows. Line coverage
-is exact: every non-blank line lands in at least one snippet.
+inside them. Python uses the stdlib ``ast``; fourteen more languages use
+tree-sitter (``treesitter.py``), where regions that do not parse fall back to
+overlapping line windows. Other file types, and Python that does not parse,
+are cut into line windows entirely. Line coverage is exact: every non-blank
+line lands in at least one snippet.
 """
 
 from __future__ import annotations
@@ -96,7 +97,8 @@ def _chunks_from_ranges(
             continue
         part = lines[start - 1 : end]
         whole = (
-            end - start < WHOLE_DECLARATION_LINES
+            not r.window
+            and end - start < WHOLE_DECLARATION_LINES
             and len("\n".join(part)) <= MAX_CHUNK_CHARS
         )
         size, overlap = (len(part), 0) if whole else (WINDOW, OVERLAP)
