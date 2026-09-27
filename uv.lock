@@ -358,10 +358,11 @@ wheels = [
 
 [[package]]
 name = "code-puppy-core-plugins"
-version = "0.0.69"
+version = "0.0.70"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "httpx2" },
     { name = "pydantic-ai-slim", extra = ["anthropic", "mcp", "openai", "typesafe"] },
 ]
 
@@ -378,6 +379,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.24.1,<1" },
+    { name = "httpx2", specifier = ">=2.7" },
     { name = "pydantic-ai-slim", extras = ["openai", "anthropic", "mcp", "typesafe"], specifier = ">=2.51.0,<3" },
 ]
 
