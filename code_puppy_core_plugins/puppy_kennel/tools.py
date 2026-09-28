@@ -157,7 +157,7 @@ def _resolve_scope(wing: str, scope: str, agent_name: str, cwd: Any) -> list[str
 def register_kennel_recall(agent: Any) -> None:
     """Register the ``kennel_recall`` tool on the given agent."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def kennel_recall(
         context: RunContext,
         query: str,
@@ -314,7 +314,7 @@ def register_kennel_remember(agent: Any) -> None:
 def register_kennel_recent(agent: Any) -> None:
     """Register the ``kennel_recent`` tool — time-ordered drawer browsing."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def kennel_recent(
         context: RunContext,
         wing: str = "",
@@ -366,7 +366,7 @@ def register_kennel_recent(agent: Any) -> None:
 def register_kennel_list_wings(agent: Any) -> None:
     """Register the ``kennel_list_wings`` tool — wing discovery."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def kennel_list_wings(context: RunContext) -> KennelWingsOutput:
         """List every wing in the kennel with its drawer count.
 
@@ -392,7 +392,7 @@ def register_kennel_list_wings(agent: Any) -> None:
 def register_kennel_stats(agent: Any) -> None:
     """Register the ``kennel_stats`` tool — kennel-wide totals + size."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def kennel_stats(context: RunContext) -> KennelStatsOutput:
         """Return kennel-wide totals: drawers, wings, and on-disk size.
 

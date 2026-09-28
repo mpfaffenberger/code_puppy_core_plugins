@@ -4,15 +4,37 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-puppy-core-plugins"
-version = "0.0.62"
+version = "0.0.73"
 description = "Official plugin bundle for Code Puppy"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
     "httpx>=0.24.1,<1",
-    "pydantic-ai-slim[openai,anthropic,mcp]>=2.47.0,<3",
+    "httpx2>=2.7",
+    "pydantic-ai-slim[openai,anthropic,mcp,typesafe]>=2.51.0,<3",
+    # smart_grep syntax-aware chunking. <0.26: py-tree-sitter 0.26.0
+    # segfaults walking ordinary trees (see jev_grep/treesitter.py).
+    "tree-sitter>=0.25.2,<0.26",
+    "tree-sitter-bash>=0.25.1",
+    "tree-sitter-c>=0.24.2",
+    "tree-sitter-c-sharp>=0.23.5",
+    "tree-sitter-cpp>=0.23.4",
+    "tree-sitter-go>=0.25.0",
+    "tree-sitter-java>=0.23.5",
+    "tree-sitter-javascript>=0.25.0",
+    "tree-sitter-kotlin>=1.1.0",
+    "tree-sitter-lua>=0.5.0",
+    "tree-sitter-php>=0.24.1",
+    "tree-sitter-ruby>=0.23.1",
+    "tree-sitter-rust>=0.24.2",
+    "tree-sitter-scala>=0.26.2",
+    "tree-sitter-swift>=0.7.3",
+    "tree-sitter-typescript>=0.23.2",
 ]
 license = {text = "MIT"}
+# Ship third-party notices with every build: MIT requires the notice to
+# accompany ported code (see THIRD_PARTY_NOTICES.md).
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{name = "Michael Pfaffenberger"}]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -31,6 +53,7 @@ Homepage = "https://github.com/mpfaffenberger/code_puppy_core_plugins"
 acp = "code_puppy_core_plugins.acp.register_callbacks"
 agent_skills = "code_puppy_core_plugins.agent_skills.register_callbacks"
 agent_creator_skill = "code_puppy_core_plugins.agent_creator_skill.register_callbacks"
+attachment_references = "code_puppy_core_plugins.attachment_references.register_callbacks"
 aws_bedrock = "code_puppy_core_plugins.aws_bedrock.register_callbacks"
 background_agents = "code_puppy_core_plugins.background_agents.register_callbacks"
 azure_foundry = "code_puppy_core_plugins.azure_foundry.register_callbacks"
@@ -59,6 +82,7 @@ grok_oauth = "code_puppy_core_plugins.grok_oauth.register_callbacks"
 herdr = "code_puppy_core_plugins.herdr.register_callbacks"
 hook_creator = "code_puppy_core_plugins.hook_creator.register_callbacks"
 hook_manager = "code_puppy_core_plugins.hook_manager.register_callbacks"
+jev_grep = "code_puppy_core_plugins.jev_grep.register_callbacks"
 logfire_oauth = "code_puppy_core_plugins.logfire_oauth.register_callbacks"
 logfire_sessions = "code_puppy_core_plugins.logfire_sessions.register_callbacks"
 mcp_binding_prompt = "code_puppy_core_plugins.mcp_binding_prompt.register_callbacks"

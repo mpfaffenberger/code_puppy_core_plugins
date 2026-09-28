@@ -44,7 +44,7 @@ def test_codex_image_generation_posts_codex_payload(tmp_path):
     assert call.kwargs["json"] == {
         "prompt": "a red fox",
         "background": "auto",
-        "model": "gpt-image-2",
+        "model": "gpt-image-2.1",
         "quality": "auto",
         "size": "auto",
     }
@@ -83,7 +83,7 @@ def test_codex_image_generation_with_references_posts_edits_payload(tmp_path):
     payload = call.kwargs["json"]
     assert payload["images"] == [{"image_url": f"data:image/png;base64,{expected_b64}"}]
     assert payload["prompt"] == "a red fox"
-    assert payload["model"] == "gpt-image-2"
+    assert payload["model"] == "gpt-image-2.1"
     # `background` is not accepted by the edits endpoint.
     assert "background" not in payload
 
@@ -355,11 +355,23 @@ def test_reasoning_gates_by_gpt_generation(name, xhigh, max_effort, responses_co
     assert utils._supports_responses_reasoning_controls(name) is responses_controls
 
 
+def test_codex_imagegen_is_speculatable():
+    from pydantic_ai import Agent
+
+    agent = Agent("test")
+    image_tool.register_codex_imagegen(agent)
+    assert (
+        agent._function_toolset.tools["codex_imagegen"].metadata["speculatable"] is True
+    )
+
+
 def test_codex_imagegen_agent_tool(tmp_path):
     registered = {}
 
     class FakeAgent:
-        def tool(self, function):
+        def tool(self, function=None, **_kwargs):
+            if function is None:
+                return lambda fn: self.tool(fn)
             registered[function.__name__] = function
             return function
 
@@ -385,7 +397,9 @@ def test_codex_imagegen_agent_tool_forwards_reference_images(tmp_path):
     registered = {}
 
     class FakeAgent:
-        def tool(self, function):
+        def tool(self, function=None, **_kwargs):
+            if function is None:
+                return lambda fn: self.tool(fn)
             registered[function.__name__] = function
             return function
 

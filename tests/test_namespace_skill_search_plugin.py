@@ -6,17 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
-def _make_agent():
-    agent = MagicMock()
-    captured = {}
-
-    def tool(fn):
-        captured["fn"] = fn
-        return fn
-
-    agent.tool = tool
-    return agent, captured
+from tests.agent_test_support import FakeAgent
 
 
 def _skill(name, description="desc", tags=None):
@@ -182,12 +172,12 @@ class TestBrowseSkillNamespace:
             register_browse_skill_namespace,
         )
 
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=[]):
-            result = await cap["fn"](ctx)
+            result = await agent.registered["browse_skill_namespace"](ctx)
 
         assert result.mode == "directory"
         assert result.error is not None
@@ -199,12 +189,12 @@ class TestBrowseSkillNamespace:
         )
 
         skills = [_skill("a", tags=["finance"]), _skill("b", tags=["ops"])]
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=skills):
-            result = await cap["fn"](ctx)
+            result = await agent.registered["browse_skill_namespace"](ctx)
 
         assert result.mode == "directory"
         assert set(result.namespaces) == {"finance", "ops"}
@@ -220,12 +210,14 @@ class TestBrowseSkillNamespace:
             _skill("a", description="alpha", tags=["finance"]),
             _skill("b", description="beta", tags=["ops"]),
         ]
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=skills):
-            result = await cap["fn"](ctx, namespace="finance")
+            result = await agent.registered["browse_skill_namespace"](
+                ctx, namespace="finance"
+            )
 
         assert result.mode == "namespace"
         assert result.total_skills == 1
@@ -238,12 +230,14 @@ class TestBrowseSkillNamespace:
         )
 
         skills = [_skill("a", tags=["Finance"])]
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=skills):
-            result = await cap["fn"](ctx, namespace="finance")
+            result = await agent.registered["browse_skill_namespace"](
+                ctx, namespace="finance"
+            )
 
         assert result.total_skills == 1
 
@@ -254,12 +248,14 @@ class TestBrowseSkillNamespace:
         )
 
         skills = [_skill("a", tags=["finance"])]
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=skills):
-            result = await cap["fn"](ctx, namespace="nonexistent")
+            result = await agent.registered["browse_skill_namespace"](
+                ctx, namespace="nonexistent"
+            )
 
         assert result.mode == "namespace"
         assert result.error is not None
@@ -276,12 +272,14 @@ class TestBrowseSkillNamespace:
             ),
             _skill("gl-daily", description="general ledger", tags=["finance"]),
         ]
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=skills):
-            result = await cap["fn"](ctx, namespace="finance", query="variance")
+            result = await agent.registered["browse_skill_namespace"](
+                ctx, namespace="finance", query="variance"
+            )
 
         assert result.total_skills == 1
         assert result.skills[0]["name"] == "variance-analysis"
@@ -296,12 +294,14 @@ class TestBrowseSkillNamespace:
             _skill("a", description="handles variance", tags=["finance"]),
             _skill("b", description="handles deploys", tags=["ops"]),
         ]
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=skills):
-            result = await cap["fn"](ctx, query="variance")
+            result = await agent.registered["browse_skill_namespace"](
+                ctx, query="variance"
+            )
 
         assert result.mode == "search"
         assert result.total_skills == 1
@@ -315,12 +315,14 @@ class TestBrowseSkillNamespace:
         )
 
         skills = [_skill("a", description="handles variance", tags=["finance"])]
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=skills):
-            result = await cap["fn"](ctx, query="zzzzz-nomatch")
+            result = await agent.registered["browse_skill_namespace"](
+                ctx, query="zzzzz-nomatch"
+            )
 
         assert result.mode == "search"
         assert result.total_skills == 0
@@ -337,12 +339,12 @@ class TestBrowseSkillNamespace:
             _skill("a", tags=["finance"]),
             _skill("b", tags=["ops"]),
         ]
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, return_value=skills):
-            result = await cap["fn"](ctx, query="")
+            result = await agent.registered["browse_skill_namespace"](ctx, query="")
 
         assert result.mode == "search"
         assert result.total_skills == 2
@@ -353,12 +355,12 @@ class TestBrowseSkillNamespace:
             register_browse_skill_namespace,
         )
 
-        agent, cap = _make_agent()
+        agent = FakeAgent()
         register_browse_skill_namespace(agent)
         ctx = MagicMock()
 
         with patch(_PATCH_TARGET, side_effect=OSError("disk on fire")):
-            result = await cap["fn"](ctx)
+            result = await agent.registered["browse_skill_namespace"](ctx)
 
         assert result.mode == "directory"
         assert result.error is not None

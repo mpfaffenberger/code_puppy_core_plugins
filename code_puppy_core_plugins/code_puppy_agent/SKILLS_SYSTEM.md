@@ -66,7 +66,6 @@ real path in the repo rather than expecting it to appear as a
 | `/skills list` | Text list of all skills |
 | `/skills enable` / `disable` | Toggle skills globally |
 | `/skills frontmatter on/off` | Toggle skill summaries in system prompt |
-| `/skills install` | Browse & install from remote catalog |
 
 ---
 

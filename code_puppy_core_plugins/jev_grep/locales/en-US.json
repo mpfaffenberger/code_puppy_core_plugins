@@ -1,0 +1,3 @@
+{
+  "smart_grep.summary": "smart_grep '{query}' in {directory}: {matches} matches ({evaluated}/{snippets} snippets judged)"
+}

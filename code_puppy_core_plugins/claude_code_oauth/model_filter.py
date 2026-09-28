@@ -7,6 +7,25 @@ from typing import Dict, List, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
+# claude-{family}-{major}[-|.{minor}][-{yyyymmdd}], e.g. claude-opus-5,
+# claude-opus-5-5, claude-sonnet-4.5-20250929, claude-opus-4-20250514.
+# The lookaheads stop a date from being misread as a minor version
+# (claude-opus-4-20250514 is 4.0, not 4.20). Undated names rank date 0.
+_MODEL_RE = re.compile(
+    r"claude-(haiku|sonnet|opus|fable)-(\d+)"
+    r"(?:[-.](\d{1,2})(?!\d))?"
+    r"(?:-(\d{8}))?(?![\d.])"
+)
+
+
+def _parse_model(model_name: str) -> Tuple[str, int, int, int] | None:
+    """Parse a model name into ``(family, major, minor, date)``."""
+    match = _MODEL_RE.match(model_name)
+    if not match:
+        return None
+    family, major, minor, date = match.groups()
+    return family, int(major), int(minor or 0), int(date or 0)
+
 
 def filter_latest_claude_models(
     models: List[str], max_per_family: Union[int, Dict[str, int]] = 2
@@ -34,50 +53,10 @@ def filter_latest_claude_models(
     family_models: Dict[str, List[Tuple[str, int, int, int]]] = {}
 
     for model_name in models:
-        if model_name == "claude-opus-5-5":
-            family_models.setdefault("opus", []).append((model_name, 5, 5, 0))
+        parsed = _parse_model(model_name)
+        if parsed is None:
             continue
-        if model_name == "claude-opus-5":
-            family_models.setdefault("opus", []).append((model_name, 5, 0, 0))
-            continue
-        if model_name == "claude-opus-4-8":
-            family_models.setdefault("opus", []).append((model_name, 4, 8, 20250301))
-            continue
-        if model_name == "claude-opus-4-7":
-            family_models.setdefault("opus", []).append((model_name, 4, 7, 20250219))
-            continue
-        if model_name == "claude-opus-4-6":
-            family_models.setdefault("opus", []).append((model_name, 4, 6, 20260205))
-            continue
-        if model_name == "claude-sonnet-4-6":
-            family_models.setdefault("sonnet", []).append((model_name, 4, 6, 20250610))
-            continue
-        if model_name == "claude-sonnet-5":
-            family_models.setdefault("sonnet", []).append((model_name, 5, 0, 0))
-            continue
-        if model_name == "claude-fable-5":
-            family_models.setdefault("fable", []).append((model_name, 5, 0, 0))
-            continue
-        if model_name == "claude-fable-5-1":
-            family_models.setdefault("fable", []).append((model_name, 5, 1, 0))
-            continue
-        # Match pattern: claude-{family}-{major}-{minor}-{date}
-        # Examples: claude-haiku-3-5-20241022, claude-sonnet-4-5-20250929
-        match = re.match(r"claude-(haiku|sonnet|opus)-(\d+)-(\d+)-(\d+)", model_name)
-        if not match:
-            # Also try pattern with dots: claude-{family}-{major}.{minor}-{date}
-            match = re.match(
-                r"claude-(haiku|sonnet|opus)-(\d+)\.(\d+)-(\d+)", model_name
-            )
-
-        if not match:
-            continue
-
-        family = match.group(1)
-        major = int(match.group(2))
-        minor = int(match.group(3))
-        date = int(match.group(4))
-
+        family, major, minor, date = parsed
         family_models.setdefault(family, []).append((model_name, major, minor, date))
 
     # Sort each family descending and keep the top N

@@ -98,8 +98,9 @@ def create_claude_code_model(model_name: str, model_config: Dict, config: Dict) 
     if verify is None:
         verify = get_cert_bundle_path()
 
-    # No HTTP/2 for OAuth: the UnprefixingStream tool-name rewrite breaks under
-    # HTTP/2's compression handling, causing zlib decompression errors.
+    # No HTTP/2 for OAuth: kept as a precaution from core cfff821b4, which fixed
+    # zlib decompression errors caused by rewriting response streams to strip
+    # the ``cp_`` prefix. Responses are no longer rewritten -- see below.
     kwargs = {}
     # Plugin releases land before core. Old transports keep their legacy path.
     import inspect
@@ -116,7 +117,11 @@ def create_claude_code_model(model_name: str, model_config: Dict, config: Dict) 
         timeout=180,
         http2=False,
         # Claude Code OAuth requires the ``cp_`` tool-name prefix; the wire
-        # format Anthropic's CLI uses won't accept un-prefixed tools.
+        # format Anthropic's CLI uses won't accept un-prefixed tools. Only
+        # requests are rewritten: returned ``cp_*`` calls are mapped back to
+        # real tool names at dispatch by core's pydantic_patches
+        # (``_normalize_claude_code_tool_name``), so this model needs
+        # ``apply_all_patches()`` -- cli_runner applies it at import.
         apply_claude_code_prefix=True,
         oauth_reauthentication_callback=lambda: _reauthenticate_after_expired_oauth(
             model_name
