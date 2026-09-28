@@ -8,6 +8,7 @@ key is configured. ``/set`` reloads the agent, so toggling applies at once.
 
 from code_puppy.callbacks import register_callback
 
+from .completer import SmartGrepSetCompleter
 from .config import is_available
 from .tool import TOOL_NAME, register_smart_grep
 
@@ -52,3 +53,4 @@ and the query to TypeSafe, so use local grep/reads for local-only work.
 register_callback("load_prompt", _discovery_instructions)
 register_callback("register_tools", _register_tools)
 register_callback("register_agent_tools", _advertise_when_configured)
+register_callback("register_completion_provider", SmartGrepSetCompleter)

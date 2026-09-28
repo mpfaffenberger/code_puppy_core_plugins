@@ -13,6 +13,11 @@ import os
 from code_puppy.config import get_api_key, get_truthy_bool_value, get_value
 
 ENABLED_KEY = "smart_grep"
+MODEL_KEY = "smart_grep_model"
+THRESHOLD_KEY = "smart_grep_threshold"
+# What `/set` autocompletes. The API key is deliberately absent: completions
+# echo the current value, and secrets don't belong in a popup.
+SETTING_KEYS = (ENABLED_KEY, MODEL_KEY, THRESHOLD_KEY)
 # TypeSafe's official name first, then the Jev-branded alias. Config lookup
 # is case-insensitive, so `/set jev_api_key ...` matches JEV_API_KEY.
 API_KEY_NAMES = ("TYPESAFE_API_KEY", "JEV_API_KEY")
@@ -44,12 +49,12 @@ def is_available() -> bool:
 
 def get_jev_model_name() -> str:
     """Pin a version (e.g. ``jev-1.13.0``) once a threshold is tuned against it."""
-    return get_value("smart_grep_model") or DEFAULT_MODEL
+    return get_value(MODEL_KEY) or DEFAULT_MODEL
 
 
 def get_threshold() -> float:
     try:
-        value = float(get_value("smart_grep_threshold") or DEFAULT_THRESHOLD)
+        value = float(get_value(THRESHOLD_KEY) or DEFAULT_THRESHOLD)
     except ValueError:
         return DEFAULT_THRESHOLD
     return value if 0 <= value <= 1 else DEFAULT_THRESHOLD
