@@ -298,6 +298,156 @@ async def test_fork_reports_result_error_as_failure():
     assert not any("traceback junk" in str(m) for m in errors)
 
 
+def test_first_line_falls_back_when_there_are_no_lines():
+    assert rc._first_line("") == ""
+    assert rc._first_line("   \n\t  ") == ""
+    assert rc._first_line("model exploded\ntraceback junk") == "model exploded"
+    assert rc._first_line(RuntimeError("kaboom")) == "kaboom"
+
+
+async def test_fork_reports_whitespace_only_error_without_crashing():
+    """ "   " is truthy, so it enters the failure branch -- but strips to no lines.
+
+    Previously ``str(error).strip().splitlines()[0]`` raised IndexError, which
+    the outer ``except`` swallowed: the fork went ``failed`` with no banner.
+    """
+    errors = []
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=_fake_impl(error="   \n\t  "),
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork doomed prompt")
+        await _wait_for_forks()
+
+    record = next(iter(rc._forks.values()))
+    assert record.status == "failed"
+    assert len(errors) == 1
+    assert "no error detail provided" in str(errors[0])
+
+
+async def test_fork_unexpected_banner_error_is_not_silent():
+    """A render failure is loud, but does not relabel a successful fork as failed."""
+    errors = []
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=_fake_impl(),
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(
+            rc, "_emit_agent_response", side_effect=RuntimeError("render blew up")
+        ),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork fine prompt")
+        await _wait_for_forks()
+
+    record = next(iter(rc._forks.values()))
+    # The sub-agent succeeded; only rendering broke, so it stays done.
+    assert record.status == "done"
+    assert any("render blew up" in str(m) for m in errors)
+    assert any("could not render" in str(m) for m in errors)
+
+
+async def test_fork_render_failure_falls_back_to_exception_type():
+    """A message-less exception still produces a diagnosable banner."""
+    errors = []
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=_fake_impl(),
+        ),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_agent_response", side_effect=RuntimeError()),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork fine prompt")
+        await _wait_for_forks()
+
+    assert any("RuntimeError" in str(m) for m in errors)
+
+
+async def test_fork_cancelled_status_survives_broken_warning_banner():
+    """A cancelled fork keeps its status even if its warning banner raises.
+
+    Only ``running`` may be promoted to ``failed``; ``cancelled`` is already a
+    truthful terminal state, so a rendering failure must not relabel it.
+    """
+    started = asyncio.Event()
+
+    async def slow(
+        context,
+        agent_name,
+        prompt,
+        session_id=None,
+        model_name=None,
+        emit_response_message=True,
+    ):
+        assert emit_response_message is False
+        started.set()
+        await asyncio.sleep(60)
+
+    def boom_warning(_content):
+        raise RuntimeError("warn banner broke")
+
+    errors = []
+    with (
+        patch("code_puppy.tools.subagent_invocation._invoke_agent_impl", new=slow),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_warning", boom_warning),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork slow task")
+        await started.wait()
+        fork_id = next(iter(rc._forks))
+        rc._handle_fork(f"/fork cancel {fork_id}")
+        await _wait_for_forks()
+
+    record = rc._forks[fork_id]
+    assert record.status == "cancelled"
+    assert any("cancelled but could not render" in str(m) for m in errors)
+
+
+async def test_fork_unexpected_error_while_running_is_marked_failed():
+    """The one status that *should* degrade to failed: still-running forks."""
+
+    class ExplodingSession:
+        error = None
+        response = "the real answer"
+
+        @property
+        def session_id(self):
+            raise RuntimeError("session lookup blew up")
+
+    async def impl(
+        context,
+        agent_name,
+        prompt,
+        session_id=None,
+        model_name=None,
+        emit_response_message=True,
+    ):
+        assert emit_response_message is False
+        return ExplodingSession()
+
+    errors = []
+    with (
+        patch("code_puppy.tools.subagent_invocation._invoke_agent_impl", new=impl),
+        patch.object(rc, "_emit_info"),
+        patch.object(rc, "_emit_error", errors.append),
+    ):
+        rc._handle_fork("/fork fine prompt")
+        await _wait_for_forks()
+
+    record = next(iter(rc._forks.values()))
+    assert record.status == "failed"
+    assert any("session lookup blew up" in str(m) for m in errors)
+
+
 async def test_fork_reports_crash_as_failure():
     async def boom(
         context,

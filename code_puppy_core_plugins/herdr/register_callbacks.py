@@ -23,7 +23,8 @@ nothing for herdr to guess.
 
 Callback -> effect:
 
-* ``startup`` ......................................... resync (-> idle)
+* ``startup`` ......................................... resync (-> idle) + auto-resume
+* ``handle_cli_args`` ................................ capture -r / --quick-resume intent
 * ``session_end`` / ``shutdown`` ..................... release pane authority
 * ``user_prompt_submit`` ............................. refresh durable session
 * ``agent_run_start`` / ``agent_run_end`` ............ run-depth +/- 1
@@ -31,13 +32,21 @@ Callback -> effect:
 * ``agent_run_cancel`` / ``interactive_turn_end`` .... reset -> idle
 * ``interactive_turn_cancel`` ........................ reset -> idle
 * ``awaiting_user_input`` ............................ blocked <-> not
+* ``post_autosave`` .................................. title refresh / wait
+
+Callbacks alone are not enough to guarantee the pane is released. They fire
+from a ``finally:`` in ``cli_runner``, which the interpreter only reaches on
+a graceful exit. ``_install_exit_guards`` adds an ``atexit`` hook and a
+SIGTERM/SIGHUP handler so a closed pane, a plain ``kill``, or a logout also
+release pane authority instead of stranding a dead agent in herdr's sidebar.
 
 Session identity is the durable autosave (name, path) resolved by
 ``sources.current_session_ref`` -- NOT the per-run ``group_id`` UUID, which
-changes every turn. Pane metadata (model / context / tokens) and the
-best-effort activity ``message`` are decorative: they never perturb the
-authoritative state and never delay a state edge, session reference, or the
-final ``pane.release_agent`` on exit.
+changes every turn. Pane metadata (model / context / tokens), the
+session namer's conversation title, and the best-effort activity
+``message`` are decorative: they never perturb the authoritative state and
+never delay a state edge, session reference, or the final
+``pane.release_agent`` on exit.
 
 Handlers are plain sync functions that swallow every argument: the callback
 dispatcher passes hook args positionally and runs sync callbacks happily
@@ -47,25 +56,86 @@ choice.
 
 from __future__ import annotations
 
+import atexit
 import logging
+import os
+import signal
 
 from code_puppy.callbacks import register_callback
 
+from . import restore
 from .client import HerdrClient
 from .reporter import HerdrReporter
 
 logger = logging.getLogger(__name__)
 
+#: Signals that terminate the process without unwinding the interpreter, so
+#: neither the ``finally:`` in cli_runner nor ``atexit`` would otherwise run.
+#: SIGKILL is deliberately absent -- it cannot be caught by design. SIGHUP is
+#: resolved defensively because it does not exist on Windows, where this
+#: module is still imported (client.py speaks a named pipe there) and a bare
+#: ``signal.SIGHUP`` would raise AttributeError and break the whole plugin.
+_TERMINATING_SIGNALS = tuple(
+    sig
+    for sig in (getattr(signal, name, None) for name in ("SIGTERM", "SIGHUP"))
+    if sig is not None
+)
+
 _client = HerdrClient()
 _reporter = HerdrReporter(_client)
+
+#: Set from ``handle_cli_args`` so startup auto-resume yields to an explicit
+#: ``-r`` / ``--quick-resume``. The plugin cannot see the parsed args from the
+#: ``startup`` callback, and that hook fires *before* ``-r`` is applied -- so
+#: we capture the intent here rather than re-parsing ``sys.argv`` (DRY).
+_cli_resume_requested = False
+_cli_headless = False
 
 
 def _arg(args: tuple, index: int):
     return args[index] if len(args) > index else None
 
 
+def _on_handle_cli_args(args) -> None:
+    """Record whether the user asked for an explicit resume / headless run.
+
+    Runs after ``parse_args()`` and before ``startup``. Never handles the args
+    itself; returning ``None`` lets normal startup proceed.
+    """
+    global _cli_resume_requested, _cli_headless
+    try:
+        _cli_resume_requested = bool(getattr(args, "resume", None)) or (
+            getattr(args, "quick_resume", None) is not None
+        )
+        _cli_headless = bool(getattr(args, "prompt", None))
+    except Exception:
+        _cli_resume_requested = False
+        _cli_headless = False
+    return None
+
+
+def _maybe_auto_resume() -> None:
+    """Resume this pane's previous session unless the user asked otherwise.
+
+    Yields to an explicit ``-r`` / ``--quick-resume``, skips headless ``-p``
+    runs, and honours ``HERDR_NO_AUTO_RESUME=1`` as an escape hatch for
+    anyone who wants a deliberately fresh session in a reused pane.
+    """
+    if _cli_resume_requested or _cli_headless:
+        return
+    if os.environ.get("HERDR_NO_AUTO_RESUME", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    restore.resume_session(_client)
+
+
 def _on_startup(*_args, **_kw) -> None:
     _reporter.on_startup()
+    _maybe_auto_resume()
 
 
 def _on_user_prompt(*_args, **_kw) -> None:
@@ -88,6 +158,11 @@ def _on_run_cancel(*_args, **_kw) -> None:
 
 def _on_turn_end(*_args, **_kw) -> None:
     _reporter.on_turn_end()
+
+
+def _on_post_autosave(*_args, **_kw) -> None:
+    # (SessionMetadata,) -- the reporter reads the sidecar itself.
+    _reporter.on_post_autosave()
 
 
 def _on_tool_start(*args, **kwargs):
@@ -119,7 +194,69 @@ def _on_shutdown(*_args, **_kw) -> None:
     _reporter.on_shutdown()
 
 
+def _install_exit_guards() -> None:
+    """Release the pane even when the interpreter never unwinds.
+
+    The ``shutdown`` / ``session_end`` callbacks fire from a ``finally:`` in
+    ``cli_runner``, which only runs on a graceful exit (``/exit``, EOF). A
+    terminal closing its pane, a plain ``kill``, a logout, or a service
+    restart all send SIGTERM/SIGHUP, whose *default* disposition terminates
+    the process immediately -- the ``finally:`` never executes, no
+    ``pane.release_agent`` is ever sent, and herdr keeps showing a dead
+    agent forever with no mechanism to reap it.
+
+    Two guards, because neither alone is sufficient:
+
+    * ``atexit`` -- covers ordinary interpreter teardown paths that bypass
+      the callback (an unhandled exception above the ``finally:``,
+      ``sys.exit()`` from a nested frame). It does **not** run on SIGTERM.
+    * a SIGTERM/SIGHUP handler -- covers the signal paths ``atexit`` misses.
+
+    The handler restores the previous disposition and re-raises so the
+    process still dies from the signal with correct ``128 + signum`` exit
+    status; it does not swallow the signal or alter shutdown semantics.
+    Any previously-installed handler is chained rather than clobbered.
+
+    SIGKILL cannot be caught, so a ``kill -9`` still strands the pane. That
+    residual case needs a herdr-side liveness check on the reporting
+    process and is out of scope here.
+    """
+    # release_and_close() is idempotent and bounded, so double-firing from
+    # both a signal and atexit is harmless.
+    atexit.register(_client.release_and_close)
+
+    previous_handlers = {}
+
+    def _release_and_reraise(signum: int, frame) -> None:
+        try:
+            _client.release_and_close()
+        except Exception:  # never let cleanup mask the shutdown itself
+            logger.debug("herdr: release on signal %s failed", signum, exc_info=True)
+
+        previous = previous_handlers.get(signum)
+        if callable(previous):
+            previous(signum, frame)
+            return
+
+        # Restore the default disposition and re-raise so the exit status
+        # remains 128 + signum rather than a synthetic 0.
+        signal.signal(signum, previous if previous is not None else signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for sig in _TERMINATING_SIGNALS:
+        try:
+            previous_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, _release_and_reraise)
+        except (OSError, ValueError, AttributeError):
+            # signal.signal() only works on the main thread, and some signals
+            # are absent on some platforms (SIGHUP on Windows). Reporting must
+            # never break the agent, so degrade quietly.
+            previous_handlers.pop(sig, None)
+            logger.debug("herdr: could not install handler for %s", sig, exc_info=True)
+
+
 if _reporter.active:
+    register_callback("handle_cli_args", _on_handle_cli_args)
     register_callback("startup", _on_startup)
     register_callback("user_prompt_submit", _on_user_prompt)
     register_callback("agent_run_start", _on_run_start)
@@ -127,11 +264,13 @@ if _reporter.active:
     register_callback("agent_run_cancel", _on_run_cancel)
     register_callback("interactive_turn_end", _on_turn_end)
     register_callback("interactive_turn_cancel", _on_turn_end)
+    register_callback("post_autosave", _on_post_autosave)
     register_callback("pre_tool_call", _on_tool_start)
     register_callback("post_tool_call", _on_tool_complete)
     register_callback("awaiting_user_input", _on_awaiting_user_input)
     register_callback("session_end", _on_shutdown)
     register_callback("shutdown", _on_shutdown)
+    _install_exit_guards()
     logger.debug("herdr plugin active for pane %s", _client._pane_id)
 else:
     logger.debug("herdr plugin inactive (not running inside a herdr pane)")

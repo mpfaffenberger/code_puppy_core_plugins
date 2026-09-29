@@ -1,14 +1,7 @@
-"""Context-window usage indicator.
+"""Context-window usage reporting via the ``/context`` slash command.
 
-Shows a colored circle on the bottom bar's status row (next to the token
-summary) reflecting how full the current agent's message history is
-relative to the active model's context window:
-
-* 🟢 — under 30% used
-* 🟡 — 30%-65% used
-* 🔴 — over 65% used
-
-Also exposes a ``/context`` slash command for a detailed breakdown.
+Keeps the historical plugin name and token-usage import compatibility
+without adding colored indicators to the prompt or startup output.
 """
 
 __all__: list[str] = []

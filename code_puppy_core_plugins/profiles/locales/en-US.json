@@ -1,0 +1,18 @@
+{
+  "profiles.title": "Configuration profiles (* active in this process)",
+  "profiles.cli_help": "Use a named configuration profile for this run (default: default)",
+  "profiles.help": "Create and switch isolated configuration profiles",
+  "profiles.invalid_name": "Use 1–64 lowercase letters, digits, underscores or hyphens; start with a letter or digit.",
+  "profiles.symlink": "Symlinked profiles are not supported.",
+  "profiles.exists": "Profile '{name}' already exists.",
+  "profiles.missing": "Profile '{name}' does not exist. Create it with /profile create {name}.",
+  "profiles.error": "Profile error: {detail}",
+  "profiles.created": "Created '{name}' from the current settings. Select it with Enter or /profile use {name}.",
+  "profiles.active": "Active profile: {name} (this process only).",
+  "profiles.list": "Active: {active}\nProfiles: {names}",
+  "profiles.usage": "/profile | /profile list | /profile create NAME | /profile use NAME",
+  "profiles.keys": "↑/↓ select · Enter activate · c create · Esc/q close",
+  "profiles.new_name": "New profile name: {name}",
+  "profiles.row": "{cursor} {active} {name}",
+  "profiles.no_tty": "The profile menu needs a terminal. Use /profile list, create NAME or use NAME instead."
+}

@@ -2,6 +2,7 @@ acp
 agent_skills
 agent_creator_skill
 aws_bedrock
+background_agents
 azure_foundry
 auto_continue
 browser_harness
@@ -11,6 +12,7 @@ claude_code_hooks
 claude_code_oauth
 code_puppy_agent
 computer_use
+completion_notification
 context_indicator
 copilot_auth
 customizable_commands
@@ -30,6 +32,7 @@ hook_creator
 hook_manager
 logfire_oauth
 logfire_sessions
+mcp_binding_prompt
 meta_oauth
 namespace_skill_search
 no_tools
@@ -38,6 +41,7 @@ ollama
 ollama_setup
 plugin_list
 pop_command
+profiles
 prompt_newline
 prune
 puppy_kennel

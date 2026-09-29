@@ -18,7 +18,7 @@ from code_puppy.callbacks import register_callback
 # Map tools to plain local-path args; ``path_kind`` tells the resolver whether
 # to probe the file's parent. Nested/non-string payloads are intentionally omitted.
 _LOCAL_PATH_TOOL_ARGS: dict[str, tuple[tuple[str, str], ...]] = {
-    "agent_run_shell_command": (("cwd", "directory"),),
+    "shell": (("cwd", "directory"),),
     "create_file": (("file_path", "file"),),
     "delete_file": (("file_path", "file"),),
     "delete_snippet": (("file_path", "file"),),

@@ -21,7 +21,7 @@ Fragments = list  # list[tuple[str, str]]
 
 def _sgr_for(style_class: str) -> tuple[str, str]:
     """Map a semantic ``class:tui.*`` (or raw) style name to SGR codes."""
-    from termflow.ansi.codes import BOLD_ON, DIM_ON, RESET
+    from termflow.ansi.codes import BOLD_ON, RESET
     from termflow.ansi.color import fg_color
     from termflow.render.style import RenderStyle
 
@@ -32,8 +32,14 @@ def _sgr_for(style_class: str) -> tuple[str, str]:
     except Exception:
         s = RenderStyle.default()
 
-    bold_bright = f"{fg_color(s.bright)}{BOLD_ON}"
-    dim_grey = f"{fg_color(s.grey)}{DIM_ON}"
+    from code_puppy.callbacks import on_prompt_text_color
+
+    # ANSI 39 inherits the active terminal foreground when no theme supplies
+    # an explicit color. Never dim essential menu text: dark palettes can
+    # turn an already subdued grey into effectively invisible instructions.
+    foreground = on_prompt_text_color()
+    body = fg_color(foreground) if foreground else "\x1b[39m"
+    bold_bright = f"{body}{BOLD_ON}"
     mapping = {
         "title": bold_bright,
         "header": bold_bright,
@@ -43,21 +49,21 @@ def _sgr_for(style_class: str) -> tuple[str, str]:
         "selected_check": fg_color(s.head),
         "cursor": f"{fg_color(s.head)}{BOLD_ON}",
         "cursor_active": f"{fg_color(s.head)}{BOLD_ON}",
-        "cursor_inactive": dim_grey,
+        "cursor_inactive": body,
         "success": fg_color(s.head),
         "warning": fg_color(s.error),
         "error": fg_color(s.error),
         "danger": fg_color(s.error),
-        "muted": dim_grey,
-        "text_dim": dim_grey,
-        "help": dim_grey,
-        "help_text": dim_grey,
+        "muted": body,
+        "text_dim": body,
+        "help": body,
+        "help_text": body,
         "help-key": f"{fg_color(s.head)}{BOLD_ON}",
         "help_key": f"{fg_color(s.head)}{BOLD_ON}",
         "accent": fg_color(s.symbol),
-        "input": "",
+        "input": body,
         "input.focused": f"{fg_color(s.bright)}{BOLD_ON}",
-        "body": "",
+        "body": body,
     }
     # Last class name wins ("class:tui.a class:tui.b" -> b), matching how
     # more-specific classes overrode base ones in the old styling.

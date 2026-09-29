@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Tool name → handler. Keeps the dispatch table flat and inspectable (no
 # nested if/elif soup).  All handlers mutate ``args`` in place and return None.
 _FILE_WRITE_TOOLS = {"create_file", "edit_file", "replace_in_file"}
-_SHELL_TOOLS = {"agent_run_shell_command"}
+_SHELL_TOOLS = {"shell"}
 
 
 def _strip_field(container: dict, key: str) -> bool:
@@ -161,7 +161,7 @@ class _FilteringWriter:
 
     def write(self, text: Any) -> Any:
         if is_enabled() and isinstance(text, str):
-            text = strip_emojis(text)
+            text = strip_emojis(text, preserve_width=True)
         return self._target.write(text)
 
     def flush(self) -> Any:

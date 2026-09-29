@@ -74,6 +74,30 @@ def test_emit_hook_registers_is_fork_false(bus):
     assert entry["is_fork"] is False
 
 
+def test_emit_hook_registers_background_true(bus):
+    msg = _fake_invocation_message("sess-bg-1", background=True)
+    _emit(bus, msg)
+    entry = state.snapshot()[0]
+    assert entry["background"] is True
+
+
+def test_emit_hook_registers_background_false_by_default(bus):
+    msg = _fake_invocation_message("sess-bg-2", background=False)
+    _emit(bus, msg)
+    entry = state.snapshot()[0]
+    assert entry["background"] is False
+
+
+def test_emit_hook_defaults_background_false_for_old_core_message_shape(bus):
+    """An OLD core without the ``background`` field must still register cleanly
+    (attribute absent -> getattr default False), never crash the emit hook."""
+    msg = _fake_invocation_message("sess-bg-old-core")
+    _emit(bus, msg)
+    entry = state.snapshot()[0]
+    assert entry["session_id"] == "sess-bg-old-core"
+    assert entry["background"] is False
+
+
 def test_emit_hook_defaults_is_fork_false_for_old_core_message_shape(bus):
     """Simulates an OLD core whose ``SubAgentInvocationMessage`` predates the
     ``is_fork`` field entirely (attribute absent, not just ``False``)."""

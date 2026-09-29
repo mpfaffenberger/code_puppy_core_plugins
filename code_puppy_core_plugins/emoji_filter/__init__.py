@@ -3,7 +3,7 @@
 Targets (and nothing else):
 * Streaming TextPart / TextPartDelta content (rendered to the terminal).
 * File-write tool args (create_file, edit_file, replace_in_file).
-* Shell command strings (agent_run_shell_command).
+* Shell command strings (shell).
 
 Explicitly excluded: ThinkingPart / ThinkingPartDelta, banners, emit_* messages,
 search strings (old_str / snippet), and anything else not listed above.

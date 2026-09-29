@@ -77,8 +77,9 @@ def _row_lines(ordered, frame):
     right block over together -- columns stay aligned no matter what gets added.
     Alignment is done purely with U+0020 spaces (never literal tabs), and widths
     use Rich cell_len, so the layout renders identically on Windows and macOS.
-    Root rows carry the INVOKE AGENT badge (or FORK, for /fork-started runs);
-    nested rows carry the tree elbow.
+    Root rows carry the INVOKE AGENT badge (FORK for /fork-started runs,
+    BACKGROUND for fire-and-forget background delegations); nested rows carry
+    the tree elbow.
     Used for BOTH the live block and the transcript.
     """
     from rich.cells import cell_len
@@ -92,7 +93,11 @@ def _row_lines(ordered, frame):
     for e, depth in ordered:
         left = Text(no_wrap=True, overflow="ellipsis")
         if depth == 0:
-            if e.get("is_fork"):
+            if e.get("background"):
+                # Background rows are marked distinctly so a fire-and-forget
+                # delegation is never mistaken for a blocking invocation.
+                left.append(" \u26a1 BACKGROUND ", style=f"bold white on {color}")
+            elif e.get("is_fork"):
                 left.append(" \U0001f374 FORK ", style=f"bold white on {color}")
             else:
                 left.append(" \U0001f916 INVOKE AGENT ", style=f"bold white on {color}")

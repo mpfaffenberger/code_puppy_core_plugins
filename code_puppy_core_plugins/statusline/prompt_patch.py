@@ -1,7 +1,6 @@
 """Monkey-patch ``get_prompt_with_active_model`` to render the status line.
 
-Same proven seam the ``context_indicator`` plugin uses. The status command's
-stdout may contain ANSI color codes, so we convert it to prompt_toolkit
+The status command's stdout may contain ANSI color codes, so we convert it to prompt_toolkit
 ``FormattedText`` via ``ANSI``.
 
 Three modes (config ``statusline_mode``):

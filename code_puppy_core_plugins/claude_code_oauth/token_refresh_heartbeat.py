@@ -225,7 +225,7 @@ async def force_token_refresh() -> bool:
         from .utils import refresh_access_token
 
         logger.info("Forcing token refresh")
-        refreshed_token = refresh_access_token(force=True)
+        refreshed_token = await asyncio.to_thread(refresh_access_token, force=True)
 
         if refreshed_token:
             _last_refresh_time = time.time()

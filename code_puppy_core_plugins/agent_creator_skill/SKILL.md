@@ -165,7 +165,7 @@ Apply these exact semantics:
 - Grant only tools required for the stated responsibility. Read-only work should
   not receive write, delete, shell, browser, publishing, or delegation tools by
   default.
-- Explain that `agent_run_shell_command`, file writes/deletes,
+- Explain that `shell`, file writes/deletes,
   `universal_constructor`, browser actions, and `invoke_agent` materially expand
   authority.
 - Never place passwords, tokens, cookies, private keys, connection strings,

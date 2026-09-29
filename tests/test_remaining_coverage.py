@@ -1,157 +1,17 @@
 """Tests to achieve 100% coverage for remaining plugin gaps.
 
 Covers:
-- shell_safety/classifier.py
-- shell_safety/command_cache.py (all methods)
-- shell_safety/register_callbacks.py (line 43)
 - agent_skills/discovery.py (lines 79, 95)
 - agent_skills/metadata.py (multiple missing lines)
-- agent_skills/skill_catalog.py (multiple missing lines)
-- agent_skills/skills_install_menu.py (line 60)
 - universal_constructor/registry.py (multiple missing lines)
 - universal_constructor/sandbox.py (multiple missing lines)
 """
 
 import ast
 from pathlib import Path
-from types import ModuleType
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-
-# ============================================================
-# shell_safety/command_cache.py - Full coverage
-# ============================================================
-from code_puppy_core_plugins.shell_safety.command_cache import (
-    CachedAssessment,
-    CommandSafetyCache,
-    cache_assessment,
-    get_cache_stats,
-    get_cached_assessment,
-)
-
-
-class TestCommandSafetyCache:
-    """Tests for CommandSafetyCache LRU cache."""
-
-    def test_make_key_strips_whitespace(self):
-        cache = CommandSafetyCache()
-        key = cache._make_key("  ls -la  ", "/tmp")
-        assert key == ("ls -la", "/tmp")
-
-    def test_get_miss(self):
-        cache = CommandSafetyCache()
-        result = cache.get("ls", None)
-        assert result is None
-        assert cache._misses == 1
-
-    def test_get_hit(self):
-        cache = CommandSafetyCache()
-        assessment = CachedAssessment(risk="low", reasoning="safe")
-        cache.put("ls", None, assessment)
-        result = cache.get("ls", None)
-        assert result is not None
-        assert result.risk == "low"
-        assert cache._hits == 1
-
-    def test_put_updates_existing(self):
-        cache = CommandSafetyCache()
-        a1 = CachedAssessment(risk="low", reasoning="safe")
-        a2 = CachedAssessment(risk="high", reasoning="dangerous")
-        cache.put("ls", None, a1)
-        cache.put("ls", None, a2)
-        result = cache.get("ls", None)
-        assert result.risk == "high"
-
-    def test_lru_eviction(self):
-        cache = CommandSafetyCache(max_size=2)
-        cache.put("cmd1", None, CachedAssessment(risk="low", reasoning="ok"))
-        cache.put("cmd2", None, CachedAssessment(risk="low", reasoning="ok"))
-        cache.put("cmd3", None, CachedAssessment(risk="low", reasoning="ok"))
-        # cmd1 should be evicted
-        assert cache.get("cmd1", None) is None
-        assert cache.get("cmd3", None) is not None
-
-    def test_clear(self):
-        cache = CommandSafetyCache()
-        cache.put("ls", None, CachedAssessment(risk="low", reasoning="ok"))
-        cache.get("ls", None)
-        cache.clear()
-        assert cache.get("ls", None) is None
-        assert cache._hits == 0
-        assert cache._misses == 1  # only from this last get
-
-    def test_stats(self):
-        cache = CommandSafetyCache(max_size=100)
-        cache.put("ls", None, CachedAssessment(risk="low", reasoning="ok"))
-        cache.get("ls", None)  # hit
-        cache.get("pwd", None)  # miss
-        stats = cache.stats
-        assert stats["size"] == 1
-        assert stats["max_size"] == 100
-        assert stats["hits"] == 1
-        assert stats["misses"] == 1
-        assert stats["hit_rate"] == "50.0%"
-
-
-class TestCommandCacheModuleFunctions:
-    """Tests for module-level cache functions."""
-
-    def test_get_cache_stats(self):
-        stats = get_cache_stats()
-        assert "size" in stats
-        assert "hit_rate" in stats
-
-    def test_get_cached_assessment_miss(self):
-        result = get_cached_assessment("nonexistent_command_xyz", None)
-        assert result is None
-
-    def test_cache_assessment_and_retrieve(self):
-        cache_assessment("test_unique_cmd_123", "/tmp", "low", "safe cmd")
-        result = get_cached_assessment("test_unique_cmd_123", "/tmp")
-        assert result is not None
-        assert result.risk == "low"
-
-
-# ============================================================
-# shell_safety/classifier.py
-# ============================================================
-
-
-@pytest.mark.asyncio
-async def test_shell_safety_classifier_uses_private_non_thinking_prompt():
-    from code_puppy_core_plugins.shell_safety import classifier
-
-    assessment = MagicMock()
-    private_prompt = AsyncMock(return_value=assessment)
-    with (
-        patch.object(classifier, "get_global_model_name", return_value="tiny-model"),
-        patch.object(classifier, "run_private_prompt", private_prompt),
-    ):
-        result = await classifier.classify("rm file", "/tmp")
-
-    assert result is assessment
-    kwargs = private_prompt.await_args.kwargs
-    assert kwargs["model_name"] == "tiny-model"
-    assert kwargs["prompt"].endswith("Working directory: /tmp")
-    assert kwargs["model_settings_overrides"]["reasoning_effort"] == "none"
-    assert kwargs["model_settings_overrides"]["thinking_enabled"] is False
-
-
-# ============================================================
-# shell_safety/register_callbacks.py - line 43 (is_oauth_model with None)
-# ============================================================
-
-from code_puppy_core_plugins.shell_safety.register_callbacks import (  # noqa: E402
-    is_oauth_model,
-)
-
-
-class TestIsOauthModel:
-    @pytest.mark.parametrize("model", [None, "", "gpt-4"])
-    def test_non_oauth_model(self, model):
-        assert is_oauth_model(model) is False
-
+from unittest.mock import patch
 
 # ============================================================
 # agent_skills/discovery.py - lines 79, 95
@@ -306,169 +166,6 @@ class TestMetadataMissingLines:
 
 
 # ============================================================
-# agent_skills/skill_catalog.py - missing lines
-# ============================================================
-
-from code_puppy_core_plugins.agent_skills.skill_catalog import (  # noqa: E402
-    SkillCatalog,
-    _format_display_name,
-)
-
-
-class TestSkillCatalogMissing:
-    def test_format_display_name_empty(self):
-        """Line 85: empty string."""
-        assert _format_display_name("") == ""
-        assert _format_display_name(None) == ""
-        assert _format_display_name("   ") == ""
-
-    def test_format_display_name_acronym(self):
-        assert _format_display_name("api") == "API"
-        assert _format_display_name("json-parser") == "JSON Parser"
-
-    def test_catalog_init_remote_exception(self):
-        """Lines 139-142: fetch_remote_catalog raises exception."""
-        with patch(
-            "code_puppy_core_plugins.agent_skills.skill_catalog.fetch_remote_catalog",
-            side_effect=RuntimeError("network error"),
-        ):
-            cat = SkillCatalog()
-            assert cat.get_all() == []
-
-    def test_catalog_init_remote_none(self):
-        """Lines 145-149: fetch returns None."""
-        with patch(
-            "code_puppy_core_plugins.agent_skills.skill_catalog.fetch_remote_catalog",
-            return_value=None,
-        ):
-            cat = SkillCatalog()
-            assert cat.get_all() == []
-
-    def test_catalog_list_categories(self):
-        """Lines 201-202."""
-        with patch(
-            "code_puppy_core_plugins.agent_skills.skill_catalog.fetch_remote_catalog",
-            return_value=None,
-        ):
-            cat = SkillCatalog()
-            assert cat.list_categories() == []
-
-    def test_catalog_get_by_category_empty(self):
-        """Lines 207-209."""
-        with patch(
-            "code_puppy_core_plugins.agent_skills.skill_catalog.fetch_remote_catalog",
-            return_value=None,
-        ):
-            cat = SkillCatalog()
-            assert cat.get_by_category("") == []
-            assert cat.get_by_category("nonexistent") == []
-
-    def test_catalog_search_empty_query(self):
-        """Lines 214-232: search returns all when empty."""
-        with patch(
-            "code_puppy_core_plugins.agent_skills.skill_catalog.fetch_remote_catalog",
-            return_value=None,
-        ):
-            cat = SkillCatalog()
-            assert cat.search("") == []
-            assert cat.search(None) == []
-
-    def test_catalog_search_with_entries(self):
-        """Lines 214-232: search with actual entries."""
-        mock_remote = MagicMock()
-        entry = MagicMock()
-        entry.name = "data-explorer"
-        entry.description = "Explore data"
-        entry.group = "analysis"
-        entry.has_scripts = False
-        entry.has_references = False
-        entry.file_count = 1
-        entry.download_url = "http://example.com"
-        entry.zip_size_bytes = 100
-        mock_remote.entries = [entry]
-
-        with patch(
-            "code_puppy_core_plugins.agent_skills.skill_catalog.fetch_remote_catalog",
-            return_value=mock_remote,
-        ):
-            cat = SkillCatalog()
-            results = cat.search("data")
-            assert len(results) == 1
-            results2 = cat.search("nonexistent")
-            assert len(results2) == 0
-
-    def test_catalog_get_by_id_empty(self):
-        """Lines 237-239."""
-        with patch(
-            "code_puppy_core_plugins.agent_skills.skill_catalog.fetch_remote_catalog",
-            return_value=None,
-        ):
-            cat = SkillCatalog()
-            assert cat.get_by_id("") is None
-            assert cat.get_by_id(None) is None
-
-    def test_catalog_get_by_id_found(self):
-        """Line 244."""
-        mock_remote = MagicMock()
-        entry = MagicMock()
-        entry.name = "test-skill"
-        entry.description = "Test"
-        entry.group = "testing"
-        entry.has_scripts = False
-        entry.has_references = False
-        entry.file_count = 1
-        entry.download_url = ""
-        entry.zip_size_bytes = 0
-        mock_remote.entries = [entry]
-
-        with patch(
-            "code_puppy_core_plugins.agent_skills.skill_catalog.fetch_remote_catalog",
-            return_value=mock_remote,
-        ):
-            cat = SkillCatalog()
-            result = cat.get_by_id("test-skill")
-            assert result is not None
-            assert result.id == "test-skill"
-            assert cat.get_by_id("nonexistent") is None
-
-
-# ============================================================
-# agent_skills/skills_install_menu.py - line 60 (GB fallthrough)
-# ============================================================
-
-
-class TestSkillsInstallMenuSizeFormat:
-    def test_format_size_gb(self):
-        """Line 60: format size that exceeds MB range."""
-        from code_puppy_core_plugins.agent_skills.skills_install_menu import (
-            _format_bytes,
-        )
-
-        # Large enough to be in GB
-        result = _format_bytes(2 * 1024 * 1024 * 1024)  # 2 GB
-        assert "GB" in result
-
-    def test_format_size_bytes(self):
-        from code_puppy_core_plugins.agent_skills.skills_install_menu import (
-            _format_bytes,
-        )
-
-        result = _format_bytes(500)
-        assert "B" in result
-
-    def test_format_size_tb_fallthrough(self):
-        """Line 60: the final return that's after the loop."""
-        from code_puppy_core_plugins.agent_skills.skills_install_menu import (
-            _format_bytes,
-        )
-
-        # Loop covers B→GB and GB returns inside it, so the post-loop return (line 60)
-        # is normally unreachable — but test it anyway with huge values.
-        result = _format_bytes(5 * 1024 * 1024 * 1024)
-        assert "GB" in result
-
-
-# ============================================================
 # universal_constructor/registry.py - missing lines
 # ============================================================
 
@@ -547,20 +244,6 @@ _private = 42
             result = reg._load_module(tmp_path / "fake.py")
             assert result is None
 
-    def test_find_tool_function_by_execute(self):
-        mod = ModuleType("test_mod")
-        mod.execute = lambda: None
-        reg = UCRegistry()
-        func, name = reg._find_tool_function(mod, "nonexistent")
-        assert name == "execute"
-
-    def test_find_tool_function_fallback_public(self):
-        mod = ModuleType("test_mod")
-        mod.something = lambda: None
-        reg = UCRegistry()
-        func, name = reg._find_tool_function(mod, "nonexistent")
-        assert name == "something"
-
     def test_list_tools_auto_scans(self, tmp_path):
         reg = UCRegistry(tools_dir=tmp_path / "empty")
         tools = reg.list_tools()
@@ -605,12 +288,21 @@ def func_tool(): return 42
         reg = UCRegistry(tools_dir=tmp_path / "empty")
         assert reg.get_tool_function("nonexistent") is None
 
-    def test_get_tool_function_no_module(self, tmp_path):
-        """Tool exists but module is missing from cache."""
+    def test_get_tool_function_load_failure(self, tmp_path):
+        """A valid tool whose module fails at import is unavailable."""
+        tool_file = tmp_path / "broken.py"
+        tool_file.write_text(
+            """
+TOOL_META = {"name": "broken", "description": "test"}
+import nonexistent_xyz_module
+
+def broken():
+    return 1
+"""
+        )
         reg = UCRegistry(tools_dir=tmp_path)
-        reg._tools["fake"] = MagicMock()
-        reg._modules = {}  # no module
-        assert reg.get_tool_function("fake") is None
+        assert reg.scan() == 1
+        assert reg.get_tool_function("broken") is None
 
     def test_load_tool_module(self, tmp_path):
         tool_code = """
@@ -653,8 +345,8 @@ def tool(): pass
         (tmp_path / "tools").mkdir()
         # The file is outside tools_dir, relative_to will raise ValueError
         result = reg._load_tool_file(tool_file)
-        # Should still work with empty namespace
-        assert result is not None or result is None  # just exercising the path
+        assert result is not None
+        assert result.meta.namespace == ""
 
     def test_load_tool_file_module_none(self, tmp_path):
         """Line 104: module load returns None."""
@@ -673,25 +365,23 @@ def tool(): pass
         count = reg.scan()
         assert count == 0
 
-    def test_load_tool_file_signature_fails(self, tmp_path):
-        """Lines 136-137: inspect.signature raises."""
+    def test_load_tool_file_static_signature(self, tmp_path):
+        """The signature is extracted without importing the module."""
         tool_code = """
 TOOL_META = {"name": "sig_tool", "description": "test"}
 
-# Use a builtin as the tool function - inspect.signature may fail
-def sig_tool(*a, **kw): pass
+def sig_tool(value: int = 1, *args: str, flag: bool = True, **kwargs: float) -> str:
+    return str(value)
 """
         (tmp_path / "sig_tool.py").write_text(tool_code)
         reg = UCRegistry(tools_dir=tmp_path)
-        # Patch inspect.signature to raise
-        with patch(
-            "code_puppy_core_plugins.universal_constructor.registry.inspect.signature",
-            side_effect=ValueError("no sig"),
-        ):
-            count = reg.scan()
-            assert count == 1
-            tool = reg.get_tool("sig_tool")
-            assert "(...)" in tool.signature
+        count = reg.scan()
+        assert count == 1
+        tool = reg.get_tool("sig_tool")
+        assert (
+            "sig_tool(value: int=1, *args: str, flag: bool=True, **kwargs: float)"
+            in tool.signature
+        )
 
     def test_namespaced_tool(self, tmp_path):
         """Tool in subdirectory gets namespace."""
@@ -710,11 +400,6 @@ def weather(): pass
         reg.scan()
         tool = reg.get_tool("api.weather")
         assert tool is not None
-
-    def test_signature_extraction_failure(self, tmp_path):
-        """Tool where inspect.signature fails - tested via scan with patched inspect."""
-        # This is covered by test_load_tool_file_signature_fails above
-        pass
 
 
 # ============================================================

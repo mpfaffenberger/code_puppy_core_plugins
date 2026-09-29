@@ -1,14 +1,6 @@
-"""Register callbacks for the ``context_indicator`` plugin.
+"""Expose ``/context`` for a detailed token-usage breakdown.
 
-Hooks:
-
-* ``startup`` — wraps the bottom bar's token-summary writer so the status
-  row shows a colored circle reflecting current context-window usage,
-  e.g. ``80.7k/500k tokens (16%)`` gains a green/yellow/red badge.
-* ``custom_command`` / ``custom_command_help`` — exposes ``/context`` for a
-  detailed token-usage breakdown.
-
-Idempotent: re-installing the status patch is a no-op.
+The plugin leaves the bottom-bar token summary and startup output untouched.
 """
 
 from __future__ import annotations
@@ -22,7 +14,6 @@ from code_puppy.token_usage import (
 )
 
 _COMMAND_NAME = "context"
-_PATCH_ATTR = "_context_indicator_original"
 
 
 # ---------------------------------------------------------------------------
@@ -32,80 +23,6 @@ def _emit_info(message: str) -> None:
     from code_puppy.messaging import emit_info
 
     emit_info(message)
-
-
-def _emit_system_message(message: str) -> None:
-    from code_puppy.messaging import emit_system_message
-
-    emit_system_message(message)
-
-
-def _emit_error(message: str) -> None:
-    from code_puppy.messaging import emit_error
-
-    emit_error(message)
-
-
-# ---------------------------------------------------------------------------
-# Status-line patching
-# ---------------------------------------------------------------------------
-def _decorate_status(info: str) -> str:
-    """Prepend the usage light to a non-empty token summary.
-
-    Empty strings pass through untouched: those are "clear the row" calls
-    and must stay empty so the idle prompt isn't haunted by a lone circle.
-    """
-    if not info:
-        return info
-    usage = get_current_usage()
-    if usage is None:
-        return info
-    return f"{usage.indicator} {info}"
-
-
-def _install_status_patch() -> None:
-    """Monkey-patch ``_compaction.update_spinner_context`` once.
-
-    The token summary on the bottom bar's status row is written by
-    ``agents._compaction`` through its import-time binding of
-    ``update_spinner_context`` — so that binding (not the ``spinner``
-    module attribute) is the seam we wrap. The badge rides the status
-    row, next to the numbers it describes, instead of the prompt line.
-    """
-    from code_puppy.agents import _compaction
-
-    if getattr(_compaction, _PATCH_ATTR, None) is not None:
-        return  # Already patched
-
-    original = _compaction.update_spinner_context
-    setattr(_compaction, _PATCH_ATTR, original)
-
-    def patched(info: str) -> None:
-        original(_decorate_status(info))
-
-    _compaction.update_spinner_context = patched
-
-
-_LEGEND_TEXT = (
-    "Context indicator: 🟢 <30%   🟡 30–<65%   🔴 ≥65%  "
-    "(use /context for a detailed breakdown)"
-)
-
-
-def _announce_legend() -> None:
-    try:
-        _emit_system_message(_LEGEND_TEXT)
-    except Exception:
-        # Never crash startup over a banner line — fail gracefully per plugin rules.
-        pass
-
-
-def _on_startup() -> None:
-    try:
-        _install_status_patch()
-    except Exception as exc:
-        _emit_error(f"context_indicator: failed to install status patch — {exc}")
-    _announce_legend()
 
 
 # ---------------------------------------------------------------------------
@@ -202,14 +119,13 @@ def _format_usage_report(usage: ContextUsage) -> str:
     breakdown = _format_overhead_breakdown(usage)
     breakdown_block = f"\n{breakdown}" if breakdown else ""
     return (
-        f"{usage.indicator} Context usage: {usage.percent:.1f}%\n"
+        f"Context usage: {usage.percent:.1f}%\n"
         f"  [{bar}]\n"
         f"{legend}\n"
         f"  Messages : {usage.used_tokens:,} tokens\n"
         f"  Overhead : {usage.overhead_tokens:,} tokens (system prompt + AGENTS.md + kennel memory + tools + MCP)"
         f"{breakdown_block}\n"
-        f"  Total    : {usage.total_tokens:,} / {usage.capacity:,} tokens\n"
-        f"  Buckets  : 🟢 <30%   🟡 30–65%   🔴 ≥65%"
+        f"  Total    : {usage.total_tokens:,} / {usage.capacity:,} tokens"
     )
 
 
@@ -231,19 +147,14 @@ def _handle_custom_command(command: str, name: str):
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
-register_callback("startup", _on_startup)
 register_callback("custom_command", _handle_custom_command)
 register_callback("custom_command_help", _custom_help)
 
 
 __all__ = [
-    "_announce_legend",
     "_custom_help",
-    "_decorate_status",
     "_format_overhead_breakdown",
     "_format_usage_report",
     "_handle_context_command",
     "_handle_custom_command",
-    "_install_status_patch",
-    "_on_startup",
 ]

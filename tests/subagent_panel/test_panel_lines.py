@@ -131,6 +131,20 @@ def test_failed_agent_shows_failed():
     assert "failed" in _plain(rc._panel_lines()[0])
 
 
+def test_background_agent_renders_background_badge():
+    state.register("sid-bg", "worker", "gpt-5.4", background=True)
+    plain = _plain(rc._panel_lines()[0])
+    assert "BACKGROUND" in plain
+    assert "INVOKE AGENT" not in plain
+
+
+def test_foreground_agent_renders_invoke_badge_not_background():
+    state.register("sid-fg", "worker", "gpt-5.4")
+    plain = _plain(rc._panel_lines()[0])
+    assert "INVOKE AGENT" in plain
+    assert "BACKGROUND" not in plain
+
+
 def test_disabled_runtime_renders_nothing(monkeypatch):
     state.register("sid-1", "worker", "gpt-5.4")
     monkeypatch.setattr(rc, "_runtime_enabled", lambda: False)

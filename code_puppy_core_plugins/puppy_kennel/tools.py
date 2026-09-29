@@ -123,6 +123,11 @@ def _resolve_wing(value: str, agent_name: str, cwd: Any) -> str:
     if v == "" or v == "repo":
         return repo_wing(cwd)
     if v == "agent":
+        if not agent_name:
+            raise KennelScopeError(
+                "cannot resolve the 'agent' wing: the run context carries no "
+                "agent name. Refusing to fall back to a shared wing."
+            )
         return agent_wing(agent_name)
     if v == "user":
         return USER_WING
@@ -152,7 +157,7 @@ def _resolve_scope(wing: str, scope: str, agent_name: str, cwd: Any) -> list[str
 def register_kennel_recall(agent: Any) -> None:
     """Register the ``kennel_recall`` tool on the given agent."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def kennel_recall(
         context: RunContext,
         query: str,
@@ -309,7 +314,7 @@ def register_kennel_remember(agent: Any) -> None:
 def register_kennel_recent(agent: Any) -> None:
     """Register the ``kennel_recent`` tool — time-ordered drawer browsing."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def kennel_recent(
         context: RunContext,
         wing: str = "",
@@ -361,7 +366,7 @@ def register_kennel_recent(agent: Any) -> None:
 def register_kennel_list_wings(agent: Any) -> None:
     """Register the ``kennel_list_wings`` tool — wing discovery."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def kennel_list_wings(context: RunContext) -> KennelWingsOutput:
         """List every wing in the kennel with its drawer count.
 
@@ -387,7 +392,7 @@ def register_kennel_list_wings(agent: Any) -> None:
 def register_kennel_stats(agent: Any) -> None:
     """Register the ``kennel_stats`` tool — kennel-wide totals + size."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def kennel_stats(context: RunContext) -> KennelStatsOutput:
         """Return kennel-wide totals: drawers, wings, and on-disk size.
 
@@ -419,23 +424,32 @@ def register_kennel_stats(agent: Any) -> None:
             )
 
 
-def _agent_name_from_context(context: RunContext) -> str:
-    """Best-effort extraction of the calling agent's name from the run context.
+class KennelScopeError(RuntimeError):
+    """The kennel could not tell which agent is writing, so it refused to."""
 
-    Falls back to ``"unknown"`` if the framework doesn't expose it on this
-    version of pydantic_ai.
+
+def _agent_name_from_context(context: RunContext) -> str:
+    """The calling agent's name, or ``""`` when there is no agent run.
+
+    pydantic-ai carries the running agent on ``RunContext.agent`` and the name
+    on ``Agent.name``.
+
+    This previously probed ``agent_name`` and ``name`` on the context and
+    again on ``deps``, then defaulted to ``"unknown"``. None of those fields
+    exist on ``RunContext`` (checked against 2.35), so no probe could match
+    and the default was the only reachable branch -- every call, not an edge
+    case. ``agent_wing()`` turned that into ``agent:unknown``, making the
+    per-agent wing a single shared bucket for every agent in the process.
+
+    ``RunContext.agent`` is ``Agent | None`` and an unnamed ``Agent`` is
+    legal, so "no name" is a real answer and is returned as ``""``. Most
+    calls never need it -- writes default to the repo wing -- so refusing
+    happens in ``_resolve_wing``, at the one point something asks to be
+    scoped by the agent.
     """
-    for attr in ("agent_name", "name"):
-        val = getattr(context, attr, None)
-        if val:
-            return str(val)
-    deps = getattr(context, "deps", None)
-    if deps is not None:
-        for attr in ("agent_name", "name"):
-            val = getattr(deps, attr, None)
-            if val:
-                return str(val)
-    return "unknown"
+    agent = getattr(context, "agent", None)
+    name = getattr(agent, "name", None) if agent is not None else None
+    return str(name) if name else ""
 
 
 def register_tools_callback() -> list[dict[str, Any]]:

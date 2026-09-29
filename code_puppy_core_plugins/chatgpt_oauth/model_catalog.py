@@ -7,6 +7,10 @@ from typing import Any, Iterable
 
 DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
 
+# Explicit model options that may be absent from an account's discovery catalog.
+# Registration is not an entitlement check; the backend still controls access.
+SUPPLEMENTAL_CODEX_MODELS = ("gpt-6-luna", "gpt-6-sol")
+
 # Effective windows below this are catalog garbage (the smallest real Codex
 # model serves ~131K). Treat them as absent so a hostile or buggy catalog
 # can't force hyper-aggressive compaction with e.g. context_window=2.
@@ -70,6 +74,17 @@ def parse_model_catalog(payload: Any) -> list[CodexModelInfo]:
             )
         )
     return catalog
+
+
+def supplement_model_catalog(catalog: list[CodexModelInfo]) -> list[CodexModelInfo]:
+    """Keep explicit options without replacing live metadata or duplicating names."""
+    discovered = {entry.name for entry in catalog}
+    return [
+        *catalog,
+        *fallback_catalog(
+            name for name in SUPPLEMENTAL_CODEX_MODELS if name not in discovered
+        ),
+    ]
 
 
 def fallback_catalog(model_names: Iterable[str]) -> list[CodexModelInfo]:

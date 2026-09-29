@@ -46,7 +46,7 @@ from code_puppy.i18n import t
 from .config import CHATGPT_OAUTH_CONFIG
 from .utils import get_valid_access_token, load_stored_tokens
 
-_IMAGE_MODEL = "gpt-image-2"
+_IMAGE_MODEL = "gpt-image-2.1"
 _REQUEST_TIMEOUT_SECONDS = 180
 
 # Guard against pathologically large payloads: references are inlined as base64

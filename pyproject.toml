@@ -4,15 +4,37 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-puppy-core-plugins"
-version = "0.0.37"
+version = "0.0.75"
 description = "Official plugin bundle for Code Puppy"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
     "httpx>=0.24.1,<1",
-    "pydantic-ai-slim[openai,anthropic,mcp]>=2.31.0,<3",
+    "httpx2>=2.7",
+    "pydantic-ai-slim[openai,anthropic,mcp,typesafe]>=2.51.0,<3",
+    # smart_grep syntax-aware chunking. <0.26: py-tree-sitter 0.26.0
+    # segfaults walking ordinary trees (see jev_grep/treesitter.py).
+    "tree-sitter>=0.25.2,<0.26",
+    "tree-sitter-bash>=0.25.1",
+    "tree-sitter-c>=0.24.2",
+    "tree-sitter-c-sharp>=0.23.5",
+    "tree-sitter-cpp>=0.23.4",
+    "tree-sitter-go>=0.25.0",
+    "tree-sitter-java>=0.23.5",
+    "tree-sitter-javascript>=0.25.0",
+    "tree-sitter-kotlin>=1.1.0",
+    "tree-sitter-lua>=0.5.0",
+    "tree-sitter-php>=0.24.1",
+    "tree-sitter-ruby>=0.23.1",
+    "tree-sitter-rust>=0.24.2",
+    "tree-sitter-scala>=0.26.2",
+    "tree-sitter-swift>=0.7.3",
+    "tree-sitter-typescript>=0.23.2",
 ]
 license = {text = "MIT"}
+# Ship third-party notices with every build: MIT requires the notice to
+# accompany ported code (see THIRD_PARTY_NOTICES.md).
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{name = "Michael Pfaffenberger"}]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -31,7 +53,9 @@ Homepage = "https://github.com/mpfaffenberger/code_puppy_core_plugins"
 acp = "code_puppy_core_plugins.acp.register_callbacks"
 agent_skills = "code_puppy_core_plugins.agent_skills.register_callbacks"
 agent_creator_skill = "code_puppy_core_plugins.agent_creator_skill.register_callbacks"
+attachment_references = "code_puppy_core_plugins.attachment_references.register_callbacks"
 aws_bedrock = "code_puppy_core_plugins.aws_bedrock.register_callbacks"
+background_agents = "code_puppy_core_plugins.background_agents.register_callbacks"
 azure_foundry = "code_puppy_core_plugins.azure_foundry.register_callbacks"
 auto_continue = "code_puppy_core_plugins.auto_continue.register_callbacks"
 browser_harness = "code_puppy_core_plugins.browser_harness.register_callbacks"
@@ -41,6 +65,7 @@ claude_code_hooks = "code_puppy_core_plugins.claude_code_hooks.register_callback
 claude_code_oauth = "code_puppy_core_plugins.claude_code_oauth.register_callbacks"
 code_puppy_agent = "code_puppy_core_plugins.code_puppy_agent.register_callbacks"
 computer_use = "code_puppy_core_plugins.computer_use.register_callbacks"
+completion_notification = "code_puppy_core_plugins.completion_notification.register_callbacks"
 context_indicator = "code_puppy_core_plugins.context_indicator.register_callbacks"
 copilot_auth = "code_puppy_core_plugins.copilot_auth.register_callbacks"
 customizable_commands = "code_puppy_core_plugins.customizable_commands.register_callbacks"
@@ -58,8 +83,10 @@ grok_oauth = "code_puppy_core_plugins.grok_oauth.register_callbacks"
 herdr = "code_puppy_core_plugins.herdr.register_callbacks"
 hook_creator = "code_puppy_core_plugins.hook_creator.register_callbacks"
 hook_manager = "code_puppy_core_plugins.hook_manager.register_callbacks"
+jev_grep = "code_puppy_core_plugins.jev_grep.register_callbacks"
 logfire_oauth = "code_puppy_core_plugins.logfire_oauth.register_callbacks"
 logfire_sessions = "code_puppy_core_plugins.logfire_sessions.register_callbacks"
+mcp_binding_prompt = "code_puppy_core_plugins.mcp_binding_prompt.register_callbacks"
 meta_oauth = "code_puppy_core_plugins.meta_oauth.register_callbacks"
 namespace_skill_search = "code_puppy_core_plugins.namespace_skill_search.register_callbacks"
 no_tools = "code_puppy_core_plugins.no_tools.register_callbacks"
@@ -69,6 +96,7 @@ ollama_setup = "code_puppy_core_plugins.ollama_setup.register_callbacks"
 openrouter_oauth = "code_puppy_core_plugins.openrouter_oauth.register_callbacks"
 plugin_list = "code_puppy_core_plugins.plugin_list.register_callbacks"
 pop_command = "code_puppy_core_plugins.pop_command.register_callbacks"
+profiles = "code_puppy_core_plugins.profiles.register_callbacks"
 prompt_newline = "code_puppy_core_plugins.prompt_newline.register_callbacks"
 prune = "code_puppy_core_plugins.prune.register_callbacks"
 puppy_kennel = "code_puppy_core_plugins.puppy_kennel.register_callbacks"
@@ -77,7 +105,6 @@ qa_kitten_skill = "code_puppy_core_plugins.qa_kitten_skill.register_callbacks"
 quick_resume = "code_puppy_core_plugins.quick_resume.register_callbacks"
 review_pr = "code_puppy_core_plugins.review_pr.register_callbacks"
 session_namer = "code_puppy_core_plugins.session_namer.register_callbacks"
-shell_safety = "code_puppy_core_plugins.shell_safety.register_callbacks"
 spill = "code_puppy_core_plugins.spill.register_callbacks"
 stack_dump = "code_puppy_core_plugins.stack_dump.register_callbacks"
 statusline = "code_puppy_core_plugins.statusline.register_callbacks"

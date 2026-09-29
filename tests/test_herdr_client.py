@@ -238,7 +238,7 @@ def test_client_retries_until_herdr_acks(monkeypatch):
 
 def _inert_client(monkeypatch):
     """An inactive client whose worker never starts, for slot-logic unit tests."""
-    for var in ("HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID"):
+    for var in ("HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID"):
         monkeypatch.delenv(var, raising=False)
     c = HerdrClient()
     assert c.active is False
@@ -343,6 +343,79 @@ def test_metadata_envelope_carries_agent_applies_to_and_ttl(monkeypatch):
     assert p["applies_to_source"] == SOURCE
     assert p["ttl_ms"] == cl._METADATA_TTL_MS
     assert p["tokens"]["model"] == "claude"
+
+
+def test_report_metadata_noop_without_fields(monkeypatch):
+    """No tokens, no title, no clear -> no envelope (herdr rejects empty)."""
+    c = _inert_client(monkeypatch)
+    c._active = True
+    c.report_metadata()
+    c.report_metadata(None)
+    c.report_metadata({})
+    c.report_metadata(None, title=None)
+    assert c._metadata is None
+
+
+def test_report_metadata_title_and_clear_slots(monkeypatch):
+    c = _inert_client(monkeypatch)
+    c._active = True
+    c.report_metadata(None, title="Fix the flaky test")
+    assert c._metadata == {
+        "applies_to_source": SOURCE,
+        "ttl_ms": cl._METADATA_TTL_MS,
+        "title": "Fix the flaky test",
+    }
+    c.report_metadata(None, clear_title=True)
+    assert c._metadata == {
+        "applies_to_source": SOURCE,
+        "ttl_ms": cl._METADATA_TTL_MS,
+        "clear_title": True,
+    }
+    # Clearing wins when both are (incorrectly) supplied.
+    c.report_metadata(None, title="stale", clear_title=True)
+    assert "title" not in c._metadata
+    assert c._metadata["clear_title"] is True
+    # Tokens and title ride the same envelope.
+    c.report_metadata({"model": "m"}, title="Plan the harness")
+    assert c._metadata["tokens"] == {"model": "m"}
+    assert c._metadata["title"] == "Plan the harness"
+
+
+@pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"), reason="AF_UNIX transport is unix-only"
+)
+def test_metadata_envelope_carries_title(monkeypatch):
+    tmp = tempfile.mkdtemp()
+    sock_path = os.path.join(tmp, "herdr.sock")
+    received: list[str] = []
+    ready = threading.Event()
+
+    def serve():
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(sock_path)
+        server.listen(1)
+        ready.set()
+        conn, _ = server.accept()
+        with conn:
+            received.append(conn.recv(65536).decode())
+            conn.sendall(b'{"result":{"type":"ok"}}\n')
+        server.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    ready.wait(timeout=2)
+
+    monkeypatch.setenv("HERDR_ENV", "1")
+    monkeypatch.setenv("HERDR_SOCKET_PATH", sock_path)
+    monkeypatch.setenv("HERDR_PANE_ID", "w1:p1")
+    client = HerdrClient()
+    client.report_metadata(None, title="Fix the flaky test")
+    time.sleep(0.4)
+
+    assert received, "herdr listener never received the title report"
+    p = json.loads(received[0].splitlines()[0])["params"]
+    assert p["title"] == "Fix the flaky test"
+    assert "tokens" not in p
+    assert p["applies_to_source"] == SOURCE
 
 
 @pytest.mark.skipif(

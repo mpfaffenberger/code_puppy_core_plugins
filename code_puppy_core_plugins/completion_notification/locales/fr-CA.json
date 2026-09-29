@@ -1,0 +1,7 @@
+{
+  "completion_notification.title": "Code Puppy",
+  "completion_notification.title_with_context": "Code Puppy — {context}",
+  "completion_notification.response_complete": "Réponse terminée.",
+  "completion_notification.response_complete_in_terminal": "Réponse terminée dans {terminal}.",
+  "completion_notification.response_preview_in_terminal": "{preview} · {terminal}"
+}

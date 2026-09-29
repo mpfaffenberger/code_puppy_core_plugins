@@ -82,8 +82,6 @@ class PluginsMenu:
         self.plugins: List[_PluginEntry] = []
         self.disabled: set[str] = set()
         self.project_dir: Optional[str] = None
-        self.lock_builtin: bool = False
-        self.hidden_builtin_count: int = 0
 
         # The trust modal disables list bindings while open, keeping accept-word
         # typing from triggering shortcuts; focus remains on its input.
@@ -131,27 +129,19 @@ class PluginsMenu:
             get_project_plugins_directory,
         )
         from code_puppy.plugins.config import get_disabled_plugins
-        from code_puppy.plugins.config import (
-            get_lock_builtin_plugins,
-        )
 
         loaded = get_loaded_plugins()
         self.disabled = get_disabled_plugins()
-        self.lock_builtin = get_lock_builtin_plugins()
 
         project_dir = get_project_plugins_directory()
         self.project_dir = project_dir.as_posix() if project_dir else None
 
-        entries: List[_PluginEntry] = []
-        self.hidden_builtin_count = 0
-        for tier in ("builtin", "user", "project"):
-            for name in sorted(loaded.get(tier, [])):
-                # When locked, builtins are managed/protected — hide them so
-                # they can't be toggled (the config layer refuses anyway).
-                if self.lock_builtin and tier == "builtin":
-                    self.hidden_builtin_count += 1
-                    continue
-                entries.append(_PluginEntry(name, tier))
+        # Every tier is listed and toggleable -- builtins included.
+        entries: List[_PluginEntry] = [
+            _PluginEntry(name, tier)
+            for tier in ("builtin", "user", "project")
+            for name in sorted(loaded.get(tier, []))
+        ]
 
         # Project plugins held back by the trust gate — shown so Enter can
         # open the ceremony popup on them.

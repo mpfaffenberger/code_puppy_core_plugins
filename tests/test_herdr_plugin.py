@@ -8,10 +8,13 @@ Covers:
 
 * ``HerdrReporter`` -- the event -> state machine (dedup, refcount,
   blocked/idle arbitration), driven through a fake client.
+* turn-end pane metadata (model / context / tokens).
 * the core wiring -- ``command_runner.set_awaiting_user_input`` firing the
   ``awaiting_user_input`` callback that feeds the reporter.
-* ``HerdrClient`` -- the socket transport (env-gated activation, a real
-  ``AF_UNIX`` round-trip, seq monotonicity, and retry-until-acked delivery).
+
+Title / tab-label propagation lives in ``test_herdr_titles.py``; the socket
+transport lives in ``test_herdr_client.py`` and ``test_herdr_tab_label.py``.
+The shared ``FakeClient`` lives in ``tests/herdr_test_support.py``.
 """
 
 from __future__ import annotations
@@ -28,36 +31,7 @@ from code_puppy_core_plugins.herdr.reporter import (
     WORKING,
     HerdrReporter,
 )
-
-
-class FakeClient:
-    """Records report calls instead of touching a socket."""
-
-    def __init__(self, active: bool = True) -> None:
-        self.active = active
-        self.states: list[tuple[str, str | None]] = []
-        self.activity: list[tuple[str, str | None, bool]] = []
-        self.sessions: list[tuple[str, str]] = []
-        self.metadata: list[dict] = []
-        self.closed = False
-
-    def report_state(
-        self, state, agent_session_id=None, *, message=None, critical=True
-    ):
-        self.states.append((state, agent_session_id))
-        self.activity.append((state, message, critical))
-
-    def report_session(self, agent_session_id, session_path=None):
-        self.sessions.append((agent_session_id, session_path))
-
-    def report_metadata(self, tokens):
-        self.metadata.append(tokens)
-
-    def release_and_close(self, timeout_s=1.0):
-        self.closed = True
-
-    def close(self):
-        self.closed = True
+from tests.herdr_test_support import FakeClient
 
 
 def _states(fake: FakeClient) -> list[str]:
@@ -265,22 +239,34 @@ def test_reporter_emits_metadata_at_turn_end():
     fake = FakeClient()
     r = HerdrReporter(fake)
     payload = {"model": "claude", "context": "42%", "tokens": "48k/200k"}
-    with patch(
-        "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
-        return_value=payload,
+    with (
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
+            return_value=payload,
+        ),
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_session_title",
+            return_value=None,
+        ),
     ):
         r.on_run_start()
         r.on_turn_end()
-    assert fake.metadata == [payload]
+    assert fake.metadata == [(payload, None, False)]
 
 
 def test_reporter_skips_metadata_when_payload_unavailable():
-    """No usage -> no metadata report (pane keeps last good values / TTL)."""
+    """No usage and no title change -> no metadata report."""
     fake = FakeClient()
     r = HerdrReporter(fake)
-    with patch(
-        "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
-        return_value=None,
+    with (
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
+            return_value=None,
+        ),
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_session_title",
+            return_value=None,
+        ),
     ):
         r.on_run_start()
         r.on_turn_end()
@@ -297,9 +283,15 @@ def test_reporter_metadata_computed_outside_lock():
         observed["locked"] = r._lock.locked()
         return {"context": "1%", "tokens": "1k/200k"}
 
-    with patch(
-        "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
-        side_effect=_probe,
+    with (
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_tokens_payload",
+            side_effect=_probe,
+        ),
+        patch(
+            "code_puppy_core_plugins.herdr.reporter.sources.current_session_title",
+            return_value=None,
+        ),
     ):
         r.on_turn_end()
     assert observed["locked"] is False
@@ -444,3 +436,155 @@ def test_set_awaiting_user_input_exposes_notification_intent():
     assert should_notify_awaiting_user_input() is False
     set_awaiting_user_input(False)
     assert should_notify_awaiting_user_input() is True
+
+
+# --- exit guards (pane release on non-graceful shutdown) --------------------
+
+
+def test_install_exit_guards_registers_atexit_and_signal_handlers():
+    """The guards must cover both interpreter teardown and terminating signals.
+
+    The ``shutdown``/``session_end`` callbacks only fire from a ``finally:``
+    that a signal-killed interpreter never reaches, so without these the pane
+    stays claimed by a dead process.
+    """
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    registered = []
+    installed = {}
+
+    def fake_signal(sig, handler):
+        installed[sig] = handler
+        return signal_mod.SIG_DFL
+
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: registered.append(fn)),
+        patch.object(rc.signal, "signal", fake_signal),
+        patch.object(rc.signal, "getsignal", lambda sig: signal_mod.SIG_DFL),
+    ):
+        rc._install_exit_guards()
+
+    assert rc._client.release_and_close in registered
+    assert set(installed) == set(rc._TERMINATING_SIGNALS)
+
+
+def test_exit_guard_signal_handler_releases_then_reraises():
+    """Releasing must not swallow the signal: the process still dies from it."""
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    installed = {}
+    released = []
+    killed = []
+
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: None),
+        patch.object(rc.signal, "signal", lambda s, h: installed.__setitem__(s, h)),
+        patch.object(rc.signal, "getsignal", lambda sig: signal_mod.SIG_DFL),
+    ):
+        rc._install_exit_guards()
+
+    handler = installed[signal_mod.SIGTERM]
+    with (
+        patch.object(rc._client, "release_and_close", lambda: released.append(True)),
+        patch.object(rc.os, "kill", lambda pid, sig: killed.append(sig)),
+        patch.object(rc.signal, "signal", lambda s, h: None),
+    ):
+        handler(signal_mod.SIGTERM, None)
+
+    assert released == [True]
+    assert killed == [signal_mod.SIGTERM]
+
+
+def test_exit_guard_chains_previous_handler():
+    """A pre-existing handler is chained, not clobbered."""
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    prior_calls = []
+
+    def prior_handler(signum, frame):
+        prior_calls.append(signum)
+
+    installed = {}
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: None),
+        patch.object(rc.signal, "signal", lambda s, h: installed.__setitem__(s, h)),
+        patch.object(rc.signal, "getsignal", lambda sig: prior_handler),
+    ):
+        rc._install_exit_guards()
+
+    killed = []
+    with (
+        patch.object(rc._client, "release_and_close", lambda: None),
+        patch.object(rc.os, "kill", lambda pid, sig: killed.append(sig)),
+    ):
+        installed[signal_mod.SIGTERM](signal_mod.SIGTERM, None)
+
+    assert prior_calls == [signal_mod.SIGTERM]
+    assert killed == []  # chained handler owns the exit
+
+
+def test_exit_guard_survives_release_failure():
+    """A broken socket must not stop the process from shutting down."""
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    installed = {}
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: None),
+        patch.object(rc.signal, "signal", lambda s, h: installed.__setitem__(s, h)),
+        patch.object(rc.signal, "getsignal", lambda sig: signal_mod.SIG_DFL),
+    ):
+        rc._install_exit_guards()
+
+    def boom():
+        raise OSError("herdr socket gone")
+
+    killed = []
+    with (
+        patch.object(rc._client, "release_and_close", boom),
+        patch.object(rc.os, "kill", lambda pid, sig: killed.append(sig)),
+        patch.object(rc.signal, "signal", lambda s, h: None),
+    ):
+        installed[signal_mod.SIGTERM](signal_mod.SIGTERM, None)
+
+    assert killed == [signal_mod.SIGTERM]
+
+
+def test_install_exit_guards_tolerates_unavailable_signal():
+    """Non-main-thread / Windows-missing signals degrade quietly."""
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    def refuse(sig, handler):
+        raise ValueError("signal only works in main thread")
+
+    with (
+        patch.object(rc.atexit, "register", lambda fn, *a, **k: None),
+        patch.object(rc.signal, "signal", refuse),
+        patch.object(rc.signal, "getsignal", lambda sig: None),
+    ):
+        rc._install_exit_guards()  # must not raise
+
+
+def test_terminating_signals_are_platform_safe():
+    """SIGHUP is absent on Windows; resolving it must not break the import.
+
+    ``client.py`` ships a named-pipe transport, so this module is imported on
+    Windows too -- a bare ``signal.SIGHUP`` reference would raise
+    AttributeError at import time and disable the plugin entirely.
+    """
+    import signal as signal_mod
+
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    assert signal_mod.SIGTERM in rc._TERMINATING_SIGNALS
+    assert all(s is not None for s in rc._TERMINATING_SIGNALS)
+    # Every entry must be a signal this platform actually knows about.
+    for sig in rc._TERMINATING_SIGNALS:
+        assert sig in set(signal_mod.Signals)

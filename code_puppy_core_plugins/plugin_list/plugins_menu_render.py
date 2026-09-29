@@ -72,21 +72,8 @@ def render_list(menu: "PluginsMenu") -> Fragments:
     lines.append(("bold", " Plugins"))
     lines.append(("", "\n\n"))
 
-    if menu.lock_builtin and menu.hidden_builtin_count:
-        lines.append(
-            (
-                "class:tui.muted",
-                f"  {menu.hidden_builtin_count} builtin plugins are "
-                f"managed and hidden.",
-            )
-        )
-        lines.append(("", "\n\n"))
-
     if not menu.plugins:
-        if menu.lock_builtin and menu.hidden_builtin_count:
-            lines.append(("class:tui.warning", "  No user or project plugins loaded."))
-        else:
-            lines.append(("class:tui.warning", "  No plugins loaded."))
+        lines.append(("class:tui.warning", "  No plugins loaded."))
         lines.append(("", "\n"))
         _render_hints(lines)
         return lines

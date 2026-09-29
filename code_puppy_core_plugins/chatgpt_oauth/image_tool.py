@@ -19,13 +19,13 @@ TOOL_NAME = "codex_imagegen"
 def register_codex_imagegen(agent: Any) -> None:
     """Register image generation on a pydantic-ai agent."""
 
-    @agent.tool
+    @agent.tool(metadata={"speculatable": True})
     async def codex_imagegen(
         context: RunContext,
         prompt: str,
         reference_images: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Generate a raster image using gpt-image-2 and Codex OAuth.
+        """Generate a raster image using gpt-image-2.1 and Codex OAuth.
 
         Use this when the user asks you to create a photo, illustration, icon,
         sprite, texture, product image, banner, or other raster artwork. Write a

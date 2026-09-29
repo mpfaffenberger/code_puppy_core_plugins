@@ -603,5 +603,3 @@ async def interactive_judges_menu() -> None:
                     continue
     finally:
         set_awaiting_user_input(False)
-
-    emit_info("✓ Exited judges menu")
