@@ -7,6 +7,7 @@ from typing import Any
 
 from code_puppy.callbacks import register_callback
 from code_puppy.command_line.command_registry import register_command
+from code_puppy.command_line.set_menu_schema import Setting, SettingsCategory
 from code_puppy.config import get_value
 from code_puppy.messaging import (
     emit_info,
@@ -14,6 +15,7 @@ from code_puppy.messaging import (
     emit_system_message,
     emit_warning,
 )
+from code_puppy_core_plugins.plugin_settings import register_settings
 
 from . import goal_runs, state
 from .judge import GoalJudgement, judge_goal
@@ -24,11 +26,12 @@ from .judge_config import JudgeConfig, get_enabled_judges_or_default, load_judge
 GOAL_MAX_ITERATIONS_DEFAULT = 10
 GOAL_MAX_ITERATIONS_FLOOR = 1
 GOAL_MAX_ITERATIONS_CEILING = 1000
+GOAL_MAX_ITERATIONS_KEY = "goal_max_iterations"
 
 
 def _get_goal_max_iterations() -> int:
     """Read the configured /goal iteration cap, with sane fallbacks."""
-    val = get_value("goal_max_iterations")
+    val = get_value(GOAL_MAX_ITERATIONS_KEY)
     try:
         n = int(val) if val else GOAL_MAX_ITERATIONS_DEFAULT
     except (ValueError, TypeError):
@@ -567,3 +570,17 @@ def _autonomous_loop_capability(name: str) -> bool | None:
 register_callback("interactive_turn_end", _on_interactive_turn_end)
 register_callback("interactive_turn_cancel", _on_interactive_turn_cancel)
 register_callback("feature_capability", _autonomous_loop_capability)
+register_settings(
+    SettingsCategory(
+        "Goal",
+        (
+            Setting(
+                key=GOAL_MAX_ITERATIONS_KEY,
+                display_name="Goal Max Iterations",
+                description="Maximum number of iterations for goal-driven tasks (1-1000).",
+                type_hint="int",
+                effective_getter=_get_goal_max_iterations,
+            ),
+        ),
+    )
+)

@@ -24,7 +24,14 @@ import time
 from typing import Any, Dict, Optional
 
 from code_puppy.callbacks import register_callback
+from code_puppy.command_line.set_menu_schema import Setting, SettingsCategory
+from code_puppy.config import (
+    get_frontend_emitter_enabled,
+    get_frontend_emitter_max_recent_events,
+    get_frontend_emitter_queue_size,
+)
 from code_puppy_core_plugins.frontend_emitter.emitter import emit_event
+from code_puppy_core_plugins.plugin_settings import register_settings
 
 logger = logging.getLogger(__name__)
 
@@ -410,3 +417,32 @@ def register() -> None:
 
 # Auto-register callbacks when this module is imported
 register()
+# Module scope, not in register(): repeat register() calls must not stack these.
+register_settings(
+    SettingsCategory(
+        "Features",
+        (
+            Setting(
+                key="frontend_emitter_enabled",
+                display_name="Frontend Emitter",
+                description="Enable the frontend event emitter for external integrations.",
+                type_hint="bool",
+                effective_getter=get_frontend_emitter_enabled,
+            ),
+            Setting(
+                key="frontend_emitter_max_recent_events",
+                display_name="Emitter Max Events",
+                description="Maximum number of recent events kept in the emitter buffer.",
+                type_hint="int",
+                effective_getter=get_frontend_emitter_max_recent_events,
+            ),
+            Setting(
+                key="frontend_emitter_queue_size",
+                display_name="Emitter Queue Size",
+                description="Size of the frontend emitter event queue.",
+                type_hint="int",
+                effective_getter=get_frontend_emitter_queue_size,
+            ),
+        ),
+    )
+)

@@ -1,23 +1,20 @@
 """Settings for smart_grep. Set with `/set <key> <value>` or the environment.
 
-/set smart_grep on          enable (off by default)
-/set jev_api_key <key>      credentials (or TYPESAFE_API_KEY)
-/set smart_grep_model ...   pin a Jev version, e.g. jev-1.13.0
-/set smart_grep_threshold   relevance cut-off, 0-1 (default 0.5)
+Declared once in :data:`SETTINGS`, which feeds `/set` autocomplete and the
+`/set` menu via core's ``register_settings`` hook. The credential can also
+come from the TYPESAFE_API_KEY / JEV_API_KEY environment variables.
 """
 
 from __future__ import annotations
 
 import os
 
+from code_puppy.command_line.set_menu_schema import Setting, SettingsCategory
 from code_puppy.config import get_api_key, get_truthy_bool_value, get_value
 
 ENABLED_KEY = "smart_grep"
 MODEL_KEY = "smart_grep_model"
 THRESHOLD_KEY = "smart_grep_threshold"
-# What `/set` autocompletes. The API key is deliberately absent: completions
-# echo the current value, and secrets don't belong in a popup.
-SETTING_KEYS = (ENABLED_KEY, MODEL_KEY, THRESHOLD_KEY)
 # TypeSafe's official name first, then the Jev-branded alias. Config lookup
 # is case-insensitive, so `/set jev_api_key ...` matches JEV_API_KEY.
 API_KEY_NAMES = ("TYPESAFE_API_KEY", "JEV_API_KEY")
@@ -58,3 +55,51 @@ def get_threshold() -> float:
     except ValueError:
         return DEFAULT_THRESHOLD
     return value if 0 <= value <= 1 else DEFAULT_THRESHOLD
+
+
+# One declaration for `/set` autocomplete and the `/set` menu. The credential
+# joins core's "API Keys" section, where it is masked and never echoed.
+SETTINGS = [
+    SettingsCategory(
+        "Smart Grep",
+        (
+            Setting(
+                key=ENABLED_KEY,
+                display_name="Smart Grep",
+                description=(
+                    "Semantic code search judged by TypeSafe's Jev. Sends selected "
+                    "source, paths and the query to TypeSafe; needs an API key."
+                ),
+                type_hint="bool",
+                effective_getter=is_enabled,
+            ),
+            Setting(
+                key=MODEL_KEY,
+                display_name="Smart Grep Model",
+                description="Jev version to judge with, e.g. jev-1.13.0.",
+                type_hint="string",
+                effective_getter=get_jev_model_name,
+            ),
+            Setting(
+                key=THRESHOLD_KEY,
+                display_name="Smart Grep Threshold",
+                description="Relevance cut-off for matches, 0-1.",
+                type_hint="float",
+                effective_getter=get_threshold,
+            ),
+        ),
+    ),
+    SettingsCategory(
+        "API Keys",
+        (
+            Setting(
+                key=API_KEY_NAME.lower(),
+                display_name="TypeSafe API Key",
+                description="Credential for smart_grep (or set TYPESAFE_API_KEY).",
+                type_hint="string",
+                effective_getter=get_typesafe_api_key,
+                sensitive=True,
+            ),
+        ),
+    ),
+]

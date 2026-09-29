@@ -29,6 +29,8 @@ from datetime import datetime
 from typing import Any
 
 from code_puppy.callbacks import register_callback
+from code_puppy.command_line.set_menu_schema import Setting, SettingsCategory
+from code_puppy_core_plugins.plugin_settings import register_settings
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,20 @@ def _on_post_tool_call(
 
 
 register_callback("post_tool_call", _on_post_tool_call)
+register_settings(
+    SettingsCategory(
+        "Behavior",
+        (
+            Setting(
+                key=CONFIG_KEY,
+                display_name="Timestamp Heartbeat Interval",
+                description="Stamp the current time into every Nth tool result; 0 disables.",
+                type_hint="int",
+                effective_getter=_get_interval,
+            ),
+        ),
+    )
+)
 
 
 __all__ = [
