@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 
 from code_puppy.callbacks import register_callback
+from code_puppy.command_line.set_menu_schema import Setting, SettingsCategory
+from code_puppy_core_plugins.plugin_settings import register_settings
 
 from .cancel import cancel_workflow
 from .commands import dbos_command_help, handle_dbos_command
@@ -17,6 +19,21 @@ logger = logging.getLogger(__name__)
 
 
 register_callback("feature_capability", feature_capability)
+register_settings(
+    SettingsCategory(
+        "Features",
+        (
+            Setting(
+                key="enable_dbos",
+                display_name="DBOS Durable Execution",
+                description="Enable DBOS durable execution plugin.",
+                type_hint="bool",
+                effective_getter=is_enabled,
+                requires_restart=True,
+            ),
+        ),
+    )
+)
 
 
 # Slash command is always available so users can /dbos on even when the

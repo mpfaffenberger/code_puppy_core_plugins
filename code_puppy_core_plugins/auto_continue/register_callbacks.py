@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from code_puppy.callbacks import register_callback
+from code_puppy.command_line.set_menu_schema import Setting, SettingsCategory
+from code_puppy.config import get_auto_continue_model_name
+from code_puppy_core_plugins.plugin_settings import register_settings
 
 from .classifier import classify
 
@@ -90,6 +93,23 @@ async def _on_interactive_turn_end(
 register_callback("interactive_turn_end", _on_interactive_turn_end)
 register_callback("custom_command", _handle_custom_command)
 register_callback("custom_command_help", _custom_help)
+register_settings(
+    SettingsCategory(
+        "Model",
+        (
+            Setting(
+                key="auto_continue_model",
+                display_name="Auto-Continue Model",
+                description=(
+                    "Model that decides whether a permission request is routine "
+                    "enough to auto-continue. Blank follows the active model."
+                ),
+                type_hint="string",
+                effective_getter=get_auto_continue_model_name,
+            ),
+        ),
+    )
+)
 
 
 __all__ = [
