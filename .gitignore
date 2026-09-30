@@ -12,3 +12,6 @@ dist/
 
 # Local git worktrees
 .worktrees/
+
+# Local Code Puppy state
+.code_puppy/
