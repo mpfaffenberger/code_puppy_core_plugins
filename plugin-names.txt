@@ -33,6 +33,7 @@ logfire_oauth
 logfire_sessions
 mcp_binding_prompt
 meta_oauth
+model_switcher
 namespace_skill_search
 no_tools
 obsidian_agent
