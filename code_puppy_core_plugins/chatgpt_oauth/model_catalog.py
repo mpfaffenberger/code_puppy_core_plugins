@@ -9,7 +9,7 @@ DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
 
 # Explicit model options that may be absent from an account's discovery catalog.
 # Registration is not an entitlement check; the backend still controls access.
-SUPPLEMENTAL_CODEX_MODELS = ("gpt-6-luna", "gpt-6-sol")
+SUPPLEMENTAL_CODEX_MODELS = ("gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol")
 
 # Effective windows below this are catalog garbage (the smallest real Codex
 # model serves ~131K). Treat them as absent so a hostile or buggy catalog
