@@ -55,7 +55,7 @@ def test_parse_model_handles_optional_minor_and_date(name, expected):
     assert _parse_model(name) == expected
 
 
-@pytest.mark.parametrize("name", ["gpt-6-luna", "gpt-6-sol"])
+@pytest.mark.parametrize("name", ["gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"])
 def test_gpt_6_models_have_fallback_and_reasoning_support(name):
     assert DEFAULT_CODEX_MODELS.count(name) == 1
     assert _supports_xhigh_reasoning(name)
@@ -79,6 +79,7 @@ def test_successful_codex_discovery_keeps_explicit_options(monkeypatch):
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",
+        "gpt-6.1-sol",
     ]
     assert entries[1].context_length == 353400
     assert entries[2].context_length is None
@@ -91,6 +92,8 @@ def test_successful_codex_discovery_keeps_explicit_options(monkeypatch):
     assert utils.add_models_to_extra_config(entries)
     assert saved["codex-gpt-6-sol"]["context_length"] == 353400
     assert saved["codex-gpt-6-luna"]["context_length"] == 258400
+    assert saved["codex-gpt-6.1-sol"]["name"] == "gpt-6.1-sol"
+    assert saved["codex-gpt-6.1-sol"]["context_length"] == 258400
 
 
 def test_opus_5_5_is_registered_and_retained_on_load(monkeypatch, tmp_path):
