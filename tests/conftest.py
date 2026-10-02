@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytest_plugins = ["tests.herdr_launcher_support"]
+
 
 def _isolate_herdr_environment():
     """Never let plugin imports in CI claim/release a developer's live pane.

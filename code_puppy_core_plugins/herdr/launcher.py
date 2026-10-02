@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+from .launch_command import BOOTSTRAP, prompt_file
+
 _NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
 
@@ -84,10 +86,6 @@ def _text(text):
         ord(c) < 32 and c not in "\n\t" or 127 <= ord(c) <= 159 for c in text
     ):
         raise LauncherError("Prompt must be nonempty text without terminal controls.")
-    if text.lstrip().startswith(("/", "!")):
-        raise LauncherError(
-            "Prompts cannot start with a slash command or shell passthrough."
-        )
     return text
 
 
@@ -153,17 +151,10 @@ def spawn(client, name, *, direction=None, cwd=None, prompt=None, args=(), timeo
     directory = Path(cwd or os.getcwd()).expanduser().resolve()
     if not directory.is_dir():
         raise LauncherError(f"Not a directory: {directory}")
-    child_args = list(args)
-    if prompt is not None:
-        child_args.extend(["--", prompt])
-    command = _shell_command(launch_argv(child_args))
-    # Conservative portable cap includes quoting expansion and UTF-16 units.
-    # Both shell input and Windows CreateProcess have bounded command lengths.
-    if (
-        len(command.encode("utf-8")) > 24000
-        or len(command.encode("utf-16-le")) // 2 > 24000
-    ):
-        raise LauncherError("Launch command is too large (24,000-byte/unit limit).")
+    if prompt is not None and prompt.lstrip().startswith("!"):
+        raise LauncherError("Initial commands cannot use shell passthrough (!).")
+    if prompt is not None and len(prompt.encode("utf-8")) > 24000:
+        raise LauncherError("Prompt is too large (24,000-byte limit).")
     agents = client.call("agent", "list")["agents"]
     if any(agent.get("name") == name for agent in agents):
         raise LauncherError(f"Agent name {name} is already in use.")
@@ -175,6 +166,26 @@ def spawn(client, name, *, direction=None, cwd=None, prompt=None, args=(), timeo
             raise LauncherError(f"Cannot find caller pane {caller} in herdr layout.")
         rect = caller_info["rect"]
         direction = "right" if rect["width"] > 2 * rect["height"] else "down"
+    handoff = prompt_file(prompt) if prompt is not None else None
+    try:
+        argv = launch_argv(args)
+        if handoff is not None:
+            argv = [argv[0], "-P", "-c", BOOTSTRAP, str(handoff), *args]
+        command = _shell_command(argv)
+        if len(command.encode("utf-8")) >= 1000 or "\n" in command:
+            raise LauncherError(
+                "Launch command is too large or multiline (under 1,000 bytes required)."
+            )
+        return _launch(
+            client, name, caller, direction, directory, command, prompt, timeout
+        )
+    except BaseException:
+        if handoff is not None:
+            handoff.unlink(missing_ok=True)
+        raise
+
+
+def _launch(client, name, caller, direction, directory, command, prompt, timeout):
     created = client.call(
         "pane",
         "split",
@@ -190,7 +201,7 @@ def spawn(client, name, *, direction=None, cwd=None, prompt=None, args=(), timeo
     try:
         client.call("pane", "run", pane, command)
         print(
-            f"herdr: waiting for {pane} to report idle (up to {timeout:g}s)...",
+            f"herdr: waiting for {pane} to report Code Puppy (up to {timeout:g}s)...",
             flush=True,
         )
         deadline = time.monotonic() + timeout
@@ -208,12 +219,14 @@ def spawn(client, name, *, direction=None, cwd=None, prompt=None, args=(), timeo
                 time.sleep(0.25)
                 continue
             seen = True
-            if _ready(agent):
+            if (prompt is not None and agent.get("agent") == "codepuppy") or _ready(
+                agent
+            ):
                 break
             time.sleep(0.25)
         else:
             raise LauncherError(
-                f"Timed out waiting {timeout:g}s for reported idle state"
+                f"Timed out waiting {timeout:g}s for reported Code Puppy"
             )
         # Rename only once an occupant exists. The server enforces uniqueness
         # again, catching a concurrent launch that won the name in the meantime.
@@ -225,7 +238,7 @@ def spawn(client, name, *, direction=None, cwd=None, prompt=None, args=(), timeo
             f"Pane {pane} created for {name}: {exc}. Inspect it; it was not closed. Do not blindly retry a prompt."
         ) from exc
     return f"Started {name} in {pane}" + (
-        "; prompt submitted." if prompt is not None else "; idle."
+        "; prompt delivered as initial command." if prompt is not None else "; idle."
     )
 
 
@@ -233,6 +246,8 @@ def send(client, name, prompt):
     _inside()
     _validate_name(name)
     prompt = _text(prompt)
+    if prompt.lstrip().startswith(("/", "!")):
+        raise LauncherError("Send cannot execute slash commands or shell passthrough.")
     if "\n" in prompt:
         raise LauncherError(
             "Multiline send is unsafe in classic/startup input. Use spawn --prompt-file instead."
@@ -285,12 +300,16 @@ def execute(command, *, client_factory=ControlClient):
                 raise LauncherError(_USAGE)
             name, text = match[1], match[2]
             _validate_name(name)
-            if text.startswith("--file "):
+            if text.strip() == "--file" or re.match(r"--file\s", text):
                 paths = _words(text)
                 if len(paths) != 2:
                     raise LauncherError("Use send NAME --file PATH.")
                 text = Path(paths[1]).expanduser().read_text(encoding="utf-8")
+                if text.endswith("\n"):
+                    text = text[:-1]
             return send(client_factory(), name, text)
+        if head[1] != "spawn":
+            return _USAGE
         words = _words(command)
         parser = _Parser(prog="/herdr", add_help=False)
         subs = parser.add_subparsers(dest="action", required=True)

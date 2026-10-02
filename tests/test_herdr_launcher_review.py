@@ -5,29 +5,26 @@ from unittest.mock import Mock
 import pytest
 
 from code_puppy_core_plugins.herdr import launcher
-from tests import test_herdr_launcher as support
-from tests.test_herdr_launcher import FakeClient, split_calls
+from tests.herdr_launcher_support import FakeClient, split_calls
 
 
-@pytest.fixture
-def env(monkeypatch, tmp_path):
-    return support.env.__wrapped__(monkeypatch, tmp_path)
-
-
-def test_initial_prompt_is_one_child_argument_even_idle_before_editor(env):
+def test_initial_prompt_is_one_child_argument_even_idle_before_editor(launcher_env):
     client = FakeClient()
     client.states = ["idle"]  # startup reports idle before editor enables paste
     launcher.spawn(client, "fixer", prompt="line one\nline two")
     runs = [c for c in client.calls if c[:2] == ("pane", "run")]
     assert len(runs) == 1
-    assert launcher.shlex.split(runs[0][3])[-2:] == ["--", "line one\nline two"]
+    assert (
+        launcher.Path(launcher.shlex.split(runs[0][3])[4]).read_text()
+        == "line one\nline two"
+    )
 
 
 @pytest.mark.parametrize(
     "failure",
     [UnicodeDecodeError("utf-8", b"\x90", 0, 1, "bad"), TypeError("bad agents")],
 )
-def test_any_post_split_failure_reports_pane(env, failure):
+def test_any_post_split_failure_reports_pane(launcher_env, failure):
     class Broken(FakeClient):
         def call(self, *args):
             if args[:2] == ("pane", "run"):
@@ -66,7 +63,7 @@ def test_launch_ignores_stripped_exe_relative_argv_and_python_flags(monkeypatch)
         "@alice asked for this",
     ],
 )
-def test_send_preserves_literal_tail(env, text):
+def test_send_preserves_literal_tail(launcher_env, text):
     send = Mock(return_value="ok")
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(launcher, "send", send)
@@ -77,8 +74,8 @@ def test_send_preserves_literal_tail(env, text):
     assert send.call_args.args[2] == text
 
 
-def test_send_explicit_file(env, monkeypatch):
-    (env / "brief.txt").write_text("single line", encoding="utf-8")
+def test_send_explicit_file(launcher_env, monkeypatch):
+    (launcher_env / "brief.txt").write_text("single line", encoding="utf-8")
     send = Mock(return_value="ok")
     monkeypatch.setattr(launcher, "send", send)
     assert (
@@ -105,14 +102,14 @@ def test_windows_option_paths_keep_backslashes():
     ]
 
 
-def test_oversized_before_split(env):
+def test_oversized_before_split(launcher_env):
     client = FakeClient()
     with pytest.raises(launcher.LauncherError, match="large"):
         launcher.spawn(client, "fixer", prompt="a" * 33000)
     assert not split_calls(client)
 
 
-def test_missing_caller_geometry_is_actionable(env):
+def test_missing_caller_geometry_is_actionable(launcher_env):
     client = FakeClient()
     original = client.call
     client.call = lambda *args: (
@@ -122,7 +119,7 @@ def test_missing_caller_geometry_is_actionable(env):
         launcher.spawn(client, "fixer")
 
 
-def test_visual_square_splits_down(env):
+def test_visual_square_splits_down(launcher_env):
     client = FakeClient()
     client.rect = {"width": 80, "height": 40}
     launcher.spawn(client, "fixer")
@@ -137,19 +134,19 @@ def test_utf8_cli(monkeypatch):
 
 
 @pytest.mark.parametrize("prompt", ["/exit", "!rm file", "first\nsecond"])
-def test_send_rejects_commands_and_multiline_before_input(env, prompt):
+def test_send_rejects_commands_and_multiline_before_input(launcher_env, prompt):
     client = FakeClient()
     with pytest.raises(launcher.LauncherError):
         launcher.send(client, "fixer", prompt)
     assert client.calls == []
 
 
-def test_spawn_rejects_command_passthrough(env):
+def test_spawn_rejects_command_passthrough(launcher_env):
     with pytest.raises(launcher.LauncherError):
         launcher.spawn(FakeClient(), "fixer", prompt="!echo hi")
 
 
-def test_help_and_bare_command(env):
+def test_help_and_bare_command(launcher_env):
     for command in ["/herdr", "/herdr help"]:
         assert "spawn" in launcher.execute(command) and "send" in launcher.execute(
             command
@@ -161,7 +158,7 @@ def test_powershell_smart_quotes_are_escaped(monkeypatch):
     assert launcher._shell_command(["a\u2018b"]) == "& 'a\u2018\u2018b'"
 
 
-def test_disappeared_child_fails_fast(env):
+def test_disappeared_child_fails_fast(launcher_env):
     class Gone(FakeClient):
         def __init__(self):
             super().__init__()

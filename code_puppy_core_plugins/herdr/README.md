@@ -45,39 +45,47 @@ that choice. Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among
 live agents. Invalid names, duplicate names, unreadable prompt files, and
 invalid options are rejected before splitting.
 
-The child uses the current Python interpreter with `-P -m code_puppy`,
+The child uses the current Python interpreter with safe-path `-P` and the
+installed `code_puppy` module,
 not a shell alias, cwd-relative console wrapper, or executable from `PATH`.
 `-P` excludes the child's cwd from Python's module search path. Caller
 interpreter flags are deliberately not inherited; only child arguments
-explicitly supplied after `--` are forwarded. The launcher waits for the
-existing reporter to show an idle child (30 seconds by default; override
-with `--timeout SECONDS`, up to 300). It returns the child pane ID and name.
+explicitly supplied after `--` are forwarded. Without a prompt the launcher
+waits for reported idle. With a prompt it accepts the first Code Puppy report
+in any state, names the child and returns without waiting for task completion.
+Startup timeout is 30 seconds by default (`--timeout SECONDS`, up to 300).
 A failed launch or readiness timeout reports the created pane for inspection;
 it deliberately does not close it or retry a possibly delivered prompt.
 If a split request itself times out, inspect `herdr pane list` before retrying:
 the server may have created the pane without returning its ID.
 
 `--prompt` and `--prompt-file` are mutually exclusive. Files are UTF-8.
-Spawn passes the complete prompt as **one initial-command argument** to the
-child. It never pastes a prompt into the child's not-yet-ready input editor.
-The child can begin working before the launcher finishes waiting for reported
-idle; a short task may already have completed when spawn returns. A long task
-can exceed the readiness timeout even though its initial command was delivered.
+Spawn writes the prompt to an exclusive private temporary file (mode 0600
+on POSIX). A short, single-line Python bootstrap reads and deletes that file
+before passing the complete text as **one initial-command argument** to the
+installed module. This avoids shell canonical line-buffer limits and editor
+readiness races. Startup failure cleans up the file; a hard caller crash before
+the child reads it can leave a private temporary file. The launcher never
+retries a possibly delivered initial command. A working child is named promptly;
+a short task may already have completed when spawn returns.
 
 `send` preserves everything after the name literally (including apostrophes,
 spaces and leading option-like text). `--file PATH` is the explicit file form;
-`@` is ordinary text. Send accepts **single-line** prompts only: multiline
+`@` is ordinary text. File sends remove one conventional trailing newline;
+other newlines are rejected. Send accepts **single-line** prompts only: multiline
 paste is unsafe in the classic editor or before bracketed paste is enabled.
 Use `spawn --prompt-file` for multiline work. Send rechecks a unique idle Code
 Puppy's terminal identity and refuses working/blocked agents. It uses herdr's
 atomic `pane.send_input` text+Enter through `pane run`. Empty prompts, terminal
-controls, and prompts beginning with `/` or `!` are rejected rather than
-executed as slash commands or shell passthrough. Quoting around send text is
+controls are rejected. Send rejects leading `/` or `!` rather than executing
+commands. Spawn accepts leading `/` as literal initial prompt text, but rejects
+leading `!` because the core initial-command path supports shell passthrough. Quoting around send text is
 literal, not shell syntax. Success confirms submission, not completion.
 
-Launch commands are capped before splitting at 24,000 UTF-8 bytes and UTF-16
-units, including quoting expansion; single-line sends are capped at 24,000
-UTF-8 bytes. This conservative limit avoids OS command-line size failures.
+Prompt files and single-line sends are capped at 24,000 UTF-8 bytes. The actual
+typed launch command (bootstrap, path and quoted child arguments) must remain
+under 1,000 UTF-8 bytes and contain no newline; otherwise it fails before any
+split. This conservative cap avoids even an unready macOS shell's line buffer.
 The command blocks the caller while waiting, prints the new pane and timeout
 as progress, and may not be interruptible under the core's Ctrl+C guard.
 Use a short `--timeout` when appropriate. Only one pane-specific `agent get`

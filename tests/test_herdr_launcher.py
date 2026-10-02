@@ -7,57 +7,7 @@ import pytest
 from code_puppy_core_plugins.herdr import launcher
 
 
-class FakeClient:
-    def __init__(self):
-        self.calls = []
-        self.agents = []
-        self.states = ["unknown", "working", "idle"]
-        self.rect = {"width": 120, "height": 30}
-        self.fail_run = False
-
-    def call(self, *args):
-        self.calls.append(args)
-        if args == ("agent", "list"):
-            agents = self.agents
-            if any(c[:2] == ("pane", "run") for c in self.calls):
-                agents = [*agents, {"pane_id": "w1:p4", "agent": "codepuppy"}]
-            return {"agents": agents}
-        if args[:2] == ("pane", "layout"):
-            return {"layout": {"panes": [{"pane_id": "w1:p3", "rect": self.rect}]}}
-        if args[:2] == ("pane", "split"):
-            return {"pane": {"pane_id": "w1:p4"}}
-        if args[:2] == ("pane", "run") and self.fail_run:
-            raise launcher.LauncherError("launch failed")
-        if args[:2] == ("agent", "get"):
-            state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
-            return {
-                "agent": {
-                    "pane_id": "w1:p4",
-                    "name": "fixer",
-                    "agent": "codepuppy",
-                    "agent_status": state,
-                    "terminal_id": "term-child",
-                }
-            }
-        return {}
-
-
-@pytest.fixture
-def env(monkeypatch, tmp_path):
-    monkeypatch.setenv("HERDR_ENV", "1")
-    monkeypatch.setenv("HERDR_PANE_ID", "w1:p3")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        launcher,
-        "launch_argv",
-        lambda args: ["/my venv/bin/python", "/my venv/bin/pup", *args],
-    )
-    monkeypatch.setattr(launcher.time, "sleep", lambda _: None)
-    return tmp_path
-
-
-def split_calls(client):
-    return [call for call in client.calls if call[:2] == ("pane", "split")]
+from tests.herdr_launcher_support import FakeClient, split_calls
 
 
 def test_outside_has_no_client_process_or_file_read(monkeypatch):
@@ -73,14 +23,14 @@ def test_outside_has_no_client_process_or_file_read(monkeypatch):
 @pytest.mark.parametrize(
     "name", ["Bad", "a.b", "a;touch", "1bad", "a" * 33, "bad\nname"]
 )
-def test_invalid_name_before_split(env, name):
+def test_invalid_name_before_split(launcher_env, name):
     client = FakeClient()
     with pytest.raises(launcher.LauncherError, match="name"):
         launcher.spawn(client, name)
     assert client.calls == []
 
 
-def test_duplicate_before_split(env):
+def test_duplicate_before_split(launcher_env):
     client = FakeClient()
     client.agents = [{"name": "fixer", "pane_id": "w2:p1"}]
     with pytest.raises(launcher.LauncherError, match="already"):
@@ -93,7 +43,7 @@ def test_duplicate_before_split(env):
     [({"width": 120, "height": 30}, "right"), ({"width": 20, "height": 40}, "down")],
 )
 def test_spawn_preserves_cwd_focus_waits_then_one_multiline_submission(
-    env, rect, direction
+    launcher_env, rect, direction
 ):
     client = FakeClient()
     client.rect = rect
@@ -109,29 +59,25 @@ def test_spawn_preserves_cwd_focus_waits_then_one_multiline_submission(
         "--direction",
         direction,
         "--cwd",
-        str(env),
+        str(launcher_env),
         "--no-focus",
     )
     launch = next(call for call in client.calls if call[:2] == ("pane", "run"))
     assert launch[2] == "w1:p4"
-    assert launcher.shlex.split(launch[3]) == [
-        "/my venv/bin/python",
-        "/my venv/bin/pup",
-        "--model",
-        "some model",
-        "--",
-        "first\nsecond",
-    ]
+    argv = launcher.shlex.split(launch[3])
+    assert argv[:3] == ["/my venv/bin/python", "-P", "-c"]
+    assert argv[-2:] == ["--model", "some model"]
+    assert launcher.Path(argv[4]).read_text() == "first\nsecond"
     assert client.calls.index(
         ("agent", "rename", "w1:p4", "fixer")
     ) > client.calls.index(launch)
-    assert len([c for c in client.calls if c[:2] == ("agent", "get")]) >= 3
+    assert len([c for c in client.calls if c[:2] == ("agent", "get")]) == 1
     assert len([c for c in client.calls if c[:2] == ("pane", "run")]) == 1
     assert "w1:p4" in result and "fixer" in result
 
 
 @pytest.mark.parametrize("failure", ["run", "timeout"])
-def test_failure_reports_created_pane_without_closing(env, failure):
+def test_failure_reports_created_pane_without_closing(launcher_env, failure):
     client = FakeClient()
     client.fail_run = failure == "run"
     client.states = ["working"]
@@ -141,8 +87,8 @@ def test_failure_reports_created_pane_without_closing(env, failure):
     assert len([c for c in client.calls if c[:2] == ("pane", "run")]) == 1
 
 
-def test_prompt_file_and_args(env):
-    (env / "brief.md").write_text("first\nsecond", encoding="utf-8")
+def test_prompt_file_and_args(launcher_env):
+    (launcher_env / "brief.md").write_text("first\nsecond", encoding="utf-8")
     client = FakeClient()
     result = launcher.execute(
         '/herdr spawn fixer --direction down --prompt-file brief.md -- --model "some model"',
@@ -151,7 +97,10 @@ def test_prompt_file_and_args(env):
     assert "w1:p4" in result
     runs = [c for c in client.calls if c[:2] == ("pane", "run")]
     assert len(runs) == 1
-    assert launcher.shlex.split(runs[0][3])[-2:] == ["--", "first\nsecond"]
+    assert (
+        launcher.Path(launcher.shlex.split(runs[0][3])[4]).read_text()
+        == "first\nsecond"
+    )
 
 
 @pytest.mark.parametrize(
@@ -164,7 +113,7 @@ def test_prompt_file_and_args(env):
         "--timeout nan",
     ],
 )
-def test_bad_options_before_split(env, options):
+def test_bad_options_before_split(launcher_env, options):
     client = FakeClient()
     result = launcher.execute(
         f"/herdr spawn fixer {options}", client_factory=lambda: client
@@ -173,7 +122,7 @@ def test_bad_options_before_split(env, options):
     assert not split_calls(client)
 
 
-def test_send_requires_unique_idle_puppy_and_submits_once(env):
+def test_send_requires_unique_idle_puppy_and_submits_once(launcher_env):
     client = FakeClient()
     client.states = ["idle"]
     client.agents = [
@@ -196,7 +145,7 @@ def test_send_requires_unique_idle_puppy_and_submits_once(env):
     "kind,state",
     [("claude", "idle"), ("codepuppy", "blocked"), ("codepuppy", "working")],
 )
-def test_send_rejects_wrong_kind_or_state(env, kind, state):
+def test_send_rejects_wrong_kind_or_state(launcher_env, kind, state):
     client = FakeClient()
     client.agents = [
         {"name": "fixer", "pane_id": "w1:p4", "agent": kind, "agent_status": state}
@@ -207,7 +156,7 @@ def test_send_rejects_wrong_kind_or_state(env, kind, state):
 
 
 @pytest.mark.parametrize("prompt", ["", "hello\x1b[201~\rquit", "bad\x00text"])
-def test_unsafe_prompt_before_split(env, prompt):
+def test_unsafe_prompt_before_split(launcher_env, prompt):
     client = FakeClient()
     with pytest.raises(launcher.LauncherError):
         launcher.spawn(client, "fixer", prompt=prompt)
@@ -269,7 +218,7 @@ def test_cli_failure_does_not_retry(monkeypatch):
     assert run.call_count == 1
 
 
-def test_child_not_yet_reported_keeps_waiting(env):
+def test_child_not_yet_reported_keeps_waiting(launcher_env):
     class SlowClient(FakeClient):
         def __init__(self):
             super().__init__()
@@ -288,7 +237,7 @@ def test_child_not_yet_reported_keeps_waiting(env):
     assert client.polls >= 4
 
 
-def test_send_rejects_replaced_terminal(env):
+def test_send_rejects_replaced_terminal(launcher_env):
     client = FakeClient()
     client.states = ["idle"]
     client.agents = [
@@ -306,8 +255,8 @@ def test_send_rejects_replaced_terminal(env):
     assert not any(c[:2] == ("pane", "run") for c in client.calls)
 
 
-def test_send_file(env):
-    (env / "followup.md").write_text("one two", encoding="utf-8")
+def test_send_file(launcher_env):
+    (launcher_env / "followup.md").write_text("one two", encoding="utf-8")
     client = FakeClient()
     client.states = ["idle"]
     client.agents = [
