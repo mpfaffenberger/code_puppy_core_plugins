@@ -19,7 +19,15 @@ _NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
 
 class LauncherError(ValueError):
-    """An actionable launcher failure."""
+    """An actionable launcher failure with an optional herdr error code."""
+
+    def __init__(self, message, *, code=None):
+        super().__init__(message)
+        self.code = code
+
+
+def _windows():
+    return os.name == "nt"
 
 
 class ControlClient:
@@ -31,7 +39,11 @@ class ControlClient:
     def call(self, *args):
         try:
             reply = subprocess.run(
-                [self.binary, *args], capture_output=True, text=True, timeout=5
+                [self.binary, *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=5,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise LauncherError(f"herdr request failed: {exc}") from exc
@@ -44,7 +56,8 @@ class ControlClient:
             raise LauncherError("herdr returned an invalid response") from exc
         if reply.returncode or "error" in body:
             raise LauncherError(
-                body.get("error", {}).get("message", "herdr request failed")
+                body.get("error", {}).get("message", "herdr request failed"),
+                code=body.get("error", {}).get("code"),
             )
         result = body.get("result")
         if not isinstance(result, dict):
@@ -71,33 +84,37 @@ def _text(text):
         ord(c) < 32 and c not in "\n\t" or 127 <= ord(c) <= 159 for c in text
     ):
         raise LauncherError("Prompt must be nonempty text without terminal controls.")
+    if text.lstrip().startswith(("/", "!")):
+        raise LauncherError(
+            "Prompts cannot start with a slash command or shell passthrough."
+        )
     return text
 
 
 def launch_argv(args):
-    """Reuse this interpreter and entry point, never the user's shell alias."""
-    original = getattr(sys, "orig_argv", [])
-    index = 1
-    while index < len(original):
-        option = original[index]
-        if option == "-m" and index + 1 < len(original):
-            return [sys.executable, "-m", original[index + 1], *args]
-        if option in ("-c", "--") or not option.startswith("-"):
-            break  # application arguments after this boundary are not Python flags
-        index += 2 if option in ("-W", "-X", "--check-hash-based-pycs") else 1
-    entry = Path(sys.argv[0]).absolute()
-    if not entry.is_file():
-        raise LauncherError("Cannot resolve the current Code Puppy entry point.")
-    return [sys.executable, str(entry), *args]
+    """Use this interpreter's installed module, not cwd-sensitive wrappers.
+
+    -P excludes the child cwd from Python's module search path. Interpreter
+    flags and application flags from the caller are deliberately not inherited.
+    """
+    return [sys.executable, "-P", "-m", "code_puppy", *args]
 
 
 def _shell_command(argv):
-    if any(any(ord(c) < 32 or ord(c) == 127 for c in arg) for arg in argv):
+    if any(
+        any((ord(c) < 32 and c not in "\n\t") or ord(c) == 127 for c in arg)
+        for arg in argv
+    ):
         raise LauncherError("Launch arguments cannot contain terminal controls.")
-    if os.name == "nt":
+    if _windows():
         # Herdr's default Windows shell is PowerShell. Do not use cmd.exe's
         # list2cmdline escaping for a PowerShell command.
-        return "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in argv)
+        def quote(arg):
+            for char in "'\u2018\u2019\u201a\u201b":
+                arg = arg.replace(char, char * 2)
+            return "'" + arg + "'"
+
+        return "& " + " ".join(quote(arg) for arg in argv)
     return shlex.join(argv)
 
 
@@ -136,15 +153,28 @@ def spawn(client, name, *, direction=None, cwd=None, prompt=None, args=(), timeo
     directory = Path(cwd or os.getcwd()).expanduser().resolve()
     if not directory.is_dir():
         raise LauncherError(f"Not a directory: {directory}")
-    command = _shell_command(launch_argv(args))
+    child_args = list(args)
+    if prompt is not None:
+        child_args.extend(["--", prompt])
+    command = _shell_command(launch_argv(child_args))
+    # Conservative portable cap includes quoting expansion and UTF-16 units.
+    # Both shell input and Windows CreateProcess have bounded command lengths.
+    if (
+        len(command.encode("utf-8")) > 24000
+        or len(command.encode("utf-16-le")) // 2 > 24000
+    ):
+        raise LauncherError("Launch command is too large (24,000-byte/unit limit).")
     agents = client.call("agent", "list")["agents"]
     if any(agent.get("name") == name for agent in agents):
         raise LauncherError(f"Agent name {name} is already in use.")
     caller = os.environ["HERDR_PANE_ID"]
     if direction is None:
         layout = client.call("pane", "layout", "--pane", caller)["layout"]
-        rect = next(p["rect"] for p in layout["panes"] if p["pane_id"] == caller)
-        direction = "right" if rect["width"] > rect["height"] else "down"
+        caller_info = next((p for p in layout["panes"] if p["pane_id"] == caller), None)
+        if caller_info is None:
+            raise LauncherError(f"Cannot find caller pane {caller} in herdr layout.")
+        rect = caller_info["rect"]
+        direction = "right" if rect["width"] > 2 * rect["height"] else "down"
     created = client.call(
         "pane",
         "split",
@@ -159,19 +189,28 @@ def spawn(client, name, *, direction=None, cwd=None, prompt=None, args=(), timeo
     pane = created["pane"]["pane_id"]
     try:
         client.call("pane", "run", pane, command)
+        print(
+            f"herdr: waiting for {pane} to report idle (up to {timeout:g}s)...",
+            flush=True,
+        )
         deadline = time.monotonic() + timeout
+        seen = False
         while time.monotonic() < deadline:
-            # A fresh shell has no agent yet. agent.get may report not found;
-            # list instead lets startup progress without masking other errors.
-            agents = client.call("agent", "list")["agents"]
-            agent = next((a for a in agents if a.get("pane_id") == pane), None)
-            if agent is None:
-                time.sleep(0.1)
+            try:
+                agent = _get(client, pane)
+            except LauncherError as exc:
+                if exc.code != "agent_not_found":
+                    raise
+                if seen:
+                    raise LauncherError(
+                        "Child agent disappeared before readiness"
+                    ) from exc
+                time.sleep(0.25)
                 continue
-            agent = _get(client, pane)
+            seen = True
             if _ready(agent):
                 break
-            time.sleep(0.1)
+            time.sleep(0.25)
         else:
             raise LauncherError(
                 f"Timed out waiting {timeout:g}s for reported idle state"
@@ -179,9 +218,9 @@ def spawn(client, name, *, direction=None, cwd=None, prompt=None, args=(), timeo
         # Rename only once an occupant exists. The server enforces uniqueness
         # again, catching a concurrent launch that won the name in the meantime.
         client.call("agent", "rename", pane, name)
-        if prompt is not None:
-            _submit(client, agent, prompt)
-    except (LauncherError, KeyError, StopIteration) as exc:
+        # Initial prompt is already one argv element; never inject into an
+        # editor that may not exist yet or have bracketed paste enabled.
+    except Exception as exc:
         raise LauncherError(
             f"Pane {pane} created for {name}: {exc}. Inspect it; it was not closed. Do not blindly retry a prompt."
         ) from exc
@@ -194,6 +233,12 @@ def send(client, name, prompt):
     _inside()
     _validate_name(name)
     prompt = _text(prompt)
+    if "\n" in prompt:
+        raise LauncherError(
+            "Multiline send is unsafe in classic/startup input. Use spawn --prompt-file instead."
+        )
+    if len(prompt.encode("utf-8")) > 24000:
+        raise LauncherError("Prompt is too large (24,000-byte limit).")
     agents = client.call("agent", "list")["agents"]
     matches = [a for a in agents if a.get("name") == name]
     if len(matches) != 1 or not _ready(matches[0]):
@@ -213,11 +258,40 @@ class _Parser(argparse.ArgumentParser):
         raise LauncherError(message)
 
 
+def _words(command, *, windows=None):
+    windows = _windows() if windows is None else windows
+    words = shlex.split(command, posix=not windows)
+    if windows:
+        words = [
+            w[1:-1] if len(w) >= 2 and w[0] == w[-1] and w[0] in "\"'" else w
+            for w in words
+        ]
+    return words
+
+
+_USAGE = "/herdr spawn NAME [--prompt TEXT | --prompt-file PATH] [-- CHILD_ARGS]\n/herdr send NAME TEXT\n/herdr send NAME --file PATH"
+
+
 def execute(command, *, client_factory=ControlClient):
     """Slash-command boundary: outside-herdr check precedes all side effects."""
     try:
         _inside()
-        words = shlex.split(command)
+        head = command.split(maxsplit=2)
+        if len(head) == 1 or head[1] == "help":
+            return _USAGE
+        if head[1] == "send":
+            match = re.match(r"\S+\s+send\s+(\S+)(?:[ \t]+([\s\S]*))?$", command)
+            if match is None or match[2] is None:
+                raise LauncherError(_USAGE)
+            name, text = match[1], match[2]
+            _validate_name(name)
+            if text.startswith("--file "):
+                paths = _words(text)
+                if len(paths) != 2:
+                    raise LauncherError("Use send NAME --file PATH.")
+                text = Path(paths[1]).expanduser().read_text(encoding="utf-8")
+            return send(client_factory(), name, text)
+        words = _words(command)
         parser = _Parser(prog="/herdr", add_help=False)
         subs = parser.add_subparsers(dest="action", required=True)
         launch = subs.add_parser("spawn", add_help=False)
@@ -228,9 +302,6 @@ def execute(command, *, client_factory=ControlClient):
         prompts = launch.add_mutually_exclusive_group()
         prompts.add_argument("--prompt")
         prompts.add_argument("--prompt-file")
-        deliver = subs.add_parser("send", add_help=False)
-        deliver.add_argument("name")
-        deliver.add_argument("text", nargs="+")
         tail = words[1:]
         args = []
         if tail[:1] == ["spawn"] and "--" in tail:
@@ -238,14 +309,6 @@ def execute(command, *, client_factory=ControlClient):
             args, tail = tail[index + 1 :], tail[:index]
         options = parser.parse_args(tail)
         _validate_name(options.name)
-        if options.action == "send":
-            text = " ".join(options.text)
-            prompt = (
-                Path(text[1:]).expanduser().read_text(encoding="utf-8")
-                if text.startswith("@")
-                else text
-            )
-            return send(client_factory(), options.name, prompt)
         prompt = options.prompt
         if options.prompt_file:
             prompt = Path(options.prompt_file).expanduser().read_text(encoding="utf-8")
@@ -258,5 +321,7 @@ def execute(command, *, client_factory=ControlClient):
             args=args,
             timeout=options.timeout,
         )
-    except (ValueError, OSError, KeyError, StopIteration) as exc:
+    except KeyError as exc:
+        return f"herdr error: Invalid herdr response; missing field {exc}."
+    except (ValueError, OSError) as exc:
         return f"herdr error: {exc}"

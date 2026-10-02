@@ -33,19 +33,22 @@ From a Code Puppy running inside herdr:
 ```text
 /herdr spawn fixer --prompt-file brief.md
 /herdr spawn reviewer --direction down --cwd ./project --prompt "Review the tests" -- --model MODEL
-/herdr send fixer "A follow-up question"
-/herdr send fixer @follow-up.md
+/herdr send fixer Don't forget the tests
+/herdr send fixer --file follow-up.txt
 ```
 
 `spawn` creates a sibling split in the caller's tab, preserves the caller's
 working directory unless `--cwd` is given, and does not change focus. Wide
-panes split right; tall or square panes split down. `--direction` overrides
+panes split right; tall or approximately square panes split down (cell width
+must exceed twice the cell height to count as wide). `--direction` overrides
 that choice. Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among
 live agents. Invalid names, duplicate names, unreadable prompt files, and
 invalid options are rejected before splitting.
 
-The child uses the current Python interpreter and Code Puppy entry point,
-not a shell alias or a different executable from `PATH`. Only arguments
+The child uses the current Python interpreter with `-P -m code_puppy`,
+not a shell alias, cwd-relative console wrapper, or executable from `PATH`.
+`-P` excludes the child's cwd from Python's module search path. Caller
+interpreter flags are deliberately not inherited; only child arguments
 explicitly supplied after `--` are forwarded. The launcher waits for the
 existing reporter to show an idle child (30 seconds by default; override
 with `--timeout SECONDS`, up to 300). It returns the child pane ID and name.
@@ -55,12 +58,36 @@ If a split request itself times out, inspect `herdr pane list` before retrying:
 the server may have created the pane without returning its ID.
 
 `--prompt` and `--prompt-file` are mutually exclusive. Files are UTF-8.
-Multiline prompts use herdr's `pane.send_input` through `pane run`, which
-honors the live bracketed-paste mode and appends Enter in one ordered write.
-`send` accepts only a unique, idle Code Puppy, rechecks its terminal identity,
-and refuses working/blocked agents. Empty prompts and terminal control
-characters (other than tabs/newlines) are rejected. Success confirms
-submission, not completion; use `herdr agent get/read/wait` to observe work.
+Spawn passes the complete prompt as **one initial-command argument** to the
+child. It never pastes a prompt into the child's not-yet-ready input editor.
+The child can begin working before the launcher finishes waiting for reported
+idle; a short task may already have completed when spawn returns. A long task
+can exceed the readiness timeout even though its initial command was delivered.
+
+`send` preserves everything after the name literally (including apostrophes,
+spaces and leading option-like text). `--file PATH` is the explicit file form;
+`@` is ordinary text. Send accepts **single-line** prompts only: multiline
+paste is unsafe in the classic editor or before bracketed paste is enabled.
+Use `spawn --prompt-file` for multiline work. Send rechecks a unique idle Code
+Puppy's terminal identity and refuses working/blocked agents. It uses herdr's
+atomic `pane.send_input` text+Enter through `pane run`. Empty prompts, terminal
+controls, and prompts beginning with `/` or `!` are rejected rather than
+executed as slash commands or shell passthrough. Quoting around send text is
+literal, not shell syntax. Success confirms submission, not completion.
+
+Launch commands are capped before splitting at 24,000 UTF-8 bytes and UTF-16
+units, including quoting expansion; single-line sends are capped at 24,000
+UTF-8 bytes. This conservative limit avoids OS command-line size failures.
+The command blocks the caller while waiting, prints the new pane and timeout
+as progress, and may not be interruptible under the core's Ctrl+C guard.
+Use a short `--timeout` when appropriate. Only one pane-specific `agent get`
+is polled per tick. A reported child that disappears fails promptly; a child
+that exits before ever reporting still requires the bounded timeout.
+
+The preflight uniqueness check cannot reserve a name: herdr only permits
+renaming a running agent. Concurrent same-name spawns can both create panes;
+the server rejects the losing rename, and the launcher reports that pane.
+Use `herdr agent get/read/wait` to observe work.
 
 Outside herdr, `/herdr` explains that it requires `HERDR_ENV=1` and performs
 no file reads, socket requests, or subprocess launches. The CLI binary comes

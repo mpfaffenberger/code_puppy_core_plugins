@@ -119,12 +119,14 @@ def test_spawn_preserves_cwd_focus_waits_then_one_multiline_submission(
         "/my venv/bin/pup",
         "--model",
         "some model",
+        "--",
+        "first\nsecond",
     ]
     assert client.calls.index(
         ("agent", "rename", "w1:p4", "fixer")
     ) > client.calls.index(launch)
     assert len([c for c in client.calls if c[:2] == ("agent", "get")]) >= 3
-    assert client.calls[-1] == ("pane", "run", "w1:p4", "first\nsecond")
+    assert len([c for c in client.calls if c[:2] == ("pane", "run")]) == 1
     assert "w1:p4" in result and "fixer" in result
 
 
@@ -147,7 +149,9 @@ def test_prompt_file_and_args(env):
         client_factory=lambda: client,
     )
     assert "w1:p4" in result
-    assert client.calls[-1] == ("pane", "run", "w1:p4", "first\nsecond")
+    runs = [c for c in client.calls if c[:2] == ("pane", "run")]
+    assert len(runs) == 1
+    assert launcher.shlex.split(runs[0][3])[-2:] == ["--", "first\nsecond"]
 
 
 @pytest.mark.parametrize(
@@ -182,10 +186,10 @@ def test_send_requires_unique_idle_puppy_and_submits_once(env):
         }
     ]
     result = launcher.execute(
-        '/herdr send fixer "first\nsecond"', client_factory=lambda: client
+        "/herdr send fixer first second", client_factory=lambda: client
     )
     assert "w1:p4" in result
-    assert client.calls[-1] == ("pane", "run", "w1:p4", "first\nsecond")
+    assert client.calls[-1] == ("pane", "run", "w1:p4", "first second")
 
 
 @pytest.mark.parametrize(
@@ -237,7 +241,9 @@ def test_launch_uses_current_interpreter_entrypoint_not_path(monkeypatch, tmp_pa
     monkeypatch.setattr(launcher.sys, "orig_argv", ["/same/python", str(entry)])
     assert launcher.launch_argv(["--model", "test"]) == [
         "/same/python",
-        str(entry),
+        "-P",
+        "-m",
+        "code_puppy",
         "--model",
         "test",
     ]
@@ -248,7 +254,7 @@ def test_launch_preserves_module_invocation(monkeypatch):
     monkeypatch.setattr(
         launcher.sys, "orig_argv", ["/same/python", "-m", "code_puppy", "old args"]
     )
-    assert launcher.launch_argv([]) == ["/same/python", "-m", "code_puppy"]
+    assert launcher.launch_argv([]) == ["/same/python", "-P", "-m", "code_puppy"]
 
 
 def test_cli_failure_does_not_retry(monkeypatch):
@@ -271,10 +277,10 @@ def test_child_not_yet_reported_keeps_waiting(env):
 
         def call(self, *args):
             result = super().call(*args)
-            if args == ("agent", "list"):
+            if args[:2] == ("agent", "get"):
                 self.polls += 1
                 if self.polls < 4:
-                    return {"agents": []}
+                    raise launcher.LauncherError("not yet", code="agent_not_found")
             return result
 
     client = SlowClient()
@@ -301,7 +307,7 @@ def test_send_rejects_replaced_terminal(env):
 
 
 def test_send_file(env):
-    (env / "followup.md").write_text("one\ntwo", encoding="utf-8")
+    (env / "followup.md").write_text("one two", encoding="utf-8")
     client = FakeClient()
     client.states = ["idle"]
     client.agents = [
@@ -314,9 +320,9 @@ def test_send_file(env):
         }
     ]
     assert "submitted" in launcher.execute(
-        "/herdr send fixer @followup.md", client_factory=lambda: client
+        "/herdr send fixer --file followup.md", client_factory=lambda: client
     )
-    assert client.calls[-1] == ("pane", "run", "w1:p4", "one\ntwo")
+    assert client.calls[-1] == ("pane", "run", "w1:p4", "one two")
 
 
 def test_custom_callback_routes_only_herdr(monkeypatch):
@@ -341,7 +347,9 @@ def test_console_script_model_flag_is_not_python_module(monkeypatch, tmp_path):
     )
     assert launcher.launch_argv(["--model", "child-model"]) == [
         "/same/python",
-        str(entry),
+        "-P",
+        "-m",
+        "code_puppy",
         "--model",
         "child-model",
     ]
