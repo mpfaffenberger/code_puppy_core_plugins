@@ -26,6 +26,56 @@ no worker thread. If they're present it opens a background reporter that
 reports code-puppy's state **authoritatively**: herdr never has to infer
 it from the screen.
 
+## Launch and prompt another puppy
+
+From a Code Puppy running inside herdr:
+
+```text
+/herdr spawn fixer --prompt-file brief.md
+/herdr spawn reviewer --direction down --cwd ./project --prompt "Review the tests" -- --model MODEL
+/herdr send fixer "A follow-up question"
+/herdr send fixer @follow-up.md
+```
+
+`spawn` creates a sibling split in the caller's tab, preserves the caller's
+working directory unless `--cwd` is given, and does not change focus. Wide
+panes split right; tall or square panes split down. `--direction` overrides
+that choice. Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among
+live agents. Invalid names, duplicate names, unreadable prompt files, and
+invalid options are rejected before splitting.
+
+The child uses the current Python interpreter and Code Puppy entry point,
+not a shell alias or a different executable from `PATH`. Only arguments
+explicitly supplied after `--` are forwarded. The launcher waits for the
+existing reporter to show an idle child (30 seconds by default; override
+with `--timeout SECONDS`, up to 300). It returns the child pane ID and name.
+A failed launch or readiness timeout reports the created pane for inspection;
+it deliberately does not close it or retry a possibly delivered prompt.
+If a split request itself times out, inspect `herdr pane list` before retrying:
+the server may have created the pane without returning its ID.
+
+`--prompt` and `--prompt-file` are mutually exclusive. Files are UTF-8.
+Multiline prompts use herdr's `pane.send_input` through `pane run`, which
+honors the live bracketed-paste mode and appends Enter in one ordered write.
+`send` accepts only a unique, idle Code Puppy, rechecks its terminal identity,
+and refuses working/blocked agents. Empty prompts and terminal control
+characters (other than tabs/newlines) are rejected. Success confirms
+submission, not completion; use `herdr agent get/read/wait` to observe work.
+
+Outside herdr, `/herdr` explains that it requires `HERDR_ENV=1` and performs
+no file reads, socket requests, or subprocess launches. The CLI binary comes
+from `HERDR_BIN_PATH` when available, otherwise `herdr` in `PATH`. On Windows,
+launch commands assume herdr's default PowerShell shell.
+
+### Why not native `herdr agent prompt`?
+
+In herdr 0.9.1, custom lifecycle reports can display `codepuppy idle`, but
+native prompting requires a hard-coded known agent kind. Reporting session
+identity does not remove that gate. `agent start --kind` and `integration
+install` likewise have fixed supported-kind lists. An upstream Code Puppy
+kind/integration is a follow-up; no agent impersonation or parallel reporter
+is needed here. An agent-callable launcher tool is also deferred.
+
 ## State is authoritative
 
 State is a pure function of two facts the plugin observes directly:
