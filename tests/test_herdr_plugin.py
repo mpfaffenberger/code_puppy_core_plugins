@@ -23,6 +23,7 @@ import time
 from unittest.mock import patch
 
 
+from code_puppy_core_plugins.herdr import sources
 from code_puppy_core_plugins.herdr.reporter import (
     AWAITING,
     BLOCKED,
@@ -405,6 +406,113 @@ def test_tool_start_resolves_message_outside_lock():
         r.on_run_start()
         r.on_tool_start("read_file")
     assert observed["locked"] is False
+
+
+# --- error_logged: decorative error messages -------------------------------
+
+
+def test_error_logged_is_decorative_error_message_same_state():
+    fake = FakeClient()
+    r = HerdrReporter(fake)
+    r.on_run_start()  # (WORKING, thinking, critical)
+    r.on_error(ValueError("boom"))
+    # Same WORKING state, error activity -> decorative (critical=False).
+    assert _activity(fake)[-1] == (WORKING, "error: boom", False)
+    assert _states(fake) == [WORKING, WORKING]
+
+
+def test_error_dedupes_on_state_and_message():
+    fake = FakeClient()
+    r = HerdrReporter(fake)
+    r.on_run_start()
+    r.on_error(ValueError("boom"))
+    r.on_error(ValueError("boom"))  # identical (state, message) -> no re-send
+    errors = [a for a in _activity(fake) if a[1] == "error: boom"]
+    assert len(errors) == 1
+
+
+def test_error_rolls_forward_on_next_tool():
+    fake = FakeClient()
+    r = HerdrReporter(fake)
+    r.on_run_start()
+    r.on_error(ValueError("boom"))
+    r.on_tool_start("read_file")  # recovery: next activity replaces the error
+    assert _activity(fake)[-1] == (WORKING, "running read file", False)
+
+
+def test_error_while_idle_sends_nothing():
+    fake = FakeClient()
+    r = HerdrReporter(fake)
+    r.on_startup()  # idle baseline already reported
+    r.on_error(ValueError("late background error"))
+    # IDLE derives its own (None) message; the error is never surfaced.
+    assert fake.states == [(IDLE, None)]
+
+
+def test_error_message_resolved_outside_lock():
+    fake = FakeClient()
+    r = HerdrReporter(fake)
+    observed = {}
+
+    def _probe(error, context=None):
+        observed["locked"] = r._lock.locked()
+        return f"error: {error}"
+
+    with patch(
+        "code_puppy_core_plugins.herdr.reporter.sources.error_message",
+        side_effect=_probe,
+    ):
+        r.on_run_start()
+        r.on_error(ValueError("boom"))
+    assert observed["locked"] is False
+
+
+def test_error_message_adapter_variants():
+    assert sources.error_message(ValueError("boom")) == "error: boom"
+    # Empty message falls back to the context label, then to a bare error.
+    assert sources.error_message(ValueError(), context="session_namer") == (
+        "error: session_namer"
+    )
+    assert sources.error_message(None) == "error"
+    # First line only: tracebacks never spill into the sidebar.
+    assert sources.error_message(ValueError("line one\nline two")) == "error: line one"
+    assert sources.error_message("x" * 500) == f"error: {'x' * 128}"
+
+    class _ExplosiveStr:
+        # Even a raising __str__ must not break the "never raises" promise.
+        def __str__(self):
+            raise RuntimeError("no string for you")
+
+    assert sources.error_message(_ExplosiveStr()) == "error"
+
+
+def test_on_error_logged_matches_core_dispatch_shape():
+    """Guard the ``error_logged`` wiring against core-side dispatch drift.
+
+    Core invokes subscribers as ``f(error, context=..., include_traceback=...)``:
+    error positional, the rest keyword-only. If that shape ever drifts, every
+    surfaced error silently degrades to a bare ``error`` -- so pin the exact
+    forwarded call, including the non-string-context normalisation.
+    """
+    from code_puppy_core_plugins.herdr import register_callbacks as rc
+
+    with patch.object(rc, "_reporter") as reporter:
+        rc._on_error_logged(ValueError("boom"), context="ctx", include_traceback=True)
+        rc._on_error_logged(ValueError("boom"), context=123)
+        rc._on_error_logged(context="kwargs-only")
+
+    calls = reporter.on_error.call_args_list
+    assert len(calls) == 3
+    # Positional error, keyword context -- exactly as core dispatches it.
+    assert isinstance(calls[0].args[0], ValueError)
+    assert str(calls[0].args[0]) == "boom"
+    assert calls[0].kwargs == {"context": "ctx"}
+    # A non-string context is normalised to None, never forwarded raw.
+    assert isinstance(calls[1].args[0], ValueError)
+    assert calls[1].kwargs == {"context": None}
+    # A kwargs-only dispatch still resolves the error (to None here).
+    assert calls[2].args == (None,)
+    assert calls[2].kwargs == {"context": "kwargs-only"}
 
 
 # --- core wiring: set_awaiting_user_input fires the callback ----------------

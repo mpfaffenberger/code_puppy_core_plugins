@@ -222,6 +222,22 @@ class HerdrReporter:
             self._activity = THINKING
         self._sync()
 
+    def on_error(self, error: object = None, context: Optional[str] = None) -> None:
+        """A logged error -> decorative ``error: ...`` while WORKING.
+
+        Pure colour commentary: state stays a function of run depth /
+        awaiting, so an error mid-run reads ``working / error: boom`` and the
+        next tool or turn edge rolls the message forward. At IDLE the
+        derived message is ``None`` regardless, so a late background error
+        sends nothing. Identical consecutive errors dedupe in ``_sync``.
+        """
+        # Resolve the message OUTSIDE the lock (guardrail: reporter locks
+        # never cover source resolution).
+        activity = sources.error_message(error, context)
+        with self._lock:
+            self._activity = activity
+        self._sync()
+
     def on_turn_end(self) -> None:
         with self._lock:
             self._run_depth = 0
