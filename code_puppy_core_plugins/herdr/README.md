@@ -76,11 +76,19 @@ other newlines are rejected. Send accepts **single-line** prompts only: multilin
 paste is unsafe in the classic editor or before bracketed paste is enabled.
 Use `spawn --prompt-file` for multiline work. Send rechecks a unique idle Code
 Puppy's terminal identity and refuses working/blocked agents. It uses herdr's
-atomic `pane.send_input` text+Enter through `pane run`. Empty prompts, terminal
-controls are rejected. Send rejects leading `/` or `!` rather than executing
-commands. Spawn accepts leading `/` as literal initial prompt text, but rejects
-leading `!` because the core initial-command path supports shell passthrough. Quoting around send text is
-literal, not shell syntax. Success confirms submission, not completion.
+atomic `pane.send_input` text+Enter through `pane run`. Empty prompts and
+terminal controls are rejected. Send rejects leading `/` or `!` rather than
+executing commands. Spawn accepts leading `/` as literal initial prompt text,
+but rejects leading `!` because the core initial-command path supports shell
+passthrough. Quoting around send text is literal, not shell syntax. Success
+confirms submission, not completion.
+
+**Startup caveat:** a prompt sent immediately after a no-prompt spawn may be
+dropped. The startup idle report precedes input-editor readiness; the editor
+can flush queued terminal input when it starts. `send` cannot distinguish this gap from
+an input-ready idle pane. For the child's first task, prefer `spawn --prompt`
+or `spawn --prompt-file`, whose private-file handoff does not depend on editor
+readiness. A successful send acknowledges the pane write, not child receipt.
 
 Prompt files and single-line sends are capped at 24,000 UTF-8 bytes. The actual
 typed launch command (bootstrap, path and quoted child arguments) must remain
