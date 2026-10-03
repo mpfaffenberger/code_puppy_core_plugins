@@ -85,10 +85,11 @@ confirms submission, not completion.
 
 **Startup caveat:** a prompt sent immediately after a no-prompt spawn may be
 dropped. The startup idle report precedes input-editor readiness; the editor
-can flush queued terminal input when it starts. `send` cannot distinguish this gap from
-an input-ready idle pane. For the child's first task, prefer `spawn --prompt`
-or `spawn --prompt-file`, whose private-file handoff does not depend on editor
-readiness. A successful send acknowledges the pane write, not child receipt.
+can flush queued terminal input when it starts. `send` cannot distinguish
+this gap from an input-ready idle pane. For the child's first task, prefer
+`spawn --prompt` or `spawn --prompt-file`, whose private-file handoff does
+not depend on editor readiness. A successful send acknowledges the pane
+write, not child receipt.
 
 Prompt files and single-line sends are capped at 24,000 UTF-8 bytes. The actual
 typed launch command (bootstrap, path and quoted child arguments) must remain
