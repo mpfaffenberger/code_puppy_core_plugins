@@ -26,6 +26,100 @@ no worker thread. If they're present it opens a background reporter that
 reports code-puppy's state **authoritatively**: herdr never has to infer
 it from the screen.
 
+## Launch and prompt another puppy
+
+From a Code Puppy running inside herdr:
+
+```text
+/herdr spawn fixer --prompt-file brief.md
+/herdr spawn reviewer --direction down --cwd ./project --prompt "Review the tests" -- --model MODEL
+/herdr send fixer Don't forget the tests
+/herdr send fixer --file follow-up.txt
+```
+
+`spawn` creates a sibling split in the caller's tab, preserves the caller's
+working directory unless `--cwd` is given, and does not change focus. Wide
+panes split right; tall or approximately square panes split down (cell width
+must exceed twice the cell height to count as wide). `--direction` overrides
+that choice. Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among
+live agents. Invalid names, duplicate names, unreadable prompt files, and
+invalid options are rejected before splitting.
+
+The child uses the current Python interpreter with safe-path `-P` and the
+installed `code_puppy` module,
+not a shell alias, cwd-relative console wrapper, or executable from `PATH`.
+`-P` excludes the child's cwd from Python's module search path. Caller
+interpreter flags are deliberately not inherited; only child arguments
+explicitly supplied after `--` are forwarded. Without a prompt the launcher
+waits for reported idle. With a prompt it accepts the first Code Puppy report
+in any state, names the child and returns without waiting for task completion.
+Startup timeout is 30 seconds by default (`--timeout SECONDS`, up to 300).
+A failed launch or readiness timeout reports the created pane for inspection;
+it deliberately does not close it or retry a possibly delivered prompt.
+If a split request itself times out, inspect `herdr pane list` before retrying:
+the server may have created the pane without returning its ID.
+
+`--prompt` and `--prompt-file` are mutually exclusive. Files are UTF-8.
+Spawn writes the prompt to an exclusive private temporary file (mode 0600
+on POSIX). A short, single-line Python bootstrap reads and deletes that file
+before passing the complete text as **one initial-command argument** to the
+installed module. This avoids shell canonical line-buffer limits and editor
+readiness races. Startup failure cleans up the file; a hard caller crash before
+the child reads it can leave a private temporary file. The launcher never
+retries a possibly delivered initial command. A working child is named promptly;
+a short task may already have completed when spawn returns.
+
+`send` preserves everything after the name literally (including apostrophes,
+spaces and leading option-like text). `--file PATH` is the explicit file form;
+`@` is ordinary text. File sends remove one conventional trailing newline;
+other newlines are rejected. Send accepts **single-line** prompts only: multiline
+paste is unsafe in the classic editor or before bracketed paste is enabled.
+Use `spawn --prompt-file` for multiline work. Send rechecks a unique idle Code
+Puppy's terminal identity and refuses working/blocked agents. It uses herdr's
+atomic `pane.send_input` text+Enter through `pane run`. Empty prompts and
+terminal controls are rejected. Send rejects leading `/` or `!` rather than
+executing commands. Spawn accepts leading `/` as literal initial prompt text,
+but rejects leading `!` because the core initial-command path supports shell
+passthrough. Quoting around send text is literal, not shell syntax. Success
+confirms submission, not completion.
+
+**Startup caveat:** a prompt sent immediately after a no-prompt spawn may be
+dropped. The startup idle report precedes input-editor readiness; the editor
+can flush queued terminal input when it starts. `send` cannot distinguish
+this gap from an input-ready idle pane. For the child's first task, prefer
+`spawn --prompt` or `spawn --prompt-file`, whose private-file handoff does
+not depend on editor readiness. A successful send acknowledges the pane
+write, not child receipt.
+
+Prompt files and single-line sends are capped at 24,000 UTF-8 bytes. The actual
+typed launch command (bootstrap, path and quoted child arguments) must remain
+under 1,000 UTF-8 bytes and contain no newline; otherwise it fails before any
+split. This conservative cap avoids even an unready macOS shell's line buffer.
+The command blocks the caller while waiting, prints the new pane and timeout
+as progress, and may not be interruptible under the core's Ctrl+C guard.
+Use a short `--timeout` when appropriate. Only one pane-specific `agent get`
+is polled per tick. A reported child that disappears fails promptly; a child
+that exits before ever reporting still requires the bounded timeout.
+
+The preflight uniqueness check cannot reserve a name: herdr only permits
+renaming a running agent. Concurrent same-name spawns can both create panes;
+the server rejects the losing rename, and the launcher reports that pane.
+Use `herdr agent get/read/wait` to observe work.
+
+Outside herdr, `/herdr` explains that it requires `HERDR_ENV=1` and performs
+no file reads, socket requests, or subprocess launches. The CLI binary comes
+from `HERDR_BIN_PATH` when available, otherwise `herdr` in `PATH`. On Windows,
+launch commands assume herdr's default PowerShell shell.
+
+### Why not native `herdr agent prompt`?
+
+In herdr 0.9.1, custom lifecycle reports can display `codepuppy idle`, but
+native prompting requires a hard-coded known agent kind. Reporting session
+identity does not remove that gate. `agent start --kind` and `integration
+install` likewise have fixed supported-kind lists. An upstream Code Puppy
+kind/integration is a follow-up; no agent impersonation or parallel reporter
+is needed here. An agent-callable launcher tool is also deferred.
+
 ## State is authoritative
 
 State is a pure function of two facts the plugin observes directly:

@@ -255,6 +255,23 @@ def _install_exit_guards() -> None:
             logger.debug("herdr: could not install handler for %s", sig, exc_info=True)
 
 
+def _launcher_help():
+    return [("herdr", "Spawn a sibling Code Puppy or send a multiline prompt")]
+
+
+def _launcher_command(command: str, name: str):
+    if name != "herdr":
+        return None
+    from .launcher import execute
+
+    return execute(command)
+
+
+# Register even outside herdr so the command explains its no-op clearly.
+register_callback("custom_command_help", _launcher_help)
+register_callback("custom_command", _launcher_command)
+
+
 if _reporter.active:
     register_callback("handle_cli_args", _on_handle_cli_args)
     register_callback("startup", _on_startup)
