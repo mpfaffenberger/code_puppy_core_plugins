@@ -51,6 +51,6 @@ def emit_inline_image(path: str | Path) -> bool:
         with suspended_run_ui():
             sys.stdout.write(sequence)
             sys.stdout.flush()
-    except Exception:
+    except Exception:  # noqa: BLE001 - terminal preview must never break a tool result.
         return False
     return True

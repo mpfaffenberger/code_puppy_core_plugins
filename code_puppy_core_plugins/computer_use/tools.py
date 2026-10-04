@@ -1,26 +1,43 @@
-"""Pydantic-AI registrations for the macOS computer-use backend."""
+"""Pydantic-AI registrations for the computer-use backend."""
 
 from __future__ import annotations
 
 import asyncio
+import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from pydantic_ai import BinaryContent, RunContext, ToolReturn
 
 from .backend import ComputerUseError, backend
+from .batch import run_batch
 from .inline_image import emit_inline_image
 from .settle import wait_for_ui_settle
+from .windows_runtime import WindowsRuntime
 
-MAX_BATCH_STEPS = 20
+_TOOL_LOCK = threading.RLock()
+
+
+def _serialized_call(func, args, kwargs):
+    with _TOOL_LOCK:
+        return func(*args, **kwargs)
 
 
 async def _call(func: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any):
+    cancel = threading.Event()
     try:
-        return await asyncio.to_thread(func, *args, **kwargs)
+        if isinstance(backend, WindowsRuntime):
+            return await asyncio.to_thread(
+                backend.run_request, func, args, kwargs, cancel
+            )
+        return await asyncio.to_thread(_serialized_call, func, args, kwargs)
+    except asyncio.CancelledError:
+        cancel.set()
+        raise
     except ComputerUseError as exc:
         return {"success": False, "error": str(exc)}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - native/provider exceptions are a tool error boundary.
         return {"success": False, "error": f"Computer Use failed: {exc}"}
 
 
@@ -41,7 +58,7 @@ def register_get_app_state(agent):
         result = await _call(backend.get_app_state, app_name, max_nodes)
         if not result.get("success") or not show_screenshot:
             return result
-        return _state_tool_return(result, "macOS app state")
+        return _state_tool_return(result, "app state")
 
     return computer_get_app_state
 
@@ -54,7 +71,7 @@ def register_snapshot(agent):
         max_nodes: int = 100,
         show_screenshot: bool = True,
     ) -> Any:
-        """Inspect a macOS application's accessibility tree.
+        """Inspect a application's accessibility tree.
 
         Call this before acting and again after navigation. Returned element IDs
         are invalidated by the next snapshot. By default, also capture and show
@@ -65,7 +82,7 @@ def register_snapshot(agent):
             result = await _call(backend.get_app_state, app_name, max_nodes)
             if not result.get("success") or not show_screenshot:
                 return result
-            return _state_tool_return(result, "macOS accessibility snapshot")
+            return _state_tool_return(result, "accessibility snapshot")
         return await _call(backend.snapshot, None, max_nodes)
 
     return computer_snapshot
@@ -191,7 +208,7 @@ def register_type_text(agent):
     async def computer_type_text(
         context: RunContext, state_revision: str, text: str
     ) -> dict[str, Any]:
-        """Type Unicode text into the currently focused macOS control."""
+        """Type Unicode text into the currently focused control."""
         del context
         return await _call(backend.type_text, state_revision, text)
 
@@ -246,12 +263,12 @@ def register_screenshot(agent):
         path: str | None = None,
         app_name: str | None = None,
     ) -> Any:
-        """Capture and display a macOS application window."""
+        """Capture and display a application window."""
         del context
         result = await _call(backend.screenshot, path, app_name)
         if not result.get("success"):
             return result
-        return _image_tool_return(result, "macOS screenshot")
+        return _image_tool_return(result, "screenshot")
 
     return computer_screenshot
 
@@ -268,94 +285,17 @@ def register_batch(agent):
         Supported action values are click, set_value, perform_action,
         select_text, press_key, type_text, scroll, drag, and wait. Stop
         immediately when an action fails, then return updated state after
-        deterministic UI settling.
+        deterministic UI settling. For perform_action steps, put the advertised
+        AX/UIA action in action_name (action itself is the batch discriminator).
+        Failed actions may partially execute: inspect fresh state before retrying.
         """
         del context
-        if len(steps) > MAX_BATCH_STEPS:
-            return {
-                "success": False,
-                "error": f"A batch may contain at most {MAX_BATCH_STEPS} steps.",
-            }
-        completed = []
-        try:
-            initial_state = backend.require_state(state_revision)
-        except ComputerUseError as exc:
-            return {"success": False, "error": str(exc)}
-        except Exception as exc:
-            return {
-                "success": False,
-                "error": f"Computer Use activation failed: {exc}",
-            }
-
-        def invoke(action_name: str, kwargs: dict[str, Any]):
-            if action_name == "click":
-                if "element_id" in kwargs:
-                    return backend.click(state_revision, consume=False, **kwargs)
-                return backend.click_pixel(state_revision, consume=False, **kwargs)
-            actions: dict[str, Callable[..., Any]] = {
-                "set_value": backend.set_value,
-                "perform_action": backend.perform_action,
-                "select_text": backend.select_text,
-                "press_key": backend.press_key,
-                "type_text": backend.type_text,
-                "scroll": backend.scroll_pages,
-                "drag": backend.drag_pixel,
-            }
-            return actions[action_name](state_revision, consume=False, **kwargs)
-
-        supported = {
-            "click",
-            "set_value",
-            "perform_action",
-            "select_text",
-            "press_key",
-            "type_text",
-            "scroll",
-            "drag",
-        }
-        for index, step in enumerate(steps):
-            action = str(step.get("action", ""))
-            if action == "wait":
-                seconds = max(0.0, min(float(step.get("seconds", 1)), 10.0))
-                await asyncio.sleep(seconds)
-                result = {"success": True, "seconds": seconds}
-            elif action in supported:
-                kwargs = {key: value for key, value in step.items() if key != "action"}
-                result = await _call(invoke, action, kwargs)
-            else:
-                result = {"success": False, "error": f"Unknown action: {action}"}
-            completed.append({"index": index, "action": action, "result": result})
-            if not result.get("success"):
-                return {"success": False, "completed_steps": completed}
-        try:
-            backend.require_state(state_revision, consume=True)
-        except ComputerUseError as exc:
-            return {
-                "success": False,
-                "error": str(exc),
-                "completed_steps": completed,
-            }
-        except Exception as exc:
-            return {
-                "success": False,
-                "error": f"Computer Use finalization failed: {exc}",
-                "completed_steps": completed,
-            }
-        settle = await asyncio.to_thread(
-            wait_for_ui_settle,
-            backend.snapshot,
-            initial_state.application,
+        result = await _call(
+            run_batch, backend, state_revision, steps, wait_for_ui_settle
         )
-        updated = await _call(backend.get_app_state, initial_state.application, 100)
-        if not updated.get("success"):
-            return {
-                "success": True,
-                "completed_steps": completed,
-                "updated_state_error": updated.get("error"),
-            }
-        updated["completed_steps"] = completed
-        updated["ui_settle"] = settle
-        return _state_tool_return(updated, "macOS state after computer-use batch")
+        if result.get("success") and result.get("screenshot_path"):
+            return _state_tool_return(result, "state after computer-use batch")
+        return result
 
     return computer_use_batch
 

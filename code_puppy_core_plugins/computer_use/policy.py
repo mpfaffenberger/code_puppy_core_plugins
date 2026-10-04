@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -11,6 +10,7 @@ from typing import Any
 from code_puppy.config import CONFIG_DIR
 
 from .backend_types import ComputerUseError
+from .permissions import secure_policy_file
 
 POLICY_PATH = Path(CONFIG_DIR) / "computer_use_policy.json"
 SYSTEM_DENYLIST = {
@@ -20,6 +20,14 @@ SYSTEM_DENYLIST = {
     "com.apple.systemsettings",
     "com.apple.keychainaccess",
     "com.apple.authorizationhost",
+    "consent.exe",
+    "credentialuibroker.exe",
+    "lockapp.exe",
+    "logonui.exe",
+    "lsass.exe",
+    "securityhealthhost.exe",
+    "systemsettings.exe",
+    "winlogon.exe",
 }
 
 
@@ -34,7 +42,14 @@ class PolicyStore:
             return {"enabled": None, "denied": []}
         try:
             payload = json.loads(self.path.read_text())
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError, UnicodeError):
+            return {"enabled": None, "denied": []}
+        if not isinstance(payload, dict):
+            return {"enabled": None, "denied": []}
+        denied = payload.get("denied", [])
+        if not isinstance(denied, list) or not all(
+            isinstance(item, str) for item in denied
+        ):
             return {"enabled": None, "denied": []}
         enabled = payload.get("enabled")
         return {
@@ -46,7 +61,7 @@ class PolicyStore:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, indent=2, sort_keys=True))
-        os.chmod(temporary, 0o600)
+        secure_policy_file(temporary)
         temporary.replace(self.path)
 
     def allow(self, bundle_id: str) -> None:
@@ -98,7 +113,7 @@ class PolicyStore:
             if payload["enabled"] is None:
                 raise ComputerUseError(
                     "Computer Use needs your one-time permission before its first "
-                    "use. It can view screenshots and control apps on this Mac. "
+                    "use. It can view screenshots and control apps on this computer. "
                     "Run `/computer-use enable` to allow it, or "
                     "`/computer-use disable` to keep it off. You can change this "
                     "setting later with the same commands."

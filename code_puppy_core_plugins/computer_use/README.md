@@ -1,10 +1,16 @@
-# macOS Computer Use
+# Computer Use (macOS and Windows)
 
-This opt-in plugin lets Code Puppy inspect and operate the current macOS desktop
-through Apple's Accessibility APIs. It is macOS-only and does not use a virtual
-machine or copy any Codex implementation.
+One opt-in plugin, the same twelve `computer_*` tools, and the same `/computer-use`
+commands on both platforms. macOS uses Accessibility, Quartz, and ScreenCaptureKit;
+Windows uses UI Automation, Win32 input, and HWND-targeted Windows Graphics Capture.
+No virtual machine, duplicate plugin, or alternate Windows tool API is required.
 
-## Install
+**Windows installation, examples, limitations, and live tests:** [WINDOWS.md](WINDOWS.md).
+**Implementation and verification matrix:** [PARITY.md](PARITY.md).
+
+The macOS setup and platform-specific behavior below remain supported.
+
+## macOS installation
 
 ```bash
 pip install "code-puppy[computer-use]"
@@ -51,7 +57,14 @@ application is in front.
    element's advertised actions.
 3. Run one mutation, or one guarded batch of at most 20 mutations.
 4. Fetch fresh state. A completed batch does this automatically after waiting
-   for the accessibility tree to stabilize.
+   for the accessibility tree to stabilize. Check `ui_settle.settled`: a timeout
+   is reported, not a guarantee that animations or network activity finished.
+
+For a batch `perform_action` step, use `action_name` for the advertised AX/UIA
+operation because `action` identifies the step itself, for example:
+`{"action": "perform_action", "element_id": 7, "action_name": "AXPress"}`.
+A failed batch invalidates the revision; the failing action may have partially
+executed, so inspect before retrying.
 
 Before every mutation, the target process is activated and verified as the
 frontmost application. This is required because ScreenCaptureKit can capture a
@@ -100,8 +113,8 @@ xcode-select --install
 ## Test
 
 ```bash
-uv run ruff check code_puppy/plugins/computer_use tests/plugins
-uv run pytest tests/plugins/test_computer_use_*.py -q --no-cov
+uv run ruff check code_puppy_core_plugins/computer_use
+uv run pytest tests/test_computer_use_*.py -q --no-cov
 ```
 
 For a live Ghostty smoke test, launch Code Puppy from Ghostty and ask for
