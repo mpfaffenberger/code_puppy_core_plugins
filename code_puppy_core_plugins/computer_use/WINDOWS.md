@@ -79,9 +79,11 @@ and geometry guards remain in force. Standalone activation and the macOS backend
 retain their existing behavior.
 
 The focus-loss fix has mocked regression coverage, including the serialized UIA
-runtime path. The original public-session sentinel failure remains historical;
-a fresh public-session sentinel retest is still required. Desktop automation was
-left paused during implementation; no new live pass is claimed here.
+runtime path, plus a focused public-session retest on `219210a`: the owned sink
+took focus, the batch stopped without reactivation, and the sentinel stayed at
+zero. Cleanup and final owner pause were verified. The original failure remains
+historical evidence. This closes that regression, not all deferred acceptance
+coverage or universal application compatibility.
 
 `app_name` accepts an exact executable basename (`notepad.exe`), basename without
 extension (`notepad`), exact window title, full executable path, or `hwnd:NUMBER`.

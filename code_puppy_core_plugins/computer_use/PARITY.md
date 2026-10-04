@@ -42,9 +42,11 @@ the companion core-plugins repository contains the implementation.
   correction, and checkpoint-based batch focus-loss fix (initial baseline: 187;
   foreground-fix baseline: 204; coordinate-fix baseline: 209).
 - The batch focus-loss fix is verified by mocked regressions, including the
-  serialized Windows runtime. No live desktop tests were run for this fix while
-  automation was paused. A fresh public sentinel retest remains outstanding;
-  earlier live results below are prior evidence, not reruns on this change.
+  serialized Windows runtime, and a subsequent focused public-session retest on
+  `219210a`. The owned sink took focus, the batch stopped, and the sentinel stayed
+  at zero. Cleanup and final owner pause were verified. The original failure is
+  retained in the acceptance evidence; earlier live results below are prior
+  evidence, not complete campaign reruns on this change.
 - The existing macOS backend's 21 original methods were compared by Python AST
   against the upstream baseline: unchanged. A small `invalidate_state` method was
   added for shared failed-batch cleanup. Imports/formatting and module location changed.
