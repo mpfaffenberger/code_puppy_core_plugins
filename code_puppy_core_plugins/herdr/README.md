@@ -64,8 +64,10 @@ Spawn writes the prompt to an exclusive private temporary file (mode 0600
 on POSIX). A short, single-line Python bootstrap reads and deletes that file
 before passing the complete text as **one initial-command argument** to the
 installed module. This avoids shell canonical line-buffer limits and editor
-readiness races. Startup failure cleans up the file; a hard caller crash before
-the child reads it can leave a private temporary file. The launcher never
+readiness races. Startup failure cleans up the file; a timeout can delete it
+before a slow child reads it, causing that child to fail without its prompt.
+Inspect the reported pane rather than retrying blindly. A hard caller crash
+before the child reads it can leave a private temporary file. The launcher never
 retries a possibly delivered initial command. A working child is named
 promptly; a short task may already have completed when spawn returns.
 
