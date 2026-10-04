@@ -256,7 +256,7 @@ def _install_exit_guards() -> None:
 
 
 def _launcher_help():
-    return [("herdr", "Spawn a sibling Code Puppy or send a multiline prompt")]
+    return [("herdr", "Spawn a sibling Code Puppy or send a single-line prompt")]
 
 
 def _launcher_command(command: str, name: str):

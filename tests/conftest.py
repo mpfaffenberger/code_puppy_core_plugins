@@ -17,8 +17,9 @@ def _isolate_herdr_environment():
     Clear before collection, not in a fixture: plugin modules may import while
     pytest collects tests. Individual transport tests supply fake context.
     """
-    for name in ("HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID"):
-        os.environ.pop(name, None)
+    for name in tuple(os.environ):
+        if name.startswith("HERDR_"):
+            os.environ.pop(name, None)
 
 
 _isolate_herdr_environment()

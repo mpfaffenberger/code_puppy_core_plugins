@@ -32,7 +32,7 @@ From a Code Puppy running inside herdr:
 
 ```text
 /herdr spawn fixer --prompt-file brief.md
-/herdr spawn reviewer --direction down --cwd ./project --prompt "Review the tests" -- --model MODEL
+/herdr spawn reviewer --direction down --cwd ./project --prompt-file review.md -- --model MODEL
 /herdr send fixer Don't forget the tests
 /herdr send fixer --file follow-up.txt
 ```
@@ -69,19 +69,31 @@ the child reads it can leave a private temporary file. The launcher never
 retries a possibly delivered initial command. A working child is named promptly;
 a short task may already have completed when spawn returns.
 
-`send` preserves everything after the name literally (including apostrophes,
-spaces and leading option-like text). `--file PATH` is the explicit file form;
-`@` is ordinary text. File sends remove one conventional trailing newline;
+**Core preprocessing limitation:** the interactive core parses attachments
+before dispatching `/herdr`, removing quotes and normalizing whitespace.
+Inline multiword `--prompt` values, quoted paths containing spaces, and quoted
+multiword child arguments therefore are not supported through this boundary.
+Use whitespace-free paths and `--prompt-file` for briefs. Inline send text
+arrives already normalized; it is not byte-preserving, and attachment-like
+paths/URLs may be consumed by the core before dispatch. This plugin cannot
+recover raw input; a raw-command dispatch seam requires an upstream change.
+
+The launcher forwards the send tail it receives without further shell parsing.
+`--file PATH` is the explicit file form; it bypasses the caller's inline-text
+normalization, but the child still applies its usual prompt preprocessing. File sends remove one conventional trailing newline;
 other newlines are rejected. Send accepts **single-line** prompts only: multiline
 paste is unsafe in the classic editor or before bracketed paste is enabled.
 Use `spawn --prompt-file` for multiline work. Send rechecks a unique idle Code
 Puppy's terminal identity and refuses working/blocked agents. It uses herdr's
 atomic `pane.send_input` text+Enter through `pane run`. Empty prompts and
-terminal controls are rejected. Send rejects leading `/` or `!` rather than
-executing commands. Spawn accepts leading `/` as literal initial prompt text,
-but rejects leading `!` because the core initial-command path supports shell
-passthrough. Quoting around send text is literal, not shell syntax. Success
-confirms submission, not completion.
+terminal controls are rejected. Send rejects bare `exit`, `quit`, and `clear`
+(case-insensitive), and tokens beginning with `/` or `!` even inside quotes.
+This conservative token guard also rejects prose containing absolute paths;
+use prompted spawn for such briefs. It avoids reading attachments merely to
+predict whether the child would expose a command. Spawn accepts leading `/`
+as literal initial prompt text, but rejects leading `!` because the core
+initial-command path supports shell passthrough. Success confirms submission,
+not completion or byte-identical model/history text.
 
 **Startup caveat:** a prompt sent immediately after a no-prompt spawn may be
 dropped. The startup idle report precedes input-editor readiness; the editor
@@ -91,8 +103,10 @@ this gap from an input-ready idle pane. For the child's first task, prefer
 not depend on editor readiness. A successful send acknowledges the pane
 write, not child receipt.
 
-Prompt files and single-line sends are capped at 24,000 UTF-8 bytes. The actual
-typed launch command (bootstrap, path and quoted child arguments) must remain
+Spawn prompts are capped at 24,000 UTF-8 bytes. Single-line sends must stay
+under 1,000 UTF-8 bytes because the classic editor's canonical line buffer can
+otherwise discard input or Enter even after startup. Use `spawn --prompt-file`
+for larger briefs. The actual typed launch command (bootstrap, path and quoted child arguments) must remain
 under 1,000 UTF-8 bytes and contain no newline; otherwise it fails before any
 split. This conservative cap avoids even an unready macOS shell's line buffer.
 The command blocks the caller while waiting, prints the new pane and timeout

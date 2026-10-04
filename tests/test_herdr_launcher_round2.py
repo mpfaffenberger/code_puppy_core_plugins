@@ -76,7 +76,10 @@ def test_bootstrap_reads_once_deletes_and_forwards_one_argument(tmp_path):
     )
     result = subprocess.run(
         [sys.executable, "-P", "-c", BOOTSTRAP, str(handoff), "--model", "test"],
-        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        env={
+            **{k: v for k, v in os.environ.items() if not k.startswith("HERDR_")},
+            "PYTHONPATH": str(tmp_path),
+        },
         capture_output=True,
         text=True,
         check=True,

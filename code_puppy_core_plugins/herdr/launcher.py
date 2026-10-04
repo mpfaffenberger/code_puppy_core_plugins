@@ -56,10 +56,15 @@ class ControlClient:
             body = json.loads(reply.stderr if reply.returncode else reply.stdout)
         except ValueError as exc:
             raise LauncherError("herdr returned an invalid response") from exc
+        if not isinstance(body, dict):
+            raise LauncherError("herdr returned an invalid response envelope")
         if reply.returncode or "error" in body:
+            error = body.get("error", {})
+            if not isinstance(error, dict):
+                raise LauncherError("herdr returned an invalid response error")
             raise LauncherError(
-                body.get("error", {}).get("message", "herdr request failed"),
-                code=body.get("error", {}).get("code"),
+                error.get("message", "herdr request failed"),
+                code=error.get("code"),
             )
         result = body.get("result")
         if not isinstance(result, dict):
@@ -246,14 +251,26 @@ def send(client, name, prompt):
     _inside()
     _validate_name(name)
     prompt = _text(prompt)
-    if prompt.lstrip().startswith(("/", "!")):
-        raise LauncherError("Send cannot execute slash commands or shell passthrough.")
+    # The child strips quotes before dispatch, and may remove attachment
+    # tokens. Reject command-like tokens anywhere so an attachment cannot
+    # expose a formerly non-leading slash command. No attachment files are read.
+    try:
+        tokens = shlex.split(prompt, posix=not _windows())
+    except ValueError:
+        tokens = prompt.split()  # matches the core's unmatched-quote fallback
+    tokens = [token.strip("\"'") for token in tokens]
+    if prompt.strip().lower() in {"exit", "quit", "clear"} or any(
+        token.lstrip().startswith(("/", "!")) for token in tokens
+    ):
+        raise LauncherError("Send cannot execute commands or shell passthrough.")
     if "\n" in prompt:
         raise LauncherError(
             "Multiline send is unsafe in classic/startup input. Use spawn --prompt-file instead."
         )
-    if len(prompt.encode("utf-8")) > 24000:
-        raise LauncherError("Prompt is too large (24,000-byte limit).")
+    if len(prompt.encode("utf-8")) >= 1000:
+        raise LauncherError(
+            "Send requires under 1,000 UTF-8 bytes. Use spawn --prompt-file instead."
+        )
     agents = client.call("agent", "list")["agents"]
     matches = [a for a in agents if a.get("name") == name]
     if len(matches) != 1 or not _ready(matches[0]):
@@ -284,7 +301,14 @@ def _words(command, *, windows=None):
     return words
 
 
-_USAGE = "/herdr spawn NAME [--prompt TEXT | --prompt-file PATH] [-- CHILD_ARGS]\n/herdr send NAME TEXT\n/herdr send NAME --file PATH"
+_USAGE = """/herdr spawn NAME [--direction right|down] [--cwd PATH]
+    [--timeout SECONDS (default 30, maximum 300)]
+    [--prompt TEXT | --prompt-file PATH] [-- CHILD_ARGS]
+/herdr send NAME TEXT
+/herdr send NAME --file PATH
+Core preprocessing normalizes inline quotes/spaces before dispatch.
+Use whitespace-free paths and --prompt-file for multiword briefs.
+Send requires one line under 1,000 UTF-8 bytes; no command tokens."""
 
 
 def execute(command, *, client_factory=ControlClient):
