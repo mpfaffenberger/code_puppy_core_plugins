@@ -4,6 +4,12 @@ import os
 
 import pytest
 
+from code_puppy_core_plugins.computer_use.backend_types import ComputerUseError
+from code_puppy_core_plugins.computer_use.geometry import CaptureGeometry, Rect
+from code_puppy_core_plugins.computer_use.policy import PolicyStore
+from code_puppy_core_plugins.computer_use.safety import require_safe_state
+from code_puppy_core_plugins.computer_use.state import state_store
+
 
 def assert_private_file(path):
     if os.name != "nt":
@@ -17,13 +23,6 @@ def assert_private_file(path):
     acl = security.GetSecurityDescriptorDacl()
     assert acl.GetAceCount() == 2  # current user and LocalSystem; no inherited access
     assert security.GetSecurityDescriptorControl()[0] & win32security.SE_DACL_PROTECTED
-
-
-from code_puppy_core_plugins.computer_use.backend_types import ComputerUseError
-from code_puppy_core_plugins.computer_use.geometry import CaptureGeometry, Rect
-from code_puppy_core_plugins.computer_use.policy import PolicyStore
-from code_puppy_core_plugins.computer_use.safety import require_safe_state
-from code_puppy_core_plugins.computer_use.state import state_store
 
 
 def test_policy_reports_only_explicit_opt_in_as_enabled(tmp_path):
