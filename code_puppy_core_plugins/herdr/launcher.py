@@ -254,11 +254,12 @@ def send(client, name, prompt):
     # The child strips quotes before dispatch, and may remove attachment
     # tokens. Reject command-like tokens anywhere so an attachment cannot
     # expose a formerly non-leading slash command. No attachment files are read.
+    lexical = prompt.replace(r"\ ", " ")  # core's escaped-space normalization
     try:
-        tokens = shlex.split(prompt, posix=not _windows())
+        tokens = shlex.split(lexical, posix=not _windows())
     except ValueError:
-        tokens = prompt.split()  # matches the core's unmatched-quote fallback
-    tokens = [token.strip("\"'") for token in tokens]
+        tokens = lexical.split()  # matches the core's unmatched-quote fallback
+    tokens = [part for token in tokens for part in token.strip("\"'").split()]
     if prompt.strip().lower() in {"exit", "quit", "clear"} or any(
         token.lstrip().startswith(("/", "!")) for token in tokens
     ):

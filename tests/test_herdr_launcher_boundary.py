@@ -120,6 +120,30 @@ def test_core_boundary_file_brief_avoids_quote_loss(launcher_env, monkeypatch):
     assert spawn.call_args.kwargs["prompt"] == "Review the tests\nincluding edge cases"
 
 
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_file_send_rejects_child_escaped_space_command(
+    launcher_env, monkeypatch, quote
+):
+    from code_puppy.command_line.attachments import parse_prompt_attachments
+    from code_puppy_core_plugins.herdr.register_callbacks import _launcher_command
+
+    text = quote + r"\ /clear" + quote
+    assert parse_prompt_attachments(text).prompt == "/clear"
+    (launcher_env / "follow-up.txt").write_text(text)
+    client = FakeClient()
+    # execute's bound default factory is replaced explicitly; dispatch still
+    # passes through the actual core parser and registered callback function.
+    execute = launcher.execute
+    monkeypatch.setattr(
+        launcher,
+        "execute",
+        lambda command: execute(command, client_factory=lambda: client),
+    )
+    command = parse_prompt_attachments("/herdr send fixer --file follow-up.txt").prompt
+    assert "cannot execute commands" in _launcher_command(command, "herdr")
+    assert not client.calls
+
+
 def test_core_boundary_normalizes_inline_send(launcher_env, monkeypatch):
     from code_puppy.command_line.attachments import parse_prompt_attachments
     from code_puppy_core_plugins.herdr.register_callbacks import _launcher_command

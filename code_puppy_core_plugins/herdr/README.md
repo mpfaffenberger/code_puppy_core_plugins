@@ -66,8 +66,8 @@ before passing the complete text as **one initial-command argument** to the
 installed module. This avoids shell canonical line-buffer limits and editor
 readiness races. Startup failure cleans up the file; a hard caller crash before
 the child reads it can leave a private temporary file. The launcher never
-retries a possibly delivered initial command. A working child is named promptly;
-a short task may already have completed when spawn returns.
+retries a possibly delivered initial command. A working child is named
+promptly; a short task may already have completed when spawn returns.
 
 **Core preprocessing limitation:** the interactive core parses attachments
 before dispatching `/herdr`, removing quotes and normalizing whitespace.
@@ -80,9 +80,10 @@ recover raw input; a raw-command dispatch seam requires an upstream change.
 
 The launcher forwards the send tail it receives without further shell parsing.
 `--file PATH` is the explicit file form; it bypasses the caller's inline-text
-normalization, but the child still applies its usual prompt preprocessing. File sends remove one conventional trailing newline;
-other newlines are rejected. Send accepts **single-line** prompts only: multiline
-paste is unsafe in the classic editor or before bracketed paste is enabled.
+normalization, but the child still applies its usual prompt preprocessing.
+File sends remove one conventional trailing newline; other newlines are rejected.
+Send accepts **single-line** prompts only: multiline paste is unsafe in the
+classic editor or before bracketed paste is enabled.
 Use `spawn --prompt-file` for multiline work. Send rechecks a unique idle Code
 Puppy's terminal identity and refuses working/blocked agents. It uses herdr's
 atomic `pane.send_input` text+Enter through `pane run`. Empty prompts and
@@ -106,9 +107,9 @@ write, not child receipt.
 Spawn prompts are capped at 24,000 UTF-8 bytes. Single-line sends must stay
 under 1,000 UTF-8 bytes because the classic editor's canonical line buffer can
 otherwise discard input or Enter even after startup. Use `spawn --prompt-file`
-for larger briefs. The actual typed launch command (bootstrap, path and quoted child arguments) must remain
-under 1,000 UTF-8 bytes and contain no newline; otherwise it fails before any
-split. This conservative cap avoids even an unready macOS shell's line buffer.
+for larger briefs. The actual typed launch command (bootstrap, path and quoted
+child arguments) must remain under 1,000 UTF-8 bytes and contain no newline;
+otherwise it fails before any split. This conservative cap avoids even an unready macOS shell's line buffer.
 The command blocks the caller while waiting, prints the new pane and timeout
 as progress, and may not be interruptible under the core's Ctrl+C guard.
 Use a short `--timeout` when appropriate. Only one pane-specific `agent get`
