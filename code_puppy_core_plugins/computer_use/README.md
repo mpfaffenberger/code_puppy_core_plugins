@@ -66,11 +66,18 @@ operation because `action` identifies the step itself, for example:
 A failed batch invalidates the revision; the failing action may have partially
 executed, so inspect before retrying.
 
-Before every mutation, the target process is activated and verified as the
+On macOS, before every mutation, the target process is activated and verified as the
 frontmost application. This is required because ScreenCaptureKit can capture a
 background window, while Quartz sends global clicks and keystrokes to whichever
 application is actually frontmost. Use a guarded batch for click-then-type
 workflows so focus is retained and the result is verified in one control loop.
+
+On Windows, standalone mutations and batch entry may activate the target. Once a
+batch starts, validation only checks foreground ownership: detected focus loss
+aborts the batch instead of reactivating the target. This applies during waits,
+between actions, and through final state refresh. Already executed steps are not
+rolled back. These are checkpoint checks, not continuous focus monitoring or
+instant interruption of a blocking native call. See [WINDOWS.md](WINDOWS.md).
 
 Pixel clicks and drags use window-local screenshot pixels. The backend converts
 them to global Quartz points using the captured window bounds, so Retina scaling,
@@ -85,7 +92,9 @@ and cursor placement before or after the match.
 - Persisted user consent is required before tools are exposed to the model;
   disabling the feature removes them again and blocks future captures/actions.
 - State revisions and element IDs are single-use and expire after 120 seconds.
-- Physical keyboard and pointer input do not interrupt YOLO-mode execution.
+- Ordinary physical keyboard/pointer input is not an explicit cancellation signal.
+  Windows batches additionally abort on focus loss detected at guard checkpoints.
+  Use the dedicated emergency-stop mechanism to request a stop deliberately.
 - Every capture and mutation re-checks the application policy; the emergency
   stop therefore also interrupts a batch at its next action boundary.
 - Password-field values are never returned in snapshots.

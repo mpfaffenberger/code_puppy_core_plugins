@@ -37,6 +37,22 @@ class WindowsBackend:
         self.states = states or state_store
         self.cancelled = cancelled or threading.Event()
         self._scroll_ids = []
+        self._batch_state = None
+
+    @contextmanager
+    def batch_scope(self, revision):
+        """Activate once, then guard without reclaiming focus until batch exit.
+
+        The runtime serializes the entire scope on the UIA worker. Retain the
+        original state through settling, which can invalidate the state store.
+        """
+        if self._batch_state is not None:
+            raise ComputerUseError("Nested computer-use batches are not supported")
+        self._batch_state = self.require_state(revision)
+        try:
+            yield
+        finally:
+            self._batch_state = None
 
     def invalidate_state(self):
         self.states.clear()
@@ -74,6 +90,15 @@ class WindowsBackend:
         self.policy.require(info["process"])
         self.policy.require(info["executable"])
         return info
+
+    def _prepare_target(self, info):
+        """Only a new operation may activate; an active batch only validates."""
+        if self._batch_state is not None:
+            if info["window_id"] != self._batch_state.window_id:
+                raise ComputerUseError("Batch target changed; fetch fresh state")
+            self._guard(self._batch_state)
+            return
+        self._activate(info)
 
     def _activate(self, info):
         def check():
@@ -144,8 +169,12 @@ class WindowsBackend:
                 f"hwnd:{preferred_window_id}" if preferred_window_id else app_name
             )
             self.states.clear()
+            if self._batch_state is not None:
+                self._prepare_target(info)
             nodes, _, metadata = self._tree(info, max_nodes)
             self._info(info["window_id"])
+            if self._batch_state is not None:
+                self._guard(self._batch_state)
             return {
                 "success": True,
                 "application": f"hwnd:{info['window_id']}",
@@ -180,7 +209,7 @@ class WindowsBackend:
             self.states.clear()
             # Match macOS: activate before reading accessibility for providers
             # (notably Electron) that expose their full tree only when focused.
-            self._activate(info)
+            self._prepare_target(info)
             info = self._info(info["window_id"])
             capture = self._capture_window(info)
             nodes, elements, metadata = self._tree(info, max_nodes)
@@ -189,6 +218,8 @@ class WindowsBackend:
                 current[key] != info[key] for key in ("pid", "executable", "bounds")
             ):
                 raise ComputerUseError("Window changed during snapshot; retry")
+            if self._batch_state is not None:
+                self._guard(self._batch_state)
             state = self.states.create(
                 application=f"hwnd:{info['window_id']}",
                 bundle_id=info["process"].casefold(),
@@ -217,7 +248,7 @@ class WindowsBackend:
             state = self.states.require(revision)
             info = self._info(state.window_id)
             self._verify_identity(state, info)
-            self._activate(info)
+            self._prepare_target(info)
             self._guard(state)
             return self.states.require(revision, consume=consume)
 

@@ -93,7 +93,8 @@ def test_command_permission_failure_reported(monkeypatch):
 
 
 def test_failed_batch_invalidates_and_stops():
-    backend = Mock()
+    # A backend without the optional Windows batch scope keeps legacy behavior.
+    backend = Mock(spec=["require_state", "click", "invalidate_state", "type_text"])
     backend.require_state.return_value = SimpleNamespace(application="test")
     backend.click.return_value = {"success": False, "error": "failure"}
     result = run_batch(
@@ -107,6 +108,7 @@ def test_failed_batch_invalidates_and_stops():
     )
     assert not result["success"]
     backend.invalidate_state.assert_called_once()
+    backend.click.assert_called_once_with("revision", consume=False, element_id=1)
     backend.type_text.assert_not_called()
 
 

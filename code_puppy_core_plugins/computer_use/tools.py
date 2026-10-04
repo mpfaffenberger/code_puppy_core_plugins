@@ -293,6 +293,9 @@ def register_batch(agent):
         deterministic UI settling. For perform_action steps, put the advertised
         AX/UIA action in action_name (action itself is the batch discriminator).
         Failed actions may partially execute: inspect fresh state before retrying.
+        Windows activates at batch entry only; detected focus loss afterward
+        aborts without reactivating, including during waits and final refresh.
+        Focus checks are checkpoint-based, not continuous monitoring or rollback.
         """
         del context
         result = await _call(

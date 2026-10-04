@@ -60,6 +60,29 @@ than pretending POSIX chmod bits enforce Windows permissions.
 3. Use the returned `state_revision` for one mutation or a guarded batch.
 4. Inspect fresh state after every standalone mutation. Successful batches return it.
 
+### Batch focus-loss safety
+
+A new standalone mutation or batch may activate its explicitly targeted window.
+After Windows batch entry, focus checks never automatically reactivate it. If
+another window is foreground at a guard checkpoint, the batch stops, invalidates
+its revision, and reports completed steps. Pending sentinel actions must not run.
+This includes wait polling (up to 50ms sleeps), action boundaries, and the final
+settling/state-refresh phase. Even final refresh cannot steal focus back.
+
+This is checkpoint-based detection: a transient loss and return between checks
+can go unobserved, and a blocking UIA call cannot necessarily be interrupted.
+Completed actions are not rolled back. A provider action that opens another
+window can therefore abort the remainder of its batch; inspect fresh state and
+explicitly target that window in a new request instead of retrying blindly.
+Explicit cancellation, consent/policy, emergency stop, expiry, process identity,
+and geometry guards remain in force. Standalone activation and the macOS backend
+retain their existing behavior.
+
+The focus-loss fix has mocked regression coverage, including the serialized UIA
+runtime path. The original public-session sentinel failure remains historical;
+a fresh public-session sentinel retest is still required. Desktop automation was
+left paused during implementation; no new live pass is claimed here.
+
 `app_name` accepts an exact executable basename (`notepad.exe`), basename without
 extension (`notepad`), exact window title, full executable path, or `hwnd:NUMBER`.
 An ambiguous match returns matching titles and `hwnd:` selectors instead of guessing

@@ -37,9 +37,14 @@ the companion core-plugins repository contains the implementation.
 
 ## Results for this development change
 
-- 209 targeted `test_computer_use*.py` tests passed on Windows after the
-  [foreground activation fix](FOCUS_INVESTIGATION.md) and coordinate-metadata
-  correction (initial baseline: 187; foreground-fix baseline: 204).
+- 220 targeted `test_computer_use*.py` tests passed on Windows after the
+  [foreground activation fix](FOCUS_INVESTIGATION.md), coordinate-metadata
+  correction, and checkpoint-based batch focus-loss fix (initial baseline: 187;
+  foreground-fix baseline: 204; coordinate-fix baseline: 209).
+- The batch focus-loss fix is verified by mocked regressions, including the
+  serialized Windows runtime. No live desktop tests were run for this fix while
+  automation was paused. A fresh public sentinel retest remains outstanding;
+  earlier live results below are prior evidence, not reruns on this change.
 - The existing macOS backend's 21 original methods were compared by Python AST
   against the upstream baseline: unchanged. A small `invalidate_state` method was
   added for shared failed-batch cleanup. Imports/formatting and module location changed.

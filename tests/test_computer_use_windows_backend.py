@@ -388,6 +388,162 @@ def test_key_balance_and_unicode(backend):
     ]
 
 
+@pytest.mark.parametrize(
+    "stage", ["between_steps", "wait", "settle", "settle_snapshot", "capture"]
+)
+def test_batch_focus_loss_never_reactivates(backend, monkeypatch, stage):
+    from code_puppy_core_plugins.computer_use import batch
+
+    state = revision(backend)
+    backend.native.focus = 99  # Initial activation remains permitted.
+    backend.native.foreground = Mock(wraps=backend.native.foreground)
+    settler = Mock(return_value={})
+    backend.get_app_state = Mock(wraps=backend.get_app_state)
+
+    def lose_focus(*args, **kwargs):
+        backend.native.focus = 99
+        return {"success": True}
+
+    if stage == "between_steps":
+        backend.accessibility.click.side_effect = lose_focus
+    elif stage == "wait":
+        monkeypatch.setattr(batch.time, "sleep", lose_focus)
+    elif stage in {"settle", "settle_snapshot"}:
+
+        def settle(snapshot, app):
+            snapshot(app)  # Settling invalidates the revision store.
+            lose_focus()
+            if stage == "settle_snapshot":
+                snapshot(app)  # Must fail here, before final state refresh.
+            return {}
+
+        settler.side_effect = settle
+    else:
+        capture = backend._capture
+
+        def lose_focus_during_capture(*args):
+            lose_focus()
+            return capture(*args)
+
+        backend._capture = lose_focus_during_capture
+
+    result = run_batch(
+        backend,
+        state,
+        [
+            {"action": "click", "element_id": 1},
+            {"action": "wait", "seconds": 1 if stage == "wait" else 0},
+            {"action": "click", "element_id": 1},  # Sentinel
+        ],
+        settler,
+    )
+    assert not result["success"]
+    assert "Focus changed" in str(result)
+    if stage == "settle_snapshot":
+        backend.get_app_state.assert_not_called()
+    assert "state_revision" not in result
+    assert backend.native.focus == 99
+    assert backend.native.foreground.call_count == 1
+    backend.accessibility.focus_window.assert_not_called()
+    assert backend.accessibility.click.call_count == (
+        1 if stage in {"between_steps", "wait"} else 2
+    )
+    assert result["completed_steps"][0]["result"]["success"]
+    assert backend._batch_state is None
+    with pytest.raises(ComputerUseError):
+        backend.states.require(state)
+
+
+@pytest.mark.parametrize("interruption", ["cancel", "pause", "emergency", "geometry"])
+def test_batch_wait_still_honors_other_guards(backend, monkeypatch, interruption):
+    from code_puppy_core_plugins.computer_use import batch
+
+    state = revision(backend)
+    backend.native.foreground = Mock(wraps=backend.native.foreground)
+
+    def interrupt(seconds):
+        if interruption == "cancel":
+            backend.cancelled.set()
+        elif interruption == "pause":
+            backend.policy.set_paused(True)
+        elif interruption == "emergency":
+            backend.native.stop = True
+        else:
+            backend.native.info["bounds"][0] += 1
+
+    monkeypatch.setattr(batch.time, "sleep", interrupt)
+    result = run_batch(
+        backend,
+        state,
+        [
+            {"action": "wait", "seconds": 1},
+            {"action": "click", "element_id": 1},
+        ],
+        Mock(),
+    )
+    assert not result["success"]
+    backend.accessibility.click.assert_not_called()
+    assert backend.native.foreground.call_count == 1
+    assert backend._batch_state is None
+    with pytest.raises(ComputerUseError):
+        backend.states.require(state)
+
+
+def test_batch_scope_cleared_after_provider_failure_and_success(backend):
+    state = revision(backend)
+    backend.accessibility.click.side_effect = ComputerUseError("Provider failed")
+    result = run_batch(backend, state, [{"action": "click", "element_id": 1}], Mock())
+    assert not result["success"]
+    assert backend._batch_state is None
+    backend.accessibility.click.side_effect = None
+    state = revision(backend)
+    backend.native.focus = 99
+    backend.native.foreground = Mock(wraps=backend.native.foreground)
+    result = run_batch(backend, state, [{"action": "click", "element_id": 1}], Mock())
+    assert result["success"]
+    assert backend.native.foreground.call_count == 1
+    assert backend._batch_state is None
+    backend.native.focus = 99
+    backend.click(result["state_revision"], 1)
+    assert backend.native.foreground.call_count == 2
+
+
+def test_runtime_batch_keeps_focus_scope_on_worker(backend):
+    runtime = WindowsRuntime()
+    runtime._backend = backend
+    try:
+        runtime._owner = runtime._executor.submit(threading.get_ident).result()
+        state = revision(backend)
+        backend.native.foreground = Mock(wraps=backend.native.foreground)
+
+        def switch_focus(element):
+            assert threading.get_ident() == runtime._owner
+            backend.native.focus = 99
+            return {"success": True}
+
+        backend.accessibility.click.side_effect = switch_focus
+        result = runtime.run_request(
+            run_batch,
+            (
+                runtime,
+                state,
+                [
+                    {"action": "click", "element_id": 1},
+                    {"action": "click", "element_id": 1},
+                ],
+                Mock(),
+            ),
+            {},
+            threading.Event(),
+        )
+        assert not result["success"]
+        assert backend.accessibility.click.call_count == 1
+        assert backend.native.foreground.call_count == 1
+        assert backend._batch_state is None
+    finally:
+        runtime._executor.shutdown()
+
+
 def test_runtime_uses_one_thread_for_whole_request():
     runtime = WindowsRuntime()
     runtime._backend = SimpleNamespace(states=StateStore())

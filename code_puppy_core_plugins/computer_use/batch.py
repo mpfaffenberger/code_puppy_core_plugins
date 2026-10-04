@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+from contextlib import ExitStack
 
 from .backend_types import ComputerUseError
 
@@ -24,7 +25,11 @@ def run_batch(backend, revision, steps, settler):
         return {"success": False, "error": "A batch must contain 1 to 20 steps."}
     completed = []
     initial = None
+    scope = ExitStack()
     try:
+        batch_scope = getattr(backend, "batch_scope", None)
+        if batch_scope is not None:
+            scope.enter_context(batch_scope(revision))
         initial = backend.require_state(revision)
         for index, step in enumerate(steps):
             action = str(step.get("action", ""))
@@ -84,3 +89,5 @@ def run_batch(backend, revision, steps, settler):
     except Exception as exc:  # noqa: BLE001 - stop the batch on any provider failure.
         backend.invalidate_state()
         return {"success": False, "error": str(exc), "completed_steps": completed}
+    finally:
+        scope.close()
