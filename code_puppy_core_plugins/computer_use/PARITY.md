@@ -37,7 +37,8 @@ the companion core-plugins repository contains the implementation.
 
 ## Results for this development change
 
-- 187 targeted `test_computer_use*.py` tests passed on Windows.
+- 204 targeted `test_computer_use*.py` tests passed on Windows after the
+  [foreground activation fix](FOCUS_INVESTIGATION.md) (initial baseline: 187).
 - The existing macOS backend's 21 original methods were compared by Python AST
   against the upstream baseline: unchanged. A small `invalidate_state` method was
   added for shared failed-batch cleanup. Imports/formatting and module location changed.
@@ -46,7 +47,8 @@ the companion core-plugins repository contains the implementation.
 - The disposable live fixture passed at `(180,180)`, `(2050,180)`, and `(-1300,180)`:
   primary landscape, secondary landscape, and left-hand portrait monitor.
 - Both the modified Code Puppy and core-plugins packages built as wheels.
-- No real user consent was enabled; no existing application documents were used.
+- No tests enabled persistent user consent; no existing application documents
+  were used. The follow-up focus diagnostic honors already granted consent.
 
 ## What this does not prove
 

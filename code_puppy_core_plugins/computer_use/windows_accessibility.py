@@ -233,6 +233,11 @@ class WindowsAccessibility:
         )
 
     @_operation
+    def focus_window(self, hwnd: int) -> dict:
+        """Request focus through UIA itself, never pywinauto's input fallback."""
+        return self.perform_action(self._root(hwnd), "UIASetFocus")
+
+    @_operation
     def perform_action(self, element: object, action: str) -> dict:
         self._guard(element)
         available = self._actions(element, self._password(element))

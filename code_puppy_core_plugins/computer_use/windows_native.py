@@ -7,7 +7,6 @@ No process-wide DPI changes, clipboard writes, shell commands, or elevation.
 from __future__ import annotations
 
 import ctypes as ct
-import time
 from contextlib import contextmanager
 from ctypes import wintypes as wt
 from pathlib import PureWindowsPath
@@ -206,15 +205,10 @@ def list_windows() -> list[dict]:
     return windows
 
 
-def foreground(hwnd: int) -> None:
-    if user32.IsIconic(hwnd):
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-    if user32.GetForegroundWindow() != hwnd:
-        user32.SetForegroundWindow(hwnd)
-        for _ in range(20):
-            if user32.GetForegroundWindow() == hwnd:
-                break
-            time.sleep(0.025)
+def foreground(hwnd: int, *, focus_window=None, check=lambda: None) -> None:
+    from .windows_activation import activate_window
+
+    activate_window(user32, hwnd, focus_window=focus_window, check=check)
     assert_foreground(hwnd)
 
 

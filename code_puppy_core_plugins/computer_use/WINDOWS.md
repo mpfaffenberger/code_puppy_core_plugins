@@ -148,6 +148,23 @@ combination. Capture rejects mismatched frame geometry rather than guessing.
 - Inline previews use the same best-effort terminal helper as macOS. Ordinary
   Windows Terminal may not support its protocols; the model still receives the PNG.
 
+## Foreground activation troubleshooting
+
+Windows can refuse a plain `SetForegroundWindow` request even for a visible,
+allowed target. The backend first tries that API, then requests real UIA
+`SetFocus` on the target when available. It independently checks the foreground
+HWND before proceeding and rechecks policy, cancellation, and process identity.
+It never injects Alt keys, attaches input queues, changes foreground-lock settings,
+or elevates privileges to force activation.
+
+If both methods fail, the error includes the requested/current HWND, the Win32
+request result, and whether UIA was attempted. Manually focus the target and get
+fresh state; do not forge revisions or disable focus checks. This recovery is
+provider-dependent, not a promise that Windows will always allow activation.
+
+See [FOCUS_INVESTIGATION.md](FOCUS_INVESTIGATION.md) for the reproduced failure and
+verification. Existing sessions must restart to load the source fix.
+
 ## Tests
 
 The checkout's `.venv` is a test environment; normal installation is not altered.

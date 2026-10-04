@@ -27,6 +27,8 @@ from tests.agent_test_support import FakeAgent
 
 
 def main():
+    import win32gui
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--x", type=int, default=180)
     parser.add_argument("--y", type=int, default=180)
@@ -171,6 +173,9 @@ def main():
                     "PASS: UIA TextPattern contextual exact selection after supplementary Unicode"
                 )
                 fifth = await state()
+                scroll_before = win32gui.GetScrollInfo(handles["children"]["rich"], 1)[
+                    4
+                ]
                 result = await call(
                     "computer_scroll",
                     state_revision=fifth["state_revision"],
@@ -178,7 +183,15 @@ def main():
                     pages=0.5,
                 )
                 assert result["success"], result
-                print("PASS: semantic fractional-page scrolling")
+                scroll_after = win32gui.GetScrollInfo(handles["children"]["rich"], 1)[4]
+                assert scroll_after > scroll_before, (
+                    scroll_before,
+                    scroll_after,
+                    win32gui.GetScrollInfo(handles["children"]["rich"], 1),
+                )
+                print(
+                    "PASS: fractional-page scrolling changed the native scrollbar position"
+                )
                 sixth = await state()
                 edit = node(sixth, role="Edit", action="UIASetValue")
                 result = await call(
@@ -259,7 +272,13 @@ def main():
                     end_y=start_y,
                 )
                 assert dragged["success"], dragged
-                print("PASS: physical-pixel drag")
+                selection = win32gui.SendMessage(
+                    handles["children"]["edit"], 0x00B0, 0, 0
+                )
+                assert (selection & 0xFFFF) != ((selection >> 16) & 0xFFFF), selection
+                print(
+                    "PASS: physical-pixel drag produced a nonempty native text selection"
+                )
 
                 # Cover only our own fixture with a solid-blue fixture. A desktop
                 # crop would be blue; HWND capture must retain the editor pixels.
@@ -269,7 +288,7 @@ def main():
                         sys.executable,
                         str(Path(__file__).with_name("windows_native_fixture.py")),
                         "--x",
-                        str(args.x),
+                        str(args.x + 700),
                         "--y",
                         str(args.y),
                         "--cover",
@@ -283,15 +302,47 @@ def main():
                     )["hwnd"]
                     from code_puppy_core_plugins.computer_use import windows_native
 
-                    await asyncio.to_thread(windows_native.foreground, cover_hwnd)
+                    await asyncio.to_thread(
+                        runtime.run_request,
+                        lambda: runtime._backend._activate(
+                            runtime._backend._info(cover_hwnd)
+                        ),
+                        (),
+                        {},
+                        threading.Event(),
+                    )
+                    await asyncio.sleep(0.2)
+                    baseline = await call("computer_screenshot", app_name=app)
+                    assert baseline["success"], baseline
+                    assert windows_native.user32.GetForegroundWindow() == cover_hwnd
+                    # Keep both captures unfocused to avoid caret/titlebar differences.
+                    win32gui.SetWindowPos(cover_hwnd, 0, args.x, args.y, 0, 0, 0x0015)
                     await asyncio.sleep(0.2)
                     screenshot = await call("computer_screenshot", app_name=app)
                     assert screenshot["success"], screenshot
                     assert windows_native.user32.GetForegroundWindow() == cover_hwnd
-                    from PIL import Image
+                    from PIL import Image, ImageChops
 
-                    with Image.open(screenshot["path"]) as image:
-                        assert image.convert("RGB").getpixel((400, 400)) != (0, 0, 255)
+                    with (
+                        Image.open(baseline["path"]) as reference,
+                        Image.open(screenshot["path"]) as image,
+                    ):
+                        reference_rgb = reference.convert("RGB")
+                        assert (
+                            len(
+                                reference_rgb.getcolors(
+                                    reference.width * reference.height
+                                )
+                            )
+                            > 1
+                        )
+                        assert image.size == reference.size
+                        assert (
+                            ImageChops.difference(
+                                reference_rgb, image.convert("RGB")
+                            ).getbbox()
+                            is None
+                        )
                     print(
                         "PASS: occluded background-window capture; foreground unchanged, no overlay pixels"
                     )

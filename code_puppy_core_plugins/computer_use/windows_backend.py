@@ -69,6 +69,16 @@ class WindowsBackend:
         self.policy.require(info["executable"])
         return info
 
+    def _activate(self, info):
+        def check():
+            current = self._info(info["window_id"])
+            if any(current[key] != info[key] for key in ("pid", "executable")):
+                raise ComputerUseError("Target process changed during activation")
+
+        self.native.foreground(
+            info["window_id"], focus_window=self.accessibility.focus_window, check=check
+        )
+
     def _resolve(self, app_name):
         self._check()
         if not app_name:
@@ -161,7 +171,7 @@ class WindowsBackend:
             self.states.clear()
             # Match macOS: activate before reading accessibility for providers
             # (notably Electron) that expose their full tree only when focused.
-            self.native.foreground(info["window_id"])
+            self._activate(info)
             info = self._info(info["window_id"])
             capture = self._capture_window(info)
             nodes, elements, metadata = self._tree(info, max_nodes)
@@ -200,7 +210,7 @@ class WindowsBackend:
             state = self.states.require(revision)
             info = self._info(state.window_id)
             self._verify_identity(state, info)
-            self.native.foreground(state.window_id)
+            self._activate(info)
             self._guard(state)
             return self.states.require(revision, consume=consume)
 

@@ -51,7 +51,8 @@ class Native:
     def list_windows(self):
         return [deepcopy(self.info)]
 
-    def foreground(self, hwnd):
+    def foreground(self, hwnd, *, focus_window=None, check=lambda: None):
+        check()
         self.focus = hwnd
 
     def assert_foreground(self, hwnd):
@@ -129,6 +130,23 @@ def test_resolve_exact_target(backend, app):
     assert (
         result["action_coordinate_system"] == "top-left, global Windows physical pixels"
     )
+
+
+@pytest.mark.parametrize(
+    "field,value", [("pid", 8), ("executable", r"C:\Other\editor.exe")]
+)
+def test_activation_rechecks_process_identity(backend, field, value):
+    def activate(hwnd, *, focus_window, check):
+        check()
+        backend.native.info[field] = value
+        check()
+        pytest.fail("Must not continue after an identity change")
+
+    backend.native.foreground = activate
+    with pytest.raises(ComputerUseError, match="changed during activation"):
+        backend.get_app_state("editor.exe")
+    backend.accessibility.snapshot.assert_not_called()
+    assert backend.states.current() is None
 
 
 def test_ambiguous_target_rejected(backend):
