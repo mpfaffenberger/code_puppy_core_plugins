@@ -71,7 +71,7 @@ def register_snapshot(agent):
         max_nodes: int = 100,
         show_screenshot: bool = True,
     ) -> Any:
-        """Inspect a application's accessibility tree.
+        """Inspect an application's accessibility tree.
 
         Call this before acting and again after navigation. Returned element IDs
         are invalidated by the next snapshot. By default, also capture and show

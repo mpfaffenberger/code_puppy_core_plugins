@@ -31,7 +31,8 @@ class WindowsRuntime:
                 comtypes.CoInitializeEx()
             except ImportError as exc:
                 raise ComputerUseError(
-                    "Install the Windows computer-use extra: pip install 'code-puppy[computer-use]'"
+                    "Install the Windows dependencies in this environment: "
+                    "pip install 'code-puppy-core-plugins[computer-use]'"
                 ) from exc
             from .windows_backend import WindowsBackend
 

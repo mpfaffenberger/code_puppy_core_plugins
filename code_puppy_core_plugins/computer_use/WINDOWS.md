@@ -20,12 +20,13 @@ The implementation now lives in the upstream **code_puppy_core_plugins** package
 Do **not** copy this directory into `~/.code_puppy/plugins`: that would register
 another copy of the existing plugin, potentially duplicating hooks and commands.
 
-For this development checkout, try an isolated environment first (PowerShell):
+For source testing, replace these placeholders with your checkout locations and
+try an isolated environment first (PowerShell):
 
 ```powershell
 uv run --isolated --no-project --python 3.12 `
-  --with "$HOME\github\code-puppy-computer-use[computer-use]" `
-  --with "$HOME\github\code-puppy-core-plugins-computer-use[computer-use]" `
+  --with "C:\path\to\code_puppy" `
+  --with "C:\path\to\code_puppy_core_plugins[computer-use]" `
   code-puppy
 ```
 
@@ -36,9 +37,18 @@ If the prototype is installed, disable it with `/windows-desktop disable` before
 using this implementation, and move its directory out of the plugin folder while
 Code Puppy is closed. No prototype consent is silently migrated.
 
-After the change is published in coordinated core/plugin releases, normal installs
-will use `pip install "code-puppy[computer-use]"`. Until then, installing the
-published package alone does **not** include this development change.
+Once a plugin release containing this change is published, install its Windows
+dependencies into the same environment as Code Puppy:
+
+```powershell
+python -m pip install "code-puppy-core-plugins[computer-use]"
+```
+
+The currently published `code-puppy[computer-use]` extra only supplies macOS
+libraries; it does not yet install Windows dependencies. A companion core
+packaging update can delegate to the plugin extra. Until this plugin change is
+published, use the source checkout above rather than expecting the existing
+published plugin version to contain it.
 
 Inside the new session:
 

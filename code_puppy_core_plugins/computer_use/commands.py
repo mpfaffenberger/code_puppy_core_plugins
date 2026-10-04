@@ -15,7 +15,7 @@ def command_help() -> list[tuple[str, str]]:
     return [
         (
             "computer-use",
-            t("Enable, disable, pause, or configure Computer Use"),
+            t("plugin.computer-use.command.help"),
         )
     ]
 
@@ -56,7 +56,7 @@ def _handle_command(command: str, name: str) -> bool | None:
         emit_success("Computer Use resumed.")
     elif subcommand in {"allow", "deny"}:
         if len(tokens) < 3:
-            emit_error(t("Usage: /computer-use allow|deny BUNDLE_ID_OR_EXE"))
+            emit_error(t("plugin.computer-use.command.policy_usage"))
             return True
         bundle_id = tokens[2]
         if subcommand == "deny":

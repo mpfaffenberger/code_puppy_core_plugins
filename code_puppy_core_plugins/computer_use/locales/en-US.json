@@ -1,0 +1,5 @@
+{
+  "plugin.computer-use.command.help": "Enable, disable, pause, or configure Computer Use",
+  "plugin.computer-use.command.policy_usage": "Usage: /computer-use allow|deny BUNDLE_ID_OR_EXE",
+  "plugin.computer-use.startup.windows_opt_in": "Computer Use is off by default. Run `/computer-use enable` to opt in."
+}

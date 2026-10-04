@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import sys
+from importlib.resources import files
 from typing import Any
 
 from code_puppy.callbacks import register_callback
-from code_puppy.i18n import t
+from code_puppy.i18n import register_plugin_catalog, t
 from code_puppy.messaging import emit_info
 
 from .policy import policy_store
+
+register_plugin_catalog(files(__package__).joinpath("locales"))
 
 _TOOL_NAMES = (
     "computer_get_app_state",
@@ -82,11 +85,7 @@ def _startup() -> None:
         if sys.platform == "darwin":
             emit_info(t("computer_use.startup.opt_in"))
         else:
-            emit_info(
-                t(
-                    "Computer Use is off by default. Run `/computer-use enable` to opt in."
-                )
-            )
+            emit_info(t("plugin.computer-use.startup.windows_opt_in"))
 
 
 def _custom_help():
