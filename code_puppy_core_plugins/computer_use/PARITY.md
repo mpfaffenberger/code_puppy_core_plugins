@@ -37,8 +37,9 @@ the companion core-plugins repository contains the implementation.
 
 ## Results for this development change
 
-- 204 targeted `test_computer_use*.py` tests passed on Windows after the
-  [foreground activation fix](FOCUS_INVESTIGATION.md) (initial baseline: 187).
+- 209 targeted `test_computer_use*.py` tests passed on Windows after the
+  [foreground activation fix](FOCUS_INVESTIGATION.md) and coordinate-metadata
+  correction (initial baseline: 187; foreground-fix baseline: 204).
 - The existing macOS backend's 21 original methods were compared by Python AST
   against the upstream baseline: unchanged. A small `invalidate_state` method was
   added for shared failed-batch cleanup. Imports/formatting and module location changed.

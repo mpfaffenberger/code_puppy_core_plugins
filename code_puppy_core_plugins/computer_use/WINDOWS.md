@@ -109,6 +109,15 @@ screens, negative monitor origins, and different display scaling are handled via
 per-thread DPI awareness and DWM visible-frame bounds. Windows display settings are
 never changed. Moving/resizing a window requires fresh state.
 
+`action_coordinate_system` and `screenshot_coordinate_system` both describe these
+**window-local** physical pixels. `bounds_coordinate_system` separately identifies
+UIA node bounds and `window_bounds_points` as **global** Windows physical pixels
+(the legacy `window_bounds_points` field name is retained for API compatibility).
+For a window at `(180,180)`, a global control center `(288,292)` corresponds to
+local action coordinates `(108,112)`, not `(288,292)`. Prefer semantic element IDs.
+Earlier development builds incorrectly labeled action coordinates as global;
+that metadata bug is corrected without changing actual click/drag mapping.
+
 The live fixture was tested on the user's two 1920x1080 landscape monitors and the
 1440x2560 portrait monitor left of the primary screen, including real pixel clicks
 and drags. These tests cover the current configuration, not every GPU/scaling/RDP
@@ -147,6 +156,20 @@ combination. Capture rejects mismatched frame geometry rather than guessing.
   a wedged native driver may retain a daemon cleanup worker until process exit.
 - Inline previews use the same best-effort terminal helper as macOS. Ordinary
   Windows Terminal may not support its protocols; the model still receives the PNG.
+
+## Diagnosing background-capture focus changes
+
+Explicit Windows screenshots include `foreground_observation.before_capture` and
+`foreground_observation.after_capture`: HWND samples taken immediately around the
+native HWND capture. They do not include subsequent image presentation, terminal
+UI work, compaction, or a later verification shell call. Equal samples do not rule
+out a transient focus change, and different samples do not establish causality.
+
+If a separate shell check reports the controller foreground afterward, inspect
+these samples before blaming capture. The screenshot path does not activate or
+restore a foreground window; it must not steal focus back from user activity.
+The interactive acceptance report's controller-focus observation remains unresolved
+until measured with this instrumentation in that session.
 
 ## Foreground activation troubleshooting
 

@@ -128,7 +128,7 @@ def test_resolve_exact_target(backend, app):
     assert result["window_id"] == 42
     assert result["application"] == "hwnd:42"
     assert (
-        result["action_coordinate_system"] == "top-left, global Windows physical pixels"
+        result["action_coordinate_system"] == "top-left, window-local physical pixels"
     )
 
 
@@ -306,6 +306,63 @@ def test_batch_invalid_wait_fails(backend, seconds):
         backend, revision(backend), [{"action": "wait", "seconds": seconds}], Mock()
     )
     assert not result["success"]
+
+
+@pytest.mark.parametrize("origin", [(180, 180), (2050, 180), (-1300, 180)])
+def test_coordinate_labels_match_pixel_mapping_and_model_output(backend, origin):
+    from code_puppy_core_plugins.computer_use.tools import _compact_state_for_model
+
+    left, top = origin
+    backend.native.info["bounds"] = [left, top, left + 600, top + 600]
+    state = backend.get_app_state("editor")
+    compact = _compact_state_for_model(state)
+    assert (
+        compact["action_coordinate_system"] == "top-left, window-local physical pixels"
+    )
+    assert (
+        compact["screenshot_coordinate_system"] == compact["action_coordinate_system"]
+    )
+    assert (
+        compact["bounds_coordinate_system"]
+        == "top-left, global Windows physical pixels"
+    )
+    assert compact["window_bounds_points"]["x"] == left
+    backend.click_pixel(state["state_revision"], 20, 30)
+    assert ("move", left + 20, top + 30) in backend.native.events
+    screenshot = backend.screenshot(app_name="editor")
+    for key in (
+        "action_coordinate_system",
+        "screenshot_coordinate_system",
+        "bounds_coordinate_system",
+    ):
+        assert screenshot[key] == state[key]
+    snapshot = backend.snapshot("editor")
+    assert snapshot["bounds_coordinate_system"] == state["bounds_coordinate_system"]
+
+
+@pytest.mark.parametrize("focus_after", [99, 123])
+def test_capture_reports_foreground_endpoints_without_activating_or_restoring(
+    backend, focus_after
+):
+    backend.native.focus = 99
+    backend.native.foreground = Mock(wraps=backend.native.foreground)
+    original_capture = backend._capture
+
+    def capture(info, path):
+        # Simulate a user/controller focus change, not a plugin activation.
+        backend.native.focus = focus_after
+        return original_capture(info, path)
+
+    backend._capture = capture
+    result = backend.screenshot(app_name="editor")
+    assert result["foreground_observation"] == {
+        "before_capture": 99,
+        "after_capture": focus_after,
+    }
+    assert backend.native.focus == focus_after
+    backend.native.foreground.assert_not_called()
+    backend.accessibility.focus_window.assert_not_called()
+    assert not backend.native.events
 
 
 def test_unknown_batch_action(backend):

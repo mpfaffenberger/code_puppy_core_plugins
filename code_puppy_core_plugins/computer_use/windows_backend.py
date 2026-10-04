@@ -13,6 +13,12 @@ from .backend_types import ComputerUseError
 from .policy import policy_store
 from .state import state_store
 
+WINDOWS_COORDINATE_SYSTEMS = {
+    "screenshot_coordinate_system": "top-left, window-local physical pixels",
+    "action_coordinate_system": "top-left, window-local physical pixels",
+    "bounds_coordinate_system": "top-left, global Windows physical pixels",
+}
+
 
 class WindowsBackend:
     def __init__(
@@ -146,6 +152,9 @@ class WindowsBackend:
                 "node_count": len(nodes),
                 "nodes": nodes,
                 **metadata,
+                "bounds_coordinate_system": WINDOWS_COORDINATE_SYSTEMS[
+                    "bounds_coordinate_system"
+                ],
                 "warning": "Element IDs require a revision from computer_get_app_state before actions.",
             }
 
@@ -194,14 +203,12 @@ class WindowsBackend:
             result = {
                 "success": True,
                 **state.public_metadata(),
+                **WINDOWS_COORDINATE_SYSTEMS,
                 "node_count": len(nodes),
                 "nodes": nodes,
                 **metadata,
                 "warning": "Use this state_revision for one mutation or one guarded batch, then fetch fresh state.",
             }
-            result["action_coordinate_system"] = (
-                "top-left, global Windows physical pixels"
-            )
             result["platform"] = "windows"
             return result
 
@@ -352,7 +359,9 @@ class WindowsBackend:
             )
         with self.native.physical_pixels():
             info = self._resolve(app_name)
+            foreground_before = self.native.user32.GetForegroundWindow()
             capture = self._capture_window(info, path)
+            foreground_after = self.native.user32.GetForegroundWindow()
             current = self._info(info["window_id"])
             if current["pid"] != info["pid"] or current["bounds"] != info["bounds"]:
                 raise ComputerUseError("Window changed during capture; retry")
@@ -360,5 +369,10 @@ class WindowsBackend:
             return {
                 **capture,
                 **geometry.as_dict(),
-                "action_coordinate_system": "top-left, global Windows physical pixels",
+                **WINDOWS_COORDINATE_SYSTEMS,
+                # Endpoint observations, not proof of causality or transient focus.
+                "foreground_observation": {
+                    "before_capture": foreground_before,
+                    "after_capture": foreground_after,
+                },
             }

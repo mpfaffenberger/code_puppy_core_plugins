@@ -320,6 +320,14 @@ def main():
                     await asyncio.sleep(0.2)
                     screenshot = await call("computer_screenshot", app_name=app)
                     assert screenshot["success"], screenshot
+                    assert screenshot["foreground_observation"] == {
+                        "before_capture": cover_hwnd,
+                        "after_capture": cover_hwnd,
+                    }
+                    assert (
+                        screenshot["action_coordinate_system"]
+                        == "top-left, window-local physical pixels"
+                    )
                     assert windows_native.user32.GetForegroundWindow() == cover_hwnd
                     from PIL import Image, ImageChops
 

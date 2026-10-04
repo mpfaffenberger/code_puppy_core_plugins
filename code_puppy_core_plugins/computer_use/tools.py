@@ -263,7 +263,12 @@ def register_screenshot(agent):
         path: str | None = None,
         app_name: str | None = None,
     ) -> Any:
-        """Capture and display a application window."""
+        """Capture and display an application window; app_name is required.
+
+        Windows foreground_observation reports HWNDs immediately before/after
+        native capture, not before/after tool presentation or later shell calls.
+        Equal endpoints do not prove that no transient focus change occurred.
+        """
         del context
         result = await _call(backend.screenshot, path, app_name)
         if not result.get("success"):
@@ -357,6 +362,7 @@ def _compact_state_for_model(state: dict[str, Any]) -> dict[str, Any]:
         "screenshot_size_pixels",
         "screenshot_coordinate_system",
         "action_coordinate_system",
+        "bounds_coordinate_system",
         "node_count",
         "truncated",
         "overflow_summary",
