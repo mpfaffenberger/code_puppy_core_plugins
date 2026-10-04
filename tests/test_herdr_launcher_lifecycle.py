@@ -1,4 +1,4 @@
-"""Regression contracts from adversarial launcher review."""
+"""Launcher lifecycle, transport, and error-handling regression contracts."""
 
 from unittest.mock import Mock
 

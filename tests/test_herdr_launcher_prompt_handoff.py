@@ -1,4 +1,4 @@
-"""Second-round launcher regressions, without live panes."""
+"""Initial prompt handoff and command-input regressions, without live panes."""
 
 from pathlib import Path
 from unittest.mock import Mock
