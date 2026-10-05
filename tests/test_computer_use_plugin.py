@@ -5,8 +5,7 @@ from unittest.mock import patch
 import pytest
 from pydantic_ai import ToolReturn
 
-from code_puppy_core_plugins.computer_use import register_callbacks
-from code_puppy_core_plugins.computer_use import tools
+from code_puppy_core_plugins.computer_use import register_callbacks, tools
 from code_puppy_core_plugins.computer_use.geometry import CaptureGeometry, Rect
 from code_puppy_core_plugins.computer_use.state import state_store
 from tests.agent_test_support import FakeAgent
@@ -14,16 +13,20 @@ from tests.agent_test_support import FakeAgent
 
 @pytest.fixture(autouse=True)
 def disable_real_app_activation(monkeypatch):
+    # These are the macOS regression cases, independent of the test host OS.
+    from code_puppy_core_plugins.computer_use.backend import MacOSBackend
+
+    monkeypatch.setattr(tools, "backend", MacOSBackend())
     monkeypatch.setattr(
-        "code_puppy_core_plugins.computer_use.backend.activate_state",
+        "code_puppy_core_plugins.computer_use.macos_backend.activate_state",
         lambda state: None,
     )
     monkeypatch.setattr(
-        "code_puppy_core_plugins.computer_use.backend.policy_store.require_enabled",
+        "code_puppy_core_plugins.computer_use.macos_backend.policy_store.require_enabled",
         lambda: None,
     )
     monkeypatch.setattr(
-        "code_puppy_core_plugins.computer_use.backend.policy_store.require",
+        "code_puppy_core_plugins.computer_use.macos_backend.policy_store.require",
         lambda bundle_id: None,
     )
 

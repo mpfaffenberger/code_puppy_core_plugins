@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import shlex
 
+from code_puppy.i18n import t
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
 
+from .backend_types import ComputerUseError
 from .policy import policy_store
 
 
@@ -13,12 +15,20 @@ def command_help() -> list[tuple[str, str]]:
     return [
         (
             "computer-use",
-            "Enable, disable, pause, or configure macOS Computer Use",
+            t("plugin.computer-use.command.help"),
         )
     ]
 
 
 def handle_command(command: str, name: str) -> bool | None:
+    try:
+        return _handle_command(command, name)
+    except (ComputerUseError, OSError) as exc:
+        emit_error(str(exc))
+        return True
+
+
+def _handle_command(command: str, name: str) -> bool | None:
     if name != "computer-use":
         return None
     try:
@@ -46,7 +56,7 @@ def handle_command(command: str, name: str) -> bool | None:
         emit_success("Computer Use resumed.")
     elif subcommand in {"allow", "deny"}:
         if len(tokens) < 3:
-            emit_error("Usage: /computer-use allow|deny BUNDLE_ID")
+            emit_error(t("plugin.computer-use.command.policy_usage"))
             return True
         bundle_id = tokens[2]
         if subcommand == "deny":

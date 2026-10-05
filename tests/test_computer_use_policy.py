@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from code_puppy_core_plugins.computer_use.backend_types import ComputerUseError
@@ -7,6 +9,20 @@ from code_puppy_core_plugins.computer_use.geometry import CaptureGeometry, Rect
 from code_puppy_core_plugins.computer_use.policy import PolicyStore
 from code_puppy_core_plugins.computer_use.safety import require_safe_state
 from code_puppy_core_plugins.computer_use.state import state_store
+
+
+def assert_private_file(path):
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+        return
+    import win32security
+
+    security = win32security.GetNamedSecurityInfo(
+        str(path), win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION
+    )
+    acl = security.GetSecurityDescriptorDacl()
+    assert acl.GetAceCount() == 2  # current user and LocalSystem; no inherited access
+    assert security.GetSecurityDescriptorControl()[0] & win32security.SE_DACL_PROTECTED
 
 
 def test_policy_reports_only_explicit_opt_in_as_enabled(tmp_path):
@@ -28,7 +44,7 @@ def test_policy_requires_first_use_consent_then_persists_choice(tmp_path):
 
     policy.set_enabled(True)
     policy.require("com.example.Editor")
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert_private_file(path)
     PolicyStore(path).require("com.example.Editor")
 
     policy.set_enabled(False)
@@ -44,7 +60,7 @@ def test_policy_supports_persisted_app_denials(tmp_path):
     policy.deny("com.example.Editor")
     with pytest.raises(ComputerUseError, match="denied"):
         policy.require("com.example.Editor")
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert_private_file(path)
 
     policy.allow("com.example.Editor")
     PolicyStore(path).require("com.example.Editor")

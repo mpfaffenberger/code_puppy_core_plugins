@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 MAX_SCAN_NODES = 4_000
 # Electron embeds its web accessibility tree beneath a deep stack of generic

@@ -57,6 +57,13 @@ jobs:
           CI: '1'
           CODE_PUPPY_TEST_FAST: '1'
         run: uv run --no-sync pytest -q --no-cov tests/test_jev_grep.py tests/test_smart_grep_treesitter.py
+      - name: Computer-use regression tests (no desktop automation)
+        env:
+          CI: '1'
+          CODE_PUPPY_TEST_FAST: '1'
+        run: >-
+          uv run --no-sync python -c "import glob, pytest;
+          raise SystemExit(pytest.main([*glob.glob('tests/test_computer_use*.py'), '-q', '--no-cov']))"
 
   build-publish:
     runs-on: ubuntu-latest

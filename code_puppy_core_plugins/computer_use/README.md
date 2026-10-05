@@ -1,10 +1,16 @@
-# macOS Computer Use
+# Computer Use (macOS and Windows)
 
-This opt-in plugin lets Code Puppy inspect and operate the current macOS desktop
-through Apple's Accessibility APIs. It is macOS-only and does not use a virtual
-machine or copy any Codex implementation.
+One opt-in plugin, the same twelve `computer_*` tools, and the same `/computer-use`
+commands on both platforms. macOS uses Accessibility, Quartz, and ScreenCaptureKit;
+Windows uses UI Automation, Win32 input, and HWND-targeted Windows Graphics Capture.
+No virtual machine, duplicate plugin, or alternate Windows tool API is required.
 
-## Install
+**Windows installation, examples, limitations, and live tests:** [WINDOWS.md](WINDOWS.md).
+**Implementation and verification matrix:** [PARITY.md](PARITY.md).
+
+The macOS setup and platform-specific behavior below remain supported.
+
+## macOS installation
 
 ```bash
 pip install "code-puppy[computer-use]"
@@ -51,13 +57,27 @@ application is in front.
    element's advertised actions.
 3. Run one mutation, or one guarded batch of at most 20 mutations.
 4. Fetch fresh state. A completed batch does this automatically after waiting
-   for the accessibility tree to stabilize.
+   for the accessibility tree to stabilize. Check `ui_settle.settled`: a timeout
+   is reported, not a guarantee that animations or network activity finished.
 
-Before every mutation, the target process is activated and verified as the
+For a batch `perform_action` step, use `action_name` for the advertised AX/UIA
+operation because `action` identifies the step itself, for example:
+`{"action": "perform_action", "element_id": 7, "action_name": "AXPress"}`.
+A failed batch invalidates the revision; the failing action may have partially
+executed, so inspect before retrying.
+
+On macOS, before every mutation, the target process is activated and verified as the
 frontmost application. This is required because ScreenCaptureKit can capture a
 background window, while Quartz sends global clicks and keystrokes to whichever
 application is actually frontmost. Use a guarded batch for click-then-type
 workflows so focus is retained and the result is verified in one control loop.
+
+On Windows, standalone mutations and batch entry may activate the target. Once a
+batch starts, validation only checks foreground ownership: detected focus loss
+aborts the batch instead of reactivating the target. This applies during waits,
+between actions, and through final state refresh. Already executed steps are not
+rolled back. These are checkpoint checks, not continuous focus monitoring or
+instant interruption of a blocking native call. See [WINDOWS.md](WINDOWS.md).
 
 Pixel clicks and drags use window-local screenshot pixels. The backend converts
 them to global Quartz points using the captured window bounds, so Retina scaling,
@@ -72,7 +92,9 @@ and cursor placement before or after the match.
 - Persisted user consent is required before tools are exposed to the model;
   disabling the feature removes them again and blocks future captures/actions.
 - State revisions and element IDs are single-use and expire after 120 seconds.
-- Physical keyboard and pointer input do not interrupt YOLO-mode execution.
+- Ordinary physical keyboard/pointer input is not an explicit cancellation signal.
+  Windows batches additionally abort on focus loss detected at guard checkpoints.
+  Use the dedicated emergency-stop mechanism to request a stop deliberately.
 - Every capture and mutation re-checks the application policy; the emergency
   stop therefore also interrupts a batch at its next action boundary.
 - Password-field values are never returned in snapshots.
@@ -100,8 +122,8 @@ xcode-select --install
 ## Test
 
 ```bash
-uv run ruff check code_puppy/plugins/computer_use tests/plugins
-uv run pytest tests/plugins/test_computer_use_*.py -q --no-cov
+uv run ruff check code_puppy_core_plugins/computer_use
+uv run pytest tests/test_computer_use_*.py -q --no-cov
 ```
 
 For a live Ghostty smoke test, launch Code Puppy from Ghostty and ask for
