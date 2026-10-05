@@ -336,8 +336,9 @@ _USAGE = """/herdr spawn NAME [--direction right|down] [--cwd PATH]
 /herdr command NAME /COMMAND [ARGUMENTS]
 /herdr commands
 Command is explicit potentially mutating/interactive intent, not prompt text.
-Commands validates sender candidates only (registry/aliases + plugin help);
-target may differ. No execution guarantee, shell/exit passthrough, or retries.
+Command validates sender candidates only (registry/aliases + plugin help);
+target may differ. No execution guarantee or retries.
+No shell ! or bare exit/quit/clear passthrough; registered slash commands may exit.
 Core preprocessing normalizes inline quotes/spaces before dispatch.
 Use whitespace-free paths and --prompt-file for multiword briefs.
 Send is prompt-only: one line under 1,000 UTF-8 bytes;

@@ -93,6 +93,24 @@ def test_command_fails_closed_before_requests(launcher_env, candidates, text):
     candidates.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "advertised", [("/flux/status", "Status"), [("/flux/status", "Status")]]
+)
+def test_slash_prefixed_plugin_help_is_discoverable(
+    monkeypatch, candidates, advertised
+):
+    from code_puppy import callbacks
+    from code_puppy_core_plugins.herdr.command_intent import (
+        candidate_help,
+        validate_command,
+    )
+
+    monkeypatch.setattr(callbacks, "on_custom_command_help", lambda: [advertised])
+    assert "/flux/status" in candidate_help().split()
+    assert validate_command("/flux/status") == "/flux/status"
+    candidates.assert_not_called()
+
+
 def test_execute_and_discovery(launcher_env, candidates):
     client = ready_client()
     result = launcher.execute(

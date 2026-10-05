@@ -44,7 +44,7 @@ def command_candidates():
                 and len(entry) == 2
                 and isinstance(entry[0], str)
             ):
-                token = "/" + entry[0]
+                token = "/" + entry[0].lstrip("/")
                 if _TOKEN.fullmatch(token):
                     custom.add(token)
     # The dispatcher routes multi-slash tokens through custom hooks ONLY.
