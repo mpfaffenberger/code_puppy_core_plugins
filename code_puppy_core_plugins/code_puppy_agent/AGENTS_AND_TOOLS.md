@@ -134,7 +134,7 @@ register_callback("register_agent_tools", _advertise)
 ```
 
 Step 1 makes the tool *exist*; step 2 makes agents *see* it. Both are
-needed. `namespace_skill_search` (`code_puppy/plugins/namespace_skill_search/`)
+needed. `namespace_skill_search` (`code_puppy_core_plugins/namespace_skill_search/`)
 is a small, complete example of this pattern for a single tool
 (`browse_skill_namespace`) — see `SKILLS_SYSTEM.md` for what it does and
 `PLUGINS_AND_CALLBACKS.md` for the callback-safety reasoning behind how

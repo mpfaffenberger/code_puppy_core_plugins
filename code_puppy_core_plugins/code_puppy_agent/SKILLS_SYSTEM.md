@@ -73,7 +73,7 @@ real path in the repo rather than expecting it to appear as a
 ## Skill namespaces (large catalogs)
 
 The **`namespace_skill_search`** builtin plugin
-(`code_puppy/plugins/namespace_skill_search/`) addresses the
+(`code_puppy_core_plugins/namespace_skill_search/`) addresses the
 flat-list-doesn't-scale problem above. It's the reference
 implementation to look at if you're extending how skills are surfaced
 to the model, or building something in the same spirit for another
@@ -96,7 +96,7 @@ modes with examples, and how to opt back out
 (`/plugins disable namespace_skill_search` + `/skills frontmatter on`).
 
 **Design rationale + what was deliberately not built:**
-`code_puppy/plugins/namespace_skill_search/README.md` — full writeup of
+`code_puppy_core_plugins/namespace_skill_search/README.md` — full writeup of
 what was copied from OpenAI/Anthropic, why namespace-per-first-tag was
 chosen over a vector DB or a deep multi-level tree, and the two hook-
 system gotchas it was built to avoid (see `PLUGINS_AND_CALLBACKS.md` in

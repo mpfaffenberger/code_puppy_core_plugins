@@ -39,16 +39,23 @@ LLM how Code Puppy is structured under the hood so it can navigate the
 codebase, debug issues, and extend the product without guessing.
 
 > **Philosophy:** Code Puppy is plugin-first. Nearly all new functionality
-> should be a plugin under `code_puppy/plugins/` that hooks into core via
-> `code_puppy/callbacks.py`. Don't edit `code_puppy/command_line/` or core
-> agent files unless a hook genuinely doesn't exist.
+> should be a plugin in the separate `code-puppy-core-plugins` repo that hooks
+> into core via `code_puppy/callbacks.py`. Don't edit
+> `code_puppy/command_line/` or core agent files unless a hook genuinely
+> doesn't exist.
+
+> **Two repos.** Core (the `code-puppy` package) holds the runtime, agents,
+> tools, and the callback engine. Plugins (the `code-puppy-core-plugins`
+> package, this skill included) ship separately and are discovered through
+> `code_puppy.plugins` entry points. Paths below starting `code_puppy/` are in
+> core; paths starting `code_puppy_core_plugins/` are in the plugins repo.
 
 This skill is split across multiple files so activating it doesn't force
 the full ~30KB of internals into context on every use — this SKILL.md is
 the index. **Read the reference file for the topic you actually need**;
 each one is self-contained and cites real file paths so you can jump
 straight to source. All reference files are plain repo paths under
-`code_puppy/plugins/code_puppy_agent/` — read them with `read_file`.
+`code_puppy_core_plugins/code_puppy_agent/` — read them with `read_file`.
 
 ---
 
@@ -56,7 +63,7 @@ straight to source. All reference files are plain repo paths under
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  TUI / CLI  (command_line/, tui/)                 │
+│  TUI / CLI  (command_line/, messaging/)           │
 │    user input → slash commands → agent dispatch   │
 ├──────────────────────────────────────────────────┤
 │  Agent Layer  (agents/)                           │
@@ -66,7 +73,7 @@ straight to source. All reference files are plain repo paths under
 │  Tool Layer  (tools/)                             │
 │    TOOL_REGISTRY → register_tools_for_agent()     │
 ├──────────────────────────────────────────────────┤
-│  Plugin Layer  (plugins/, callbacks.py)           │
+│  Plugin Layer  (callbacks.py + plugins/ loader)   │
 │    register_callback("hook", fn) at import time   │
 ├──────────────────────────────────────────────────┤
 │  Model Layer  (model_factory.py, config.py)       │
