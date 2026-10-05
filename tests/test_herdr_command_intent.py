@@ -111,10 +111,46 @@ def test_slash_prefixed_plugin_help_is_discoverable(
     candidates.assert_not_called()
 
 
+def test_legacy_help_whitespace_matches_core(monkeypatch, candidates):
+    from code_puppy import callbacks
+    from code_puppy_core_plugins.herdr.command_intent import (
+        candidate_help,
+        validate_command,
+    )
+
+    monkeypatch.setattr(
+        callbacks, "on_custom_command_help", lambda: [["/widget  - Description"]]
+    )
+    assert "/widget" in candidate_help().split()
+    assert validate_command("/widget") == "/widget"
+    candidates.assert_not_called()
+
+
+def test_empty_command_payload_has_missing_payload_diagnostic(launcher_env, candidates):
+    client = ready_client()
+    result = launcher.execute("/herdr command fixer ", client_factory=lambda: client)
+    assert result == "herdr error: Command payload is missing."
+    assert not client.calls
+    candidates.assert_not_called()
+
+
+@pytest.mark.parametrize("junk", ["--mutating", "please list only mutating ones"])
+def test_discovery_rejects_trailing_arguments(launcher_env, monkeypatch, junk):
+    from code_puppy_core_plugins.herdr import command_intent
+
+    discovery = Mock(side_effect=AssertionError("No discovery for invalid input"))
+    monkeypatch.setattr(command_intent, "candidate_help", discovery)
+    result = launcher.execute(
+        f"/herdr commands {junk}", client_factory=lambda: pytest.fail("No transport")
+    )
+    assert result == "herdr error: " + launcher._USAGE
+    discovery.assert_not_called()
+
+
 def test_execute_and_discovery(launcher_env, candidates):
     client = ready_client()
     result = launcher.execute(
-        "/herdr command fixer /model gpt-5", client_factory=lambda: client
+        command="/herdr command fixer /model gpt-5", client_factory=lambda: client
     )
     assert "not confirmed executed" in result
     listing = launcher.execute(

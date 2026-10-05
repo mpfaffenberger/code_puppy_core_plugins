@@ -88,10 +88,11 @@ commands such as `/model gpt-5` or `/new`. Use the separate explicit intent
 Commands may mutate state or open interactive menus: recognition is not a
 safety guarantee. `/herdr commands` dynamically lists **sender candidates**
 from the existing core registry (including aliases) and `custom_command_help`
-plugin discovery, including advertised namespaced commands. No handlers or
-`custom_command` callbacks are executed as validation probes. Unknown or
-unadvertised commands fail closed. The target may run a different version,
-configuration, or plugin set: this is not target validation.
+plugin discovery, including advertised namespaced commands. Enumeration runs
+plugin help callbacks; those callbacks are not guaranteed side-effect-free.
+No handlers or `custom_command` callbacks are executed as validation probes.
+Unknown or unadvertised commands fail closed. The target may run a different
+version, configuration, or plugin set: this is not target validation.
 
 The command payload must have an exact leading `/command` token, be one line
 under 1,000 UTF-8 bytes, and contain no terminal controls. Shell `!` and bare
@@ -144,11 +145,10 @@ not completion or byte-identical model/history text.
 **Startup caveat:** a prompt sent immediately after a no-prompt spawn may be
 dropped. The startup idle report precedes input-editor readiness; the editor
 can flush queued terminal input when it starts. Neither `send` nor `command`
-can distinguish
-this gap from an input-ready idle pane. For the child's first task, prefer
-`spawn --prompt` or `spawn --prompt-file`, whose private-file handoff does
-not depend on editor readiness. A successful send acknowledges the pane
-write, not child receipt.
+can distinguish this gap from an input-ready idle pane. For the child's first
+task, prefer `spawn --prompt` or `spawn --prompt-file`, whose private-file
+handoff does not depend on editor readiness. A successful send acknowledges
+the pane write, not child receipt.
 
 Spawn prompts are capped at 24,000 UTF-8 bytes. Single-line sends must stay
 under 1,000 UTF-8 bytes because the classic editor's canonical line buffer can

@@ -11,8 +11,9 @@ _TOKEN = re.compile(r"/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*")
 def command_candidates():
     """Reuse dispatcher metadata, including aliases and custom plugin help.
 
-    Help callbacks are the discovery hook, not custom_command callbacks.
-    Unadvertised custom commands fail closed; this is not a target manifest.
+    Enumeration runs help callbacks, not handlers or custom_command callbacks;
+    help callbacks are not guaranteed side-effect-free. Unadvertised custom
+    commands fail closed; this is not a target manifest.
     """
     from code_puppy import callbacks
 
@@ -35,7 +36,7 @@ def command_candidates():
             and result[0].startswith("/")
             and " - " in result[0]
         ):
-            entries = [(result[0].split(" - ", 1)[0].lstrip("/"), "")]
+            entries = [(result[0].split(" - ", 1)[0].lstrip("/").strip(), "")]
         else:
             continue
         for entry in entries:
@@ -54,7 +55,9 @@ def command_candidates():
 
 def validate_command(text):
     """Validate a single exact leading token; return payload without rewriting."""
-    if not text or any(
+    if not text:
+        raise ValueError("Command payload is missing.")
+    if any(
         ord(char) < 32 or 127 <= ord(char) <= 159 or (char.isspace() and char != " ")
         for char in text
     ):

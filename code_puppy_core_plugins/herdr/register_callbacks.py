@@ -277,9 +277,10 @@ def _launcher_prompt():
     return GUIDANCE
 
 
-# Register even outside herdr so the command explains its no-op clearly.
+# Guidance is registered globally but returns None outside a herdr pane.
 register_callback("load_prompt", _launcher_prompt)
 register_callback("custom_command_help", _launcher_help)
+# Register outside herdr too so dispatch explains why it cannot act there.
 register_callback("custom_command", _launcher_command)
 
 

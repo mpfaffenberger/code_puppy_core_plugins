@@ -289,6 +289,8 @@ def command(client, name, text):
 
 
 def _command_action(client_factory, match):
+    # execute's public `command` argument shadows the command function.
+    # Keep this seam rather than changing keyword callers or self-importing.
     return command(client_factory(), match[1], match[2])
 
 
@@ -354,6 +356,8 @@ def execute(command, *, client_factory=ControlClient):
         if len(head) == 1 or head[1] == "help":
             return _USAGE
         if head[1] == "commands":
+            if len(head) != 2:
+                raise LauncherError(_USAGE)
             from .command_intent import candidate_help
 
             return candidate_help()
