@@ -10,12 +10,26 @@
 
 | Tier | Location | Load order |
 |------|----------|------------|
-| **Builtin** | `code_puppy/plugins/<name>/register_callbacks.py` | 1st |
+| **Builtin** | `code_puppy.plugins` entry points, shipped by the separate `code-puppy-core-plugins` distribution | 1st |
 | **User** | `~/.code_puppy/plugins/<name>/register_callbacks.py` | 2nd |
 | **Project** | `<CWD>/.code_puppy/plugins/<name>/register_callbacks.py` | 3rd (highest precedence) |
 
-Each plugin is a directory containing `register_callbacks.py`. The loader
-auto-discovers it. Project plugins shadow user plugins on name collision.
+The builtin tier is **not** a directory scan of the core package. Plugins live
+in their own repo (`code_puppy_core_plugins/<name>/register_callbacks.py`) and
+are advertised through the `code_puppy.plugins` entry-point group in that
+package's `pyproject.toml`; `_load_installed_plugins()` loads them sorted by
+name for deterministic startup. Adding a plugin there means adding an entry
+point, not just a directory.
+
+Inside core, `code_puppy/plugins/` is now only the **loader and trust
+machinery** (`__init__.py`, `trust.py`, `trust_notice.py`, `config.py`, plus the
+OAuth pasteback helpers) — not a plugin collection. A legacy directory scan of
+it still runs via `_load_builtin_plugins()` for migration, skipping any name
+already loaded from an entry point, so `builtin = installed + legacy`.
+
+User and project tiers *are* plain directory scans: each plugin is a directory
+containing `register_callbacks.py`, auto-discovered by the loader. Project
+plugins shadow user plugins on name collision.
 
 ## The callback hook system
 
@@ -82,7 +96,7 @@ That's it. The loader handles discovery, import, and registration.
 
 ## Two gotchas that will bite you, both discovered building `namespace_skill_search`
 
-`namespace_skill_search` (`code_puppy/plugins/namespace_skill_search/`)
+`namespace_skill_search` (`code_puppy_core_plugins/namespace_skill_search/`)
 groups skills into namespaces and replaces the flat per-skill list in the
 system prompt with a compact directory + a `browse_skill_namespace` tool
 (see `SKILLS_SYSTEM.md` for what it does from a user's perspective). It's
@@ -123,7 +137,7 @@ is:
   happens to get imported, with no log line tied to a specific lifecycle
   event.
 - **A pattern already solved by the `startup` callback.** See
-  `code_puppy/plugins/theme/register_callbacks.py`'s
+  `code_puppy_core_plugins/theme/register_callbacks.py`'s
   `_apply_default_theme_on_first_run`, registered via
   `register_callback("startup", _apply_default_theme_on_first_run)`.
 
@@ -157,7 +171,7 @@ my_plugin/
 
 For a plugin that also ships a builtin skill via `register_skills`
 (rather than, or in addition to, tools/prompt fragments), see
-`code_puppy/plugins/code_puppy_agent/` (this skill's own plugin) or
+`code_puppy_core_plugins/code_puppy_agent/` (this skill's own plugin) or
 `namespace_skill_search`'s README for a fuller worked example of
 justifying design decisions in-repo rather than only in a PR
 description.
