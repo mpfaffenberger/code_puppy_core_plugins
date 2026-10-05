@@ -309,7 +309,9 @@ _USAGE = """/herdr spawn NAME [--direction right|down] [--cwd PATH]
 /herdr send NAME --file PATH
 Core preprocessing normalizes inline quotes/spaces before dispatch.
 Use whitespace-free paths and --prompt-file for multiword briefs.
-Send requires one line under 1,000 UTF-8 bytes; no command tokens."""
+Send is prompt-only: one line under 1,000 UTF-8 bytes;
+no slash/shell commands or absolute-path tokens. Herdr CLI transport is unchanged.
+Idle does not guarantee editor readiness; prefer prompted spawn for first tasks."""
 
 
 def execute(command, *, client_factory=ControlClient):

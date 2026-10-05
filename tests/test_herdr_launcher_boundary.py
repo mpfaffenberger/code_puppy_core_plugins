@@ -14,6 +14,9 @@ from tests.herdr_launcher_support import FakeClient
     "text",
     [
         "exit",
+        "/model gpt-5",
+        "/new",
+        "inspect /etc/hosts",
         "QUIT",
         "clear",
         '"/exit"',
@@ -98,6 +101,10 @@ def test_help_exposes_operational_options(launcher_env):
     usage = launcher.execute("/herdr help")
     for option in ("--direction", "--cwd", "--timeout", "30", "300"):
         assert option in usage
+    assert "prompt-only" in usage
+    assert "slash/shell commands or absolute-path tokens" in usage
+    assert "Herdr CLI transport is unchanged" in usage
+    assert "Idle does not guarantee editor readiness" in usage
 
 
 def test_menu_advertises_single_line():

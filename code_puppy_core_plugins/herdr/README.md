@@ -80,6 +80,17 @@ arrives already normalized; it is not byte-preserving, and attachment-like
 paths/URLs may be consumed by the core before dispatch. This plugin cannot
 recover raw input; a raw-command dispatch seam requires an upstream change.
 
+`/herdr send` is a **prompt-only helper**, not a way to run Code Puppy
+commands such as `/model gpt-5` or `/new`. Its guard does **not** change
+Herdr's generic CLI transport. If the owner intentionally chooses to execute
+a command in the target Code Puppy's foreground editor, the existing
+`herdr pane send-text <pane-id> ...` followed by
+`herdr pane send-keys <pane-id> Enter` remains available. Verify the intended
+pane and that its Code Puppy input editor is actually ready first: a named
+agent's idle report alone does not establish editor readiness. Raw terminal
+input can execute commands in whatever process owns the foreground; it is
+not a safe arbitrary-text alternative to this helper.
+
 The launcher forwards the send tail it receives without further shell parsing.
 `--file PATH` is the explicit file form; it bypasses the caller's inline-text
 normalization, but the child still applies its usual prompt preprocessing.
@@ -95,7 +106,8 @@ terminal controls are rejected. Send rejects bare `exit`, `quit`, and `clear`
 This conservative token guard also rejects prose containing absolute paths;
 use prompted spawn for such briefs. It avoids reading attachments merely to
 predict whether the child would expose a command. Spawn accepts leading `/`
-as literal initial prompt text, but rejects leading `!` because the core
+as literal initial prompt text (so an initial `/model` or `/new` prompt does
+not execute that editor command), but rejects leading `!` because the core
 initial-command path supports shell passthrough. Success confirms submission,
 not completion or byte-identical model/history text.
 
