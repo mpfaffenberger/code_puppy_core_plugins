@@ -21,6 +21,8 @@ Adapters:
   ``pane.report_agent_session``.
 * :func:`activity_message` -- a short human-readable activity string for
   the decorative ``message`` field on ``pane.report_agent``.
+* :func:`error_message` -- a one-line ``error: ...`` string for the same
+  decorative field when code-puppy logs an error (``error_logged`` hook).
 """
 
 from __future__ import annotations
@@ -187,6 +189,28 @@ def current_session_ref() -> Optional[Tuple[str, str]]:
         return None
 
 
+def error_message(error: object, context: Optional[str] = None) -> str:
+    """Return a short one-line ``error: ...`` string. Never raises.
+
+    ``ValueError("boom")`` -> ``error: boom``. An exception with an empty
+    message falls back to the context label, then to a bare ``error``.
+    First line only, then clipped: the sidebar wants one glanceable line,
+    not a traceback. The payload is unsanitised upstream; herdr is on-box
+    (local socket / named pipe), same as everything else we send.
+    """
+    try:
+        text = str(error).strip() if error is not None else ""
+        if not text and context:
+            text = str(context).strip()
+        first_line = text.splitlines()[0].strip() if text else ""
+        if not first_line:
+            return "error"
+        return f"error: {_clip(first_line)}"
+    except Exception:
+        logger.debug("herdr: could not format error message", exc_info=True)
+        return "error"
+
+
 def activity_message(tool_name: str) -> str:
     """Return a short activity string for a starting tool call.
 
@@ -210,4 +234,5 @@ __all__ = [
     "current_session_ref",
     "naming_enabled",
     "activity_message",
+    "error_message",
 ]

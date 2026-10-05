@@ -29,6 +29,7 @@ Callback -> effect:
 * ``user_prompt_submit`` ............................. refresh durable session
 * ``agent_run_start`` / ``agent_run_end`` ............ run-depth +/- 1
 * ``pre_tool_call`` / ``post_tool_call`` ............. decorative activity msg
+* ``error_logged`` ................................. decorative ``error: ...`` msg
 * ``agent_run_cancel`` / ``interactive_turn_end`` .... reset -> idle
 * ``interactive_turn_cancel`` ........................ reset -> idle
 * ``awaiting_user_input`` ............................ blocked <-> not
@@ -179,6 +180,16 @@ def _on_tool_complete(*_args, **_kw):
     return None
 
 
+def _on_error_logged(*args, **kwargs):
+    # (error, context=None, include_traceback=True). Decorative only -- the
+    # reporter's send path is enqueue-and-drain-off-thread, so this returns
+    # promptly even on the error path.
+    error = _arg(args, 0) if args else kwargs.get("error")
+    context = kwargs.get("context") if isinstance(kwargs.get("context"), str) else None
+    _reporter.on_error(error, context=context)
+    return None
+
+
 def _on_awaiting_user_input(*args, **_kw) -> None:
     # Keep the public callback's historical one-argument signature. Notification
     # intent is read synchronously from command_runner's current wait state.
@@ -267,6 +278,7 @@ if _reporter.active:
     register_callback("post_autosave", _on_post_autosave)
     register_callback("pre_tool_call", _on_tool_start)
     register_callback("post_tool_call", _on_tool_complete)
+    register_callback("error_logged", _on_error_logged)
     register_callback("awaiting_user_input", _on_awaiting_user_input)
     register_callback("session_end", _on_shutdown)
     register_callback("shutdown", _on_shutdown)
