@@ -24,6 +24,7 @@ def test_credentials_round_trip_with_fresh_storage(iteration):
 
     # Use the same real API as the popup-triggering settings test. No values
     # are logged; successful writes must really be readable and removable.
+    # Materialize puppy.cfg: credential writes alone use only secret storage.
     config.set_config_value("owner_name", "Synthetic test owner")
     config.set_config_value("typesafe_api_key", "synthetic-keyring-test-value")
     assert shared_credentials.get("TYPESAFE_API_KEY") == "synthetic-keyring-test-value"

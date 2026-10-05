@@ -16,7 +16,10 @@ os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
 import keyring  # noqa: E402
 import pytest  # noqa: E402
 
-from tests.keyring_test_support import MemoryKeyring  # noqa: E402
+from tests.keyring_test_support import (  # noqa: E402
+    MemoryKeyring,
+    pin_secret_store_paths,
+)
 
 keyring.set_keyring(MemoryKeyring())
 
@@ -36,16 +39,7 @@ def _isolate_code_puppy_config(tmp_path, monkeypatch):
     monkeypatch.setattr(token_store, "_exchange_blocked_until", 0.0)
     monkeypatch.setattr(config, "CONFIG_FILE", config_dir / "puppy.cfg")
 
-    from code_puppy import secret_store
-
-    # Core captures these paths at import, independently of config.CONFIG_DIR.
-    monkeypatch.setattr(secret_store, "CONFIG_DIR", config_dir)
-    monkeypatch.setattr(
-        secret_store, "_FALLBACK_FILE", str(config_dir / "secrets.json")
-    )
-    monkeypatch.setattr(
-        secret_store, "_FALLBACK_LOCK_FILE", str(config_dir / ".secrets.lock")
-    )
+    pin_secret_store_paths(monkeypatch, config_dir)
     previous_backend = keyring.get_keyring()
     keyring.set_keyring(MemoryKeyring())
     # shared_credentials.save updates os.environ directly, not via monkeypatch.
@@ -80,19 +74,15 @@ def pytest_configure(config):
     stubs in slim environments where it is genuinely unavailable, and stub all
     submodules that ``pydantic_ai.mcp`` imports during collection.
     """
-    from code_puppy import secret_store
-
+    # Safe before MCP stubs: secret_store's import chain needs no MCP modules.
+    # Pin first so optional package imports cannot read real fallback storage.
     # Protect fallback reads during collection too, before tmp_path fixtures run.
     temporary = tempfile.TemporaryDirectory(prefix="plugin-test-secrets-")
     config.add_cleanup(temporary.cleanup)
     patcher = pytest.MonkeyPatch()
     config.add_cleanup(patcher.undo)
     directory = Path(temporary.name)
-    patcher.setattr(secret_store, "CONFIG_DIR", directory)
-    patcher.setattr(secret_store, "_FALLBACK_FILE", str(directory / "secrets.json"))
-    patcher.setattr(
-        secret_store, "_FALLBACK_LOCK_FILE", str(directory / ".secrets.lock")
-    )
+    pin_secret_store_paths(patcher, directory)
 
     config.addinivalue_line(
         "markers",

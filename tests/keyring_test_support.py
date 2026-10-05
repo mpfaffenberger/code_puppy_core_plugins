@@ -4,6 +4,17 @@ from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError
 
 
+def pin_secret_store_paths(patcher, directory):
+    """Core captures these at import, independently of config.CONFIG_DIR."""
+    from code_puppy import secret_store
+
+    patcher.setattr(secret_store, "CONFIG_DIR", directory)
+    patcher.setattr(secret_store, "_FALLBACK_FILE", str(directory / "secrets.json"))
+    patcher.setattr(
+        secret_store, "_FALLBACK_LOCK_FILE", str(directory / ".secrets.lock")
+    )
+
+
 class MemoryKeyring(KeyringBackend):
     """Store entries by service/account; preserve missing-entry semantics."""
 
