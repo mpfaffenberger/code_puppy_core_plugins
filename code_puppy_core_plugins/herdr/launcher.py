@@ -272,17 +272,43 @@ def send(client, name, prompt):
         raise LauncherError(
             "Send requires under 1,000 UTF-8 bytes. Use spawn --prompt-file instead."
         )
+    return _deliver(client, name, prompt, intent="Prompt")
+
+
+def command(client, name, text):
+    """Explicit potentially mutating command intent; sender validation only."""
+    _inside()
+    _validate_name(name)
+    from .command_intent import validate_command
+
+    try:
+        text = validate_command(text)
+    except ValueError as exc:
+        raise LauncherError(str(exc)) from exc
+    return _deliver(client, name, text, intent="Command")
+
+
+def _command_action(client_factory, match):
+    return command(client_factory(), match[1], match[2])
+
+
+def _deliver(client, name, text, *, intent):
     agents = client.call("agent", "list")["agents"]
     matches = [a for a in agents if a.get("name") == name]
     if len(matches) != 1 or not _ready(matches[0]):
         raise LauncherError(f"{name} is not a unique idle Code Puppy; nothing sent.")
     agent = matches[0]
     try:
-        _submit(client, agent, prompt)
+        _submit(client, agent, text)
     except LauncherError as exc:
         raise LauncherError(
-            f"Pane {agent['pane_id']}: {exc}. Do not blindly retry a prompt."
+            f"Pane {agent['pane_id']}: {exc}. Do not blindly retry input."
         ) from exc
+    if intent == "Command":
+        return (
+            f"Command written to {name} in {agent['pane_id']}; not confirmed executed. "
+            "Sender candidates may differ from target; idle is not editor readiness."
+        )
     return f"Prompt submitted to {name} in {agent['pane_id']}."
 
 
@@ -307,6 +333,11 @@ _USAGE = """/herdr spawn NAME [--direction right|down] [--cwd PATH]
     [--prompt TEXT | --prompt-file PATH] [-- CHILD_ARGS]
 /herdr send NAME TEXT
 /herdr send NAME --file PATH
+/herdr command NAME /COMMAND [ARGUMENTS]
+/herdr commands
+Command is explicit potentially mutating/interactive intent, not prompt text.
+Commands validates sender candidates only (registry/aliases + plugin help);
+target may differ. No execution guarantee, shell/exit passthrough, or retries.
 Core preprocessing normalizes inline quotes/spaces before dispatch.
 Use whitespace-free paths and --prompt-file for multiword briefs.
 Send is prompt-only: one line under 1,000 UTF-8 bytes;
@@ -321,6 +352,15 @@ def execute(command, *, client_factory=ControlClient):
         head = command.split(maxsplit=2)
         if len(head) == 1 or head[1] == "help":
             return _USAGE
+        if head[1] == "commands":
+            from .command_intent import candidate_help
+
+            return candidate_help()
+        if head[1] == "command":
+            match = re.fullmatch(r"\S+ +command +(\S+) +([^\r\n]*)", command)
+            if match is None:
+                raise LauncherError(_USAGE)
+            return _command_action(client_factory, match)
         if head[1] == "send":
             match = re.match(r"\S+\s+send\s+(\S+)(?:[ \t]+([\s\S]*))?$", command)
             if match is None or match[2] is None:

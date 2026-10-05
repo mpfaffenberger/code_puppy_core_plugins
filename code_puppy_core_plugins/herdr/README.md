@@ -35,6 +35,8 @@ From a Code Puppy running inside herdr:
 /herdr spawn reviewer --direction down --cwd ./project --prompt-file review.md -- --model MODEL
 /herdr send fixer Don't forget the tests
 /herdr send fixer --file follow-up.txt
+/herdr commands
+/herdr command fixer /model gpt-5
 ```
 
 `spawn` creates a sibling split in the caller's tab, preserves the caller's
@@ -80,10 +82,38 @@ arrives already normalized; it is not byte-preserving, and attachment-like
 paths/URLs may be consumed by the core before dispatch. This plugin cannot
 recover raw input; a raw-command dispatch seam requires an upstream change.
 
-`/herdr send` is a **prompt-only helper**, not a way to run Code Puppy
-commands such as `/model gpt-5` or `/new`. Its guard does **not** change
-Herdr's generic CLI transport. If the owner intentionally chooses to execute
-a command in the target Code Puppy's foreground editor, the existing
+`/herdr send` remains a **prompt-only helper**, not a way to run Code Puppy
+commands such as `/model gpt-5` or `/new`. Use the separate explicit intent
+`/herdr command fixer /model gpt-5` when intentionally requesting a command.
+Commands may mutate state or open interactive menus: recognition is not a
+safety guarantee. `/herdr commands` dynamically lists **sender candidates**
+from the existing core registry (including aliases) and `custom_command_help`
+plugin discovery, including advertised namespaced commands. No handlers or
+`custom_command` callbacks are executed as validation probes. Unknown or
+unadvertised commands fail closed. The target may run a different version,
+configuration, or plugin set: this is not target validation.
+
+The command payload must have an exact leading `/command` token, be one line
+under 1,000 UTF-8 bytes, and contain no terminal controls. Shell `!` and bare
+exit/quit/clear passthrough are not supported. Arguments can contain slash
+paths; they are not blanket-rejected. The payload received by the launcher
+is forwarded without rewriting, but both caller and child core preprocessing
+may remove quotes, normalize spaces, or consume attachments. Inline quoted
+or escaped leading commands may already be normalized before this plugin
+sees them; do not rely on byte-preserved arguments through this boundary.
+There is no command-file mode or automatic retry.
+
+Command uses the same unique idle/terminal identity checks and `pane run`
+terminal typing as send, not a structured child command route. Verify actual
+foreground Code Puppy editor readiness before using it. A write acknowledgement
+is **not confirmed execution**, child receipt, or completion. The occupant
+check and write are not atomic; reported idle alone is not editor readiness.
+
+The `load_prompt` hook exposes these choices and `/herdr commands` discovery
+to agents inside herdr; `/herdr help` and the command menu expose them to users.
+Agents with shell tools can call the installed plugin's `launcher.execute`
+API and print the result, using the same guards rather than raw input.
+Its guards do **not** change Herdr's generic CLI transport. The existing
 `herdr pane send-text <pane-id> ...` followed by
 `herdr pane send-keys <pane-id> Enter` remains available. Verify the intended
 pane and that its Code Puppy input editor is actually ready first: a named
@@ -113,7 +143,8 @@ not completion or byte-identical model/history text.
 
 **Startup caveat:** a prompt sent immediately after a no-prompt spawn may be
 dropped. The startup idle report precedes input-editor readiness; the editor
-can flush queued terminal input when it starts. `send` cannot distinguish
+can flush queued terminal input when it starts. Neither `send` nor `command`
+can distinguish
 this gap from an input-ready idle pane. For the child's first task, prefer
 `spawn --prompt` or `spawn --prompt-file`, whose private-file handoff does
 not depend on editor readiness. A successful send acknowledges the pane

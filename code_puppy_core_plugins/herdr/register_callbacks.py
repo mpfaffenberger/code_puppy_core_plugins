@@ -256,7 +256,9 @@ def _install_exit_guards() -> None:
 
 
 def _launcher_help():
-    return [("herdr", "Spawn a sibling Code Puppy or send a single-line prompt")]
+    return [
+        ("herdr", "Spawn, send a single-line prompt, or command a sibling; /herdr help")
+    ]
 
 
 def _launcher_command(command: str, name: str):
@@ -267,7 +269,16 @@ def _launcher_command(command: str, name: str):
     return execute(command)
 
 
+def _launcher_prompt():
+    if os.environ.get("HERDR_ENV") != "1" or not os.environ.get("HERDR_PANE_ID"):
+        return None
+    from .command_intent import GUIDANCE
+
+    return GUIDANCE
+
+
 # Register even outside herdr so the command explains its no-op clearly.
+register_callback("load_prompt", _launcher_prompt)
 register_callback("custom_command_help", _launcher_help)
 register_callback("custom_command", _launcher_command)
 
