@@ -2,10 +2,27 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest_plugins = ["tests.herdr_launcher_support"]
+
+
+def _isolate_herdr_environment():
+    """Never let plugin imports in CI claim/release a developer's live pane.
+
+    Clear before collection, not in a fixture: plugin modules may import while
+    pytest collects tests. Individual transport tests supply fake context.
+    """
+    for name in tuple(os.environ):
+        if name.startswith("HERDR_"):
+            os.environ.pop(name, None)
+
+
+_isolate_herdr_environment()
 
 
 @pytest.fixture(autouse=True)

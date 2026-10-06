@@ -266,6 +266,35 @@ def _install_exit_guards() -> None:
             logger.debug("herdr: could not install handler for %s", sig, exc_info=True)
 
 
+def _launcher_help():
+    return [
+        ("herdr", "Spawn, send a single-line prompt, or command a sibling; /herdr help")
+    ]
+
+
+def _launcher_command(command: str, name: str):
+    if name != "herdr":
+        return None
+    from .launcher import execute
+
+    return execute(command)
+
+
+def _launcher_prompt():
+    if os.environ.get("HERDR_ENV") != "1" or not os.environ.get("HERDR_PANE_ID"):
+        return None
+    from .command_intent import GUIDANCE
+
+    return GUIDANCE
+
+
+# Guidance is registered globally but returns None outside a herdr pane.
+register_callback("load_prompt", _launcher_prompt)
+register_callback("custom_command_help", _launcher_help)
+# Register outside herdr too so dispatch explains why it cannot act there.
+register_callback("custom_command", _launcher_command)
+
+
 if _reporter.active:
     register_callback("handle_cli_args", _on_handle_cli_args)
     register_callback("startup", _on_startup)
