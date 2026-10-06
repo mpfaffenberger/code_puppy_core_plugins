@@ -91,7 +91,10 @@ async def _serve() -> int:
 
     agent = CodePuppyAgent()
     try:
-        await run_agent(agent)
+        # The SDK registers session/close, session/fork and session/resume as
+        # unstable methods and answers "method not found" for them unless this
+        # flag is set -- even though we implement and advertise all three.
+        await run_agent(agent, use_unstable_protocol=True)
     finally:
         agent.shutdown()
         permissions.uninstall()
