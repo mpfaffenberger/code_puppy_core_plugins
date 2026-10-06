@@ -114,6 +114,9 @@ class CodePuppyAgent(Agent):
         the client advertises). Everything else stays local.
         """
         self._client_caps = client_capabilities
+        self._bridge.question_cards_enabled = capabilities.client_presents_questions(
+            client_capabilities
+        )
         io_delegation.install(client_capabilities)
         return InitializeResponse(
             protocol_version=PROTOCOL_VERSION,

@@ -57,6 +57,23 @@ def agent_capabilities() -> AgentCapabilities:
     )
 
 
+# ``clientCapabilities._meta`` key a client sets to show ``ask_user_question``
+# itself. Such a client renders the tool call's ``rawInput`` (the questions) as
+# its own question UI and sends the answers in its next prompt.
+QUESTION_CARDS_META_KEY = "codePuppyQuestionCards"
+
+
+def client_presents_questions(caps: ClientCapabilities | None) -> bool:
+    """True when the client opted in to presenting ``ask_user_question``.
+
+    Opt-in only: a client that does not set the flag keeps the existing
+    behavior (the model is told to ask in plain text). Defensive like
+    ``client_io_caps`` -- anything but a literal ``True`` reads as "no".
+    """
+    meta = getattr(caps, "field_meta", None) if caps is not None else None
+    return isinstance(meta, dict) and meta.get(QUESTION_CARDS_META_KEY) is True
+
+
 def client_io_caps(caps: ClientCapabilities | None) -> Tuple[bool, bool, bool]:
     """Return ``(fs_read, fs_write, terminal)`` from the client's capabilities.
 

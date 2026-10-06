@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from typing import Any, Dict, List, Optional
 
 from acp.helpers import (
@@ -89,8 +90,21 @@ _INTERACTIVE_BLOCK = {
 }
 
 
+# Tool result for a question the client is presenting (see
+# ``capabilities.client_presents_questions``).
+_CLIENT_QUESTION_RESULT = (
+    "The client is showing these questions to the user in its own question "
+    "UI. End this turn and wait for the user's answers, which arrive in their "
+    "next message. Do not repeat the questions in text or call this tool again."
+)
+
+
 class EventBridge:
     """Forward Code Puppy runtime hook events to the client as updates."""
+
+    #: Set at ``initialize`` when the client opted in to presenting
+    #: ``ask_user_question`` itself.
+    question_cards_enabled = False
 
     def register(self) -> None:
         """Register the runtime hooks. Call once when the connection opens."""
@@ -179,6 +193,8 @@ class EventBridge:
         session_id = state.get_active_session_id()
         if session_id is None:
             return None
+        if tool_name == "ask_user_question" and self.question_cards_enabled:
+            return await self._present_question(session_id, tool_args)
         if tool_name in _INTERACTIVE_TOOLS:
             return dict(_INTERACTIVE_BLOCK)
         tool_call_id = state.push_tool_call(tool_name)
@@ -191,6 +207,33 @@ class EventBridge:
             raw_input=tool_args if isinstance(tool_args, dict) else {},
         )
         await self._send(session_id, update)
+
+    async def _present_question(
+        self, session_id: str, tool_args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Hand ``ask_user_question`` to a client that presents it itself.
+
+        The client gets a completed tool call whose ``rawInput`` carries the
+        questions. The terminal picker is still blocked (stdin is the
+        JSON-RPC pipe), and the model receives ``tool_result`` -- "wait for
+        the answers" -- as the tool's return value instead of a policy deny.
+        """
+        await self._send(
+            session_id,
+            start_tool_call(
+                uuid.uuid4().hex,
+                "ask_user_question",
+                kind="other",
+                status="completed",
+                raw_input=tool_args if isinstance(tool_args, dict) else {},
+            ),
+        )
+        return {
+            "blocked": True,
+            "tool_result": _CLIENT_QUESTION_RESULT,
+            # Shown instead on cores without ``tool_result`` support.
+            "error_message": _CLIENT_QUESTION_RESULT,
+        }
 
     async def _on_post_tool_call(
         self,
