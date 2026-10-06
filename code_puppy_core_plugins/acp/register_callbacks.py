@@ -52,7 +52,12 @@ def _handle_cli_args(args: Any) -> Optional[Dict[str, Any]]:
 
     def _run() -> None:
         try:
-            box["exit_code"] = asyncio.run(_serve())
+            box["exit_code"] = asyncio.run(
+                _serve(
+                    default_agent_name=getattr(args, "agent", None),
+                    default_model_id=getattr(args, "model", None),
+                )
+            )
         except Exception:  # noqa: BLE001 - never leak a traceback onto stdout
             logger.exception("ACP server crashed")
             box["exit_code"] = 1
@@ -63,8 +68,15 @@ def _handle_cli_args(args: Any) -> Optional[Dict[str, Any]]:
     return {"handled": True, "exit_code": box["exit_code"]}
 
 
-async def _serve() -> int:
+async def _serve(
+    *,
+    default_agent_name: Optional[str] = None,
+    default_model_id: Optional[str] = None,
+) -> int:
     """Bind stdio via the ACP SDK and run one connection to completion.
+
+    ``--agent`` / ``--model`` set the route new sessions start on; they are
+    validated before anything is served.
 
     Before serving we protect stdout — the JSON-RPC channel — by pointing
     Code Puppy's streaming console and the root logger at stderr. In ACP mode
@@ -89,7 +101,10 @@ async def _serve() -> int:
     set_streaming_console(Console(file=sys.stderr))
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
-    agent = CodePuppyAgent()
+    agent = CodePuppyAgent(
+        default_agent_name=default_agent_name,
+        default_model_id=default_model_id,
+    )
     try:
         await run_agent(agent)
     finally:

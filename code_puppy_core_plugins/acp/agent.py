@@ -19,6 +19,7 @@ import asyncio
 import logging
 import uuid
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from acp import Agent
@@ -42,14 +43,16 @@ from acp.schema import (
 from code_puppy_core_plugins.acp import (
     capabilities,
     io_delegation,
-    mcp_config,
     permissions,
     persistence,
     replay,
+    route_changes,
+    route_runtime,
     session_config,
     state,
 )
 from code_puppy_core_plugins.acp.bridge import EventBridge
+from code_puppy_core_plugins.acp.route import SessionRoute, capability_metadata
 from code_puppy_core_plugins.acp.session import ACPSession
 
 logger = logging.getLogger(__name__)
@@ -72,10 +75,32 @@ def _code_puppy_version() -> str:
 class CodePuppyAgent(Agent):
     """One ACP connection's worth of Code Puppy, spread across client threads."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        default_agent_name: Optional[str] = None,
+        default_model_id: Optional[str] = None,
+        persistence_base_dir: Optional[Path] = None,
+    ) -> None:
+        """Set the route new sessions start on.
+
+        ``default_agent_name`` / ``default_model_id`` come from ``--agent`` /
+        ``--model`` and are checked up front, so a bad flag fails before the
+        connection is served. Without them a session starts on the current
+        agent and that agent's own model.
+        """
+        if default_agent_name is not None or default_model_id is not None:
+            from code_puppy.agents.agent_manager import get_current_agent_name
+
+            route_runtime.validate_startup_route(
+                default_agent_name or get_current_agent_name(), default_model_id
+            )
         self._sessions: Dict[str, ACPSession] = {}
         self._bridge = EventBridge()
         self._client_caps: Optional[ClientCapabilities] = None
+        self._default_agent_name = default_agent_name
+        self._default_model_id = default_model_id
+        self._persistence_base_dir = persistence_base_dir
 
     # ---- Connection lifecycle ---------------------------------------------
     def on_connect(self, conn: Any) -> None:
@@ -122,6 +147,7 @@ class CodePuppyAgent(Agent):
                 name="code-puppy",
                 title="Code Puppy",
                 version=_code_puppy_version(),
+                field_meta=capability_metadata(),
             ),
         )
 
@@ -145,11 +171,14 @@ class CodePuppyAgent(Agent):
         the client injects are attached to the agent.
         """
         session_id = f"sess_{uuid.uuid4().hex[:16]}"
-        self._make_session(session_id, cwd, additional_directories, mcp_servers)
+        session = self._make_session(
+            session_id, cwd, additional_directories, mcp_servers
+        )
         self._announce_commands_soon(session_id)
         return NewSessionResponse(
             session_id=session_id,
-            config_options=session_config.config_options() or None,
+            config_options=session_config.config_options(session.route),
+            field_meta=session.route.metadata(session_id),
         )
 
     async def load_session(
@@ -167,15 +196,20 @@ class CodePuppyAgent(Agent):
         conversation, AND replayed to the client as ``session/update``
         notifications so the client rebuilds the thread UI (without this the
         client shows -- and may discard -- an empty thread). Otherwise the
-        thread is re-created empty but functional.
+        thread is re-created empty but functional. A session that is still
+        live in this process is reused as is, on its current route.
         """
-        session = self._make_session(
+        session = self._sessions.get(session_id) or self._make_session(
             session_id, cwd, additional_directories, mcp_servers, rehydrate=True
         )
-        await replay.replay_history(session_id, session.agent.get_message_history())
+        async with session.route_lock:
+            if session.closing:
+                raise ValueError(f"session is closing: {session_id}")
+            await replay.replay_history(session_id, session.agent.get_message_history())
         self._announce_commands_soon(session_id)
         return LoadSessionResponse(
-            config_options=session_config.config_options() or None,
+            config_options=session_config.config_options(session.route),
+            field_meta=session.route.metadata(session_id),
         )
 
     async def resume_session(
@@ -189,13 +223,14 @@ class CodePuppyAgent(Agent):
         """Resume a session across a restart, rehydrating + replaying history."""
         from acp.schema import ResumeSessionResponse
 
-        session = self._make_session(
+        session = self._sessions.get(session_id) or self._make_session(
             session_id, cwd, additional_directories, mcp_servers, rehydrate=True
         )
         await replay.replay_history(session_id, session.agent.get_message_history())
         self._announce_commands_soon(session_id)
         return ResumeSessionResponse(
-            config_options=session_config.config_options() or None,
+            config_options=session_config.config_options(session.route),
+            field_meta=session.route.metadata(session_id),
         )
 
     async def fork_session(
@@ -213,33 +248,47 @@ class CodePuppyAgent(Agent):
         session OR one persisted by a prior process -- forking must survive a
         restart just like ``load``/``resume`` do, so we fall back to the
         pickled history when the source isn't live.
+
+        The fork starts on the agent and model its source was on, as a new
+        session at route epoch 1.
         """
         from acp.schema import ForkSessionResponse
 
         source = self._sessions.get(session_id)
+        source_route: Optional[SessionRoute] = None
         if source is not None:
-            source_history = list(source.agent.get_message_history())
-            source_cwd = source.cwd
+            async with source.route_lock:
+                if source.closing:
+                    raise ValueError(f"session is closing: {session_id}")
+                source_history = list(source.agent.get_message_history())
+                source_cwd = source.cwd
+                source_route = source.route
         else:
-            source_history = persistence.load_history(session_id)
-            if source_history is None:
+            record, source_history = persistence.load_for_restore(
+                session_id, self._persistence_base_dir
+            )
+            if record is None and not source_history:
                 raise ValueError(f"unknown session to fork: {session_id}")
-            source_cwd = None
+            source_cwd = record.cwd if record is not None else None
+            source_route = record.route if record is not None else None
         new_id = f"sess_{uuid.uuid4().hex[:16]}"
         session = self._make_session(
             new_id,
             cwd or source_cwd or "",
             additional_directories,
             mcp_servers,
+            route=(
+                SessionRoute(source_route.agent_name, source_route.model_id, 1)
+                if source_route is not None
+                else None
+            ),
+            history=source_history,
         )
-        try:
-            session.agent.set_message_history(source_history)
-        except Exception:  # noqa: BLE001
-            logger.debug("ACP: fork history copy failed", exc_info=True)
         self._announce_commands_soon(new_id)
         return ForkSessionResponse(
             session_id=new_id,
-            config_options=session_config.config_options() or None,
+            config_options=session_config.config_options(session.route),
+            field_meta=session.route.metadata(new_id),
         )
 
     async def set_session_mode(
@@ -255,40 +304,33 @@ class CodePuppyAgent(Agent):
         """
         return SetSessionModeResponse()
 
-    def _rebind_session_model(self, session_id: str) -> None:
-        """Rebuild a live session's agent on the current model, keeping state.
-
-        Message history and any client-injected MCP servers are preserved, so
-        the switch is invisible to the conversation. Best-effort: a rebind
-        failure leaves the existing agent in place.
-        """
-        session = self._sessions.get(session_id)
-        if session is None:
-            return
-        try:
-            history = list(session.agent.get_message_history())
-            session.agent = self._new_agent()
-            session.agent.set_message_history(history)
-            if session.mcp_specs:
-                mcp_config.attach(session.agent, session.mcp_specs)
-        except Exception:  # noqa: BLE001
-            logger.debug("ACP: model rebind failed", exc_info=True)
-
     async def set_config_option(
         self, config_id: str, session_id: str, value: Any, **kwargs: Any
     ) -> Any:
         """Apply a config-option change and return the refreshed options.
 
-        A change to the ``model`` option rebinds the live session's agent to the
-        newly-selected model (history + client MCP servers preserved), so the
-        client's model picker switches the model mid-thread.
+        A change to the ``model`` or ``agent`` option rebuilds this session's
+        agent on the new route (history + client MCP servers preserved), so the
+        client's pickers switch mid-thread. The change is session-local: it
+        never writes the terminal's global model or agent. An unknown value is
+        rejected and the session keeps its current route.
         """
         from acp.schema import SetSessionConfigOptionResponse
 
-        options = session_config.apply_config_option(config_id, value)
-        if config_id == session_config.MODEL_OPTION_ID:
-            self._rebind_session_model(session_id)
-        return SetSessionConfigOptionResponse(config_options=options or None)
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise ValueError(f"unknown session: {session_id}")
+        if config_id in (
+            session_config.AGENT_OPTION_ID,
+            session_config.MODEL_OPTION_ID,
+        ):
+            await route_changes.change_route(session, config_id, str(value), kwargs)
+        else:
+            session_config.apply_config_option(config_id, value, session.route)
+        return SetSessionConfigOptionResponse(
+            config_options=session_config.config_options(session.route),
+            field_meta=session.route.metadata(session_id),
+        )
 
     async def list_sessions(
         self, cursor: Optional[str] = None, cwd: Optional[str] = None, **kwargs: Any
@@ -314,7 +356,7 @@ class CodePuppyAgent(Agent):
                     additional_directories=s.additional_directories or None,
                 )
             )
-        for record in persistence.list_persisted():
+        for record in persistence.list_persisted(**self._persistence_kwargs()):
             if record.session_id in seen:
                 continue
             if cwd is not None and record.cwd != cwd:
@@ -354,13 +396,24 @@ class CodePuppyAgent(Agent):
         write a fresh warning into this session's bucket a moment *after*
         the purge, leaking that one entry forever (nothing will call
         ``close_session`` for this id a second time).
+
+        The session is marked closing first and the delete happens under its
+        route lock, so a route change or turn still saving cannot write the
+        session back to disk after it was deleted.
         """
         from code_puppy.agents._builder import reset_model_fallback_warnings
 
-        session = self._sessions.pop(session_id, None)
+        session = self._sessions.get(session_id)
         if session is not None:
-            await session.cancel_and_wait()
-        persistence.delete(session_id)
+            session.closing = True
+            session.cancel()
+            async with session.route_lock:
+                await session.cancel_and_wait()
+                if self._sessions.get(session_id) is session:
+                    self._sessions.pop(session_id)
+                persistence.delete(session_id, **self._persistence_kwargs())
+        else:
+            persistence.delete(session_id, **self._persistence_kwargs())
         reset_model_fallback_warnings(scope=session_id)
         return CloseSessionResponse()
 
@@ -372,6 +425,12 @@ class CodePuppyAgent(Agent):
         session = self._sessions.get(session_id)
         if session is None:
             raise ValueError(f"unknown session: {session_id}")
+        route_change = route_changes.route_command(prompt)
+        if route_change is not None:
+            config_id, value = route_change
+            await self.set_config_option(config_id, session_id, value, **kwargs)
+            await route_changes.emit_switch_confirmation(session, config_id)
+            return PromptResponse(stop_reason="end_turn")
         outcome = await session.prompt(prompt)
         return PromptResponse(stop_reason=outcome.stop_reason, usage=outcome.usage)
 
@@ -393,6 +452,8 @@ class CodePuppyAgent(Agent):
         mcp_servers: Optional[List[Any]],
         *,
         rehydrate: bool = False,
+        route: Optional[SessionRoute] = None,
+        history: Optional[List[Any]] = None,
     ) -> ACPSession:
         """Build + register an ``ACPSession`` with a fresh agent.
 
@@ -420,32 +481,51 @@ class CodePuppyAgent(Agent):
         """
         from code_puppy.agents._builder import reset_model_fallback_warnings
 
+        if session_id in self._sessions:
+            raise ValueError(f"session is already live: {session_id}")
         reset_model_fallback_warnings(scope=None)
-        agent = self._new_agent()
         if rehydrate:
-            history = persistence.load_history(session_id)
-            if history:
-                try:
-                    agent.set_message_history(history)
-                except Exception:  # noqa: BLE001
-                    logger.debug("ACP: history rehydrate failed", exc_info=True)
-        if mcp_servers:
-            mcp_config.attach(agent, mcp_servers)
+            record, history = persistence.load_for_restore(
+                session_id, self._persistence_base_dir
+            )
+            route = record.route if record is not None else None
+        agent_name, model_id, epoch = self._route_parts(route)
+        agent, effective_route = route_runtime.build_agent(
+            agent_name,
+            model_id,
+            epoch=epoch,
+            history=history,
+            mcp_specs=mcp_servers,
+        )
         session = ACPSession(
             session_id,
             agent,
             cwd=cwd,
             additional_directories=additional_directories,
             mcp_specs=mcp_servers,
+            route=effective_route,
+            persistence_base_dir=self._persistence_base_dir,
         )
         self._sessions[session_id] = session
         return session
 
-    @staticmethod
-    def _new_agent() -> Any:
-        from code_puppy.agents.agent_manager import get_current_agent_name, load_agent
+    def _route_parts(
+        self, route: Optional[SessionRoute]
+    ) -> tuple[str, Optional[str], int]:
+        """``(agent, model, epoch)`` to build: ``route``, or the default route."""
+        if route is not None:
+            return route.agent_name, route.model_id, route.epoch
+        agent_name = self._default_agent_name
+        if agent_name is None:
+            from code_puppy.agents.agent_manager import get_current_agent_name
 
-        return load_agent(get_current_agent_name())
+            agent_name = get_current_agent_name()
+        return agent_name, self._default_model_id, 1
+
+    def _persistence_kwargs(self) -> Dict[str, Any]:
+        if self._persistence_base_dir is None:
+            return {}
+        return {"base_dir": self._persistence_base_dir}
 
     def _announce_commands_soon(self, session_id: str) -> None:
         """Schedule an ``available_commands_update`` after the response ships.

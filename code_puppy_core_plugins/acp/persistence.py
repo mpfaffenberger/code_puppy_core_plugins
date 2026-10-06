@@ -13,7 +13,9 @@ Alongside the session envelope we write a small ACP metadata sidecar
 ``additional_directories``. This is what lets ``list_persisted`` surface
 revivable sessions after a restart *with the ``cwd`` that ACP's
 ``SessionInfo`` requires* -- the core session metadata records the process
-cwd, which is wrong for per-session ACP threads.
+cwd, which is wrong for per-session ACP threads. The sidecar also records the
+session's route (see ``route.py``) and whether a history was saved, so a
+restored session reopens on the agent and model it was left on.
 
 Every public entry point takes an optional ``base_dir``: production callers
 omit it (it defaults to ``AUTOSAVE_DIR/acp``), while tests pass an explicit
@@ -29,9 +31,12 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional
+
+from code_puppy_core_plugins.acp.route import SessionRoute
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +49,11 @@ class PersistedSession:
     cwd: Optional[str] = None
     additional_directories: Optional[List[str]] = None
     updated_at: Optional[str] = None
+    route: Optional[SessionRoute] = None
+    has_history: Optional[bool] = None
+    #: The sidecar has a ``route`` entry. ``route`` is ``None`` with this set
+    #: only when the stored entry could not be read.
+    route_recorded: bool = False
 
 
 def _base_dir() -> Path:
@@ -77,43 +87,52 @@ def save(
     cwd: Optional[str] = None,
     additional_directories: Optional[List[str]] = None,
     base_dir: Optional[Path] = None,
-) -> None:
+    route: Optional[SessionRoute] = None,
+) -> bool:
     """Persist ``agent``'s message history under ``session_id`` (best-effort).
 
     Also writes an ACP metadata sidecar carrying the session's ``cwd`` +
-    ``additional_directories`` so ``list_persisted`` can surface it after a
-    restart.
+    ``additional_directories`` (and its ``route``, when given) so
+    ``list_persisted`` can surface it after a restart. With a route, the
+    sidecar is written even before the first turn, so a route change is
+    durable. Returns whether the sidecar was written.
     """
     try:
         from code_puppy.session_storage import save_session
 
         base = _resolve_base(base_dir)
         history = list(agent.get_message_history())
-        if not history:
-            return
+        if not history and route is None:
+            return True  # nothing to record
         timestamp = datetime.datetime.now().isoformat()
-        save_session(
-            history=history,
-            session_name=_safe_name(session_id),
-            base_dir=base,
-            timestamp=timestamp,
-            token_estimator=getattr(agent, "estimate_tokens_for_message", lambda _m: 0),
-            auto_saved=True,
-        )
-        _write_acp_meta(
+        if history:
+            save_session(
+                history=history,
+                session_name=_safe_name(session_id),
+                base_dir=base,
+                timestamp=timestamp,
+                token_estimator=getattr(
+                    agent, "estimate_tokens_for_message", lambda _m: 0
+                ),
+                auto_saved=True,
+            )
+        return _write_acp_meta(
             base,
             PersistedSession(
                 session_id=session_id,
                 cwd=cwd,
                 additional_directories=list(additional_directories or []) or None,
                 updated_at=timestamp,
+                route=route,
+                has_history=bool(history),
             ),
         )
     except Exception:  # noqa: BLE001
         logger.debug("ACP: session persist failed", exc_info=True)
+        return False
 
 
-def _write_acp_meta(base: Path, record: PersistedSession) -> None:
+def _write_acp_meta(base: Path, record: PersistedSession) -> bool:
     """Write the ACP metadata sidecar for ``record`` (best-effort, atomic)."""
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -123,12 +142,19 @@ def _write_acp_meta(base: Path, record: PersistedSession) -> None:
             "cwd": record.cwd,
             "additional_directories": record.additional_directories,
             "updated_at": record.updated_at,
+            "route": record.route.persisted_payload() if record.route else None,
+            "has_history": record.has_history,
         }
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return True
     except Exception:  # noqa: BLE001
         logger.debug("ACP: session meta persist failed", exc_info=True)
+        return False
 
 
 def load_history(
@@ -144,6 +170,58 @@ def load_history(
     except Exception:  # noqa: BLE001
         logger.debug("ACP: session load failed", exc_info=True)
         return None
+
+
+def load_record(
+    session_id: str, base_dir: Optional[Path] = None
+) -> Optional[PersistedSession]:
+    """Load one session's ACP sidecar, or ``None`` when there is none."""
+    path = _acp_meta_path(_resolve_base(base_dir), session_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception:  # noqa: BLE001
+        logger.debug("ACP: session meta load failed", exc_info=True)
+        return None
+    if data.get("session_id") != session_id:
+        return None
+    return PersistedSession(
+        session_id=session_id,
+        cwd=data.get("cwd"),
+        additional_directories=data.get("additional_directories"),
+        updated_at=data.get("updated_at"),
+        route=SessionRoute.from_persisted(data.get("route")),
+        has_history=data.get("has_history"),
+        route_recorded=data.get("route") is not None,
+    )
+
+
+def load_for_restore(
+    session_id: str, base_dir: Optional[Path] = None
+) -> tuple[Optional[PersistedSession], List[Any]]:
+    """Load a session's record and history for ``load`` / ``resume`` / ``fork``.
+
+    A session saved before routes were recorded (or never saved) comes back
+    with no route, and the caller opens it on the default route. A session
+    whose recorded route is unreadable, or whose recorded history is missing,
+    raises ``RouteUnavailable`` rather than reopening it on a different
+    route or with an empty conversation.
+    """
+    from code_puppy_core_plugins.acp.route import RouteUnavailable
+
+    history_kwargs = {"base_dir": base_dir} if base_dir is not None else {}
+    record = load_record(session_id, base_dir)
+    if record is None or not record.route_recorded:
+        return record, list(load_history(session_id, **history_kwargs) or [])
+    if record.route is None:
+        raise RouteUnavailable(f"Stored route for session '{session_id}' is unreadable")
+    if record.has_history is False:
+        return record, []
+    history = load_history(session_id, **history_kwargs)
+    if not history:
+        raise RouteUnavailable(f"Saved history for session '{session_id}' is missing")
+    return record, history
 
 
 def _session_file_exists(base: Path, session_id: str) -> bool:
@@ -177,12 +255,16 @@ def list_persisted(base_dir: Optional[Path] = None) -> List[PersistedSession]:
                 continue
             if not _session_file_exists(base, session_id):
                 continue
+            route = SessionRoute.from_persisted(data.get("route"))
             records.append(
                 PersistedSession(
                     session_id=session_id,
                     cwd=data.get("cwd"),
                     additional_directories=data.get("additional_directories"),
                     updated_at=data.get("updated_at"),
+                    route=route,
+                    has_history=data.get("has_history"),
+                    route_recorded=data.get("route") is not None,
                 )
             )
         except Exception:  # noqa: BLE001
