@@ -13,6 +13,9 @@ logic or forcing yolo mode:
   and already runs on the ACP loop, so it can ``await`` the client directly.
 
 Both edges fail **closed** (deny) if the connection is gone or the client errors.
+A denial nobody chose -- a cancelled, failed or timed-out request, or an option
+we do not recognize -- is reported as ``PermissionNotDecided`` rather than as the
+user rejecting the operation, so the model is not told the user said no.
 """
 
 from __future__ import annotations
@@ -27,6 +30,14 @@ from acp.schema import PermissionOption, ToolCallUpdate
 from code_puppy.callbacks import register_callback
 from code_puppy_core_plugins.acp import state
 
+try:
+    from code_puppy.tools.file_permission_state import PermissionNotDecided
+except ImportError:  # pragma: no cover - code_puppy without the marker type
+
+    class PermissionNotDecided(str):  # type: ignore[no-redef]
+        """Stand-in for older cores, which report every denial as a rejection."""
+
+
 logger = logging.getLogger(__name__)
 
 # How long to wait for a human in the client to answer a permission dialog. Dialogs
@@ -39,6 +50,7 @@ _OPTIONS = [
     PermissionOption(option_id="reject_once", name="Reject", kind="reject_once"),
 ]
 _ALLOW_IDS = {"allow_once"}
+_REJECT_IDS = {"reject_once"}
 
 
 def _tool_call_ref(title: str) -> ToolCallUpdate:
@@ -55,24 +67,55 @@ def _tool_call_ref(title: str) -> ToolCallUpdate:
     return ToolCallUpdate(tool_call_id=f"perm_{uuid.uuid4().hex[:12]}", title=title)
 
 
-async def _ask_client(session_id: str, title: str) -> bool:
-    """Show an allow/deny dialog in the client; return ``True`` if allowed."""
+async def _ask_client_outcome(
+    session_id: str, title: str
+) -> Tuple[bool, Optional[PermissionNotDecided]]:
+    """Show an allow/deny dialog in the client.
+
+    Returns ``(True, None)`` when allowed and ``(False, None)`` when a person
+    selected Reject. Every other denial -- no connection, a failed or
+    timed-out request, a cancelled dialog, an unknown option -- returns
+    ``(False, PermissionNotDecided(reason))``.
+    """
     connection = state.get_connection()
     if connection is None:
-        return False
+        return False, PermissionNotDecided("The client connection is unavailable.")
     try:
-        response = await connection.request_permission(
-            options=list(_OPTIONS),
-            session_id=session_id,
-            tool_call=_tool_call_ref(title),
+        response = await asyncio.wait_for(
+            connection.request_permission(
+                options=list(_OPTIONS),
+                session_id=session_id,
+                tool_call=_tool_call_ref(title),
+            ),
+            timeout=_PERMISSION_TIMEOUT_S,
         )
+    except asyncio.TimeoutError:
+        logger.warning("session/request_permission timed out; denying")
+        return False, PermissionNotDecided("The permission request timed out.")
     except Exception:  # noqa: BLE001
         logger.exception("session/request_permission failed; denying")
-        return False
+        return False, PermissionNotDecided(
+            "The permission request could not be completed."
+        )
     outcome = getattr(response, "outcome", None)
     if getattr(outcome, "outcome", None) == "selected":
-        return getattr(outcome, "option_id", None) in _ALLOW_IDS
-    return False
+        option_id = getattr(outcome, "option_id", None)
+        if option_id in _ALLOW_IDS:
+            return True, None
+        if option_id in _REJECT_IDS:
+            return False, None
+        return False, PermissionNotDecided(
+            "The client returned an unknown permission choice."
+        )
+    return False, PermissionNotDecided(
+        "The permission request was cancelled without a decision."
+    )
+
+
+async def _ask_client(session_id: str, title: str) -> bool:
+    """Show an allow/deny dialog in the client; return ``True`` if allowed."""
+    allowed, _ = await _ask_client_outcome(session_id, title)
+    return allowed
 
 
 def _approval_backend(
@@ -80,13 +123,15 @@ def _approval_backend(
 ) -> Tuple[bool, Optional[str]]:
     """Approval backend for file ops; asks the client from the tool threadpool.
 
-    Returns ``(approved, feedback)``. Feedback is always ``None`` — the client's
-    dialog is yes/no, not a free-text channel.
+    Returns ``(approved, feedback)``. The client's dialog is yes/no, not a
+    free-text channel, so feedback is ``None`` for an allow or a Reject, and a
+    ``PermissionNotDecided`` when the operation was denied without anyone
+    choosing Reject.
     """
     loop = state.get_loop()
     session_id = state.get_active_session_id()
     if loop is None or session_id is None:
-        return False, None
+        return False, PermissionNotDecided("No client is available to ask.")
 
     # Guard against being called on the loop thread itself: blocking on
     # run_coroutine_threadsafe there would deadlock (file tools run off-loop).
@@ -96,17 +141,24 @@ def _approval_backend(
         running = None
     if running is loop:
         logger.error("Approval backend hit on the ACP loop; denying to avoid deadlock")
-        return False, None
+        return False, PermissionNotDecided(
+            "The permission request could not be completed."
+        )
 
-    future = asyncio.run_coroutine_threadsafe(_ask_client(session_id, title), loop)
+    future = asyncio.run_coroutine_threadsafe(
+        _ask_client_outcome(session_id, title), loop
+    )
     try:
-        allowed = future.result(_PERMISSION_TIMEOUT_S)
+        # A little longer than the request's own timeout, which answers first.
+        allowed, not_decided = future.result(_PERMISSION_TIMEOUT_S + 5)
     except Exception:  # noqa: BLE001 - includes TimeoutError
         # Abandon the in-flight request so it doesn't linger on the loop.
         future.cancel()
         logger.exception("ACP approval bridge failed; denying")
-        return False, None
-    return bool(allowed), None
+        return False, PermissionNotDecided(
+            "The permission request could not be completed."
+        )
+    return bool(allowed), not_decided
 
 
 async def _on_run_shell_command(
@@ -123,15 +175,26 @@ async def _on_run_shell_command(
     auto-approve file writes yet still prompt for every shell command.
     """
     session_id = state.get_active_session_id()
-    if state.get_connection() is None or session_id is None:
+    if session_id is None:
         return None
     from code_puppy.config import get_yolo_mode
 
     if get_yolo_mode():
         return None
-    allowed = await _ask_client(session_id, f"Run shell command: {command}")
+    allowed, not_decided = await _ask_client_outcome(
+        session_id, f"Run shell command: {command}"
+    )
     if allowed:
         return None
+    if not_decided is not None:
+        return {
+            "blocked": True,
+            "error_message": "Permission not granted",
+            "reasoning": (
+                f"{not_decided} The command was not run. The user did not "
+                "reject it; do not say they did."
+            ),
+        }
     return {
         "blocked": True,
         "error_message": "Command rejected in the client",
