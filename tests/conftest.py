@@ -4,9 +4,24 @@ from __future__ import annotations
 
 import os
 import sys
-from unittest.mock import MagicMock
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-import pytest
+# Pin before importing keyring/core or collecting plugin modules. HOME/XDG
+# isolation alone does not isolate the native macOS Keychain. Children inherit
+# the null backend, while this process gets meaningful in-memory storage.
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
+
+import keyring  # noqa: E402
+import pytest  # noqa: E402
+
+from tests.keyring_test_support import (  # noqa: E402
+    MemoryKeyring,
+    pin_secret_store_paths,
+)
+
+keyring.set_keyring(MemoryKeyring())
 
 pytest_plugins = ["tests.herdr_launcher_support"]
 
@@ -40,6 +55,17 @@ def _isolate_code_puppy_config(tmp_path, monkeypatch):
     monkeypatch.setattr(token_store, "_exchange_blocked_until", 0.0)
     monkeypatch.setattr(config, "CONFIG_FILE", config_dir / "puppy.cfg")
 
+    pin_secret_store_paths(monkeypatch, config_dir)
+    previous_backend = keyring.get_keyring()
+    keyring.set_keyring(MemoryKeyring())
+    # shared_credentials.save updates os.environ directly, not via monkeypatch.
+    # Restore synthetic rotations so later tests never inherit them.
+    try:
+        with patch.dict(os.environ):
+            yield
+    finally:
+        keyring.set_keyring(previous_backend)
+
 
 @pytest.fixture(autouse=True)
 def _isolate_plugin_skills(request, monkeypatch):
@@ -64,6 +90,16 @@ def pytest_configure(config):
     stubs in slim environments where it is genuinely unavailable, and stub all
     submodules that ``pydantic_ai.mcp`` imports during collection.
     """
+    # Safe before MCP stubs: secret_store's import chain needs no MCP modules.
+    # Pin first so optional package imports cannot read real fallback storage.
+    # Protect fallback reads during collection too, before tmp_path fixtures run.
+    temporary = tempfile.TemporaryDirectory(prefix="plugin-test-secrets-")
+    config.add_cleanup(temporary.cleanup)
+    patcher = pytest.MonkeyPatch()
+    config.add_cleanup(patcher.undo)
+    directory = Path(temporary.name)
+    pin_secret_store_paths(patcher, directory)
+
     config.addinivalue_line(
         "markers",
         "plugin_skills: opt out of _isolate_plugin_skills so the real "
