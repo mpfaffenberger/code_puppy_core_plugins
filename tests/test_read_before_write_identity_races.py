@@ -5,13 +5,21 @@ from __future__ import annotations
 import logging
 
 import pytest
+from code_puppy import config
 
 from code_puppy_core_plugins.read_before_write import register_callbacks as rbw
 
 
 @pytest.fixture(autouse=True)
-def _isolated_observations():
+def _isolated_observations(_isolate_code_puppy_config):
+    """Fresh state per test, with the opt-in guard explicitly switched on.
+
+    The plugin is off by default, so enforcement tests must opt in through the
+    plugin's own config key. Depending on the config-isolation fixture keeps
+    this write away from the developer's real ``puppy.cfg``.
+    """
     rbw._reset_state()
+    config.set_value(rbw.CONFIG_KEY, "1")
     yield
     rbw._reset_state()
 

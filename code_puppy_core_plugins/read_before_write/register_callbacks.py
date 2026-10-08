@@ -6,9 +6,13 @@ mutation records the canonical path's ``(st_mtime_ns, st_size)`` version for the
 active conversation/subagent scope. Targeted edits require that observation and
 must still match it; full-file overwrites may not blindly clobber an unread file.
 
-This is a correctness guard, not a permission prompt, so YOLO mode does not
-bypass it. Set ``read_before_write_enabled = 0`` (or ``false``) in ``puppy.cfg``
-to disable enforcement; observations continue to be recorded while disabled.
+The guard is opt-in and OFF by default. Set ``read_before_write_enabled = 1``
+(or ``true``) in ``puppy.cfg`` to enable enforcement. Observations are recorded
+either way, so turning it on mid-session already knows about earlier reads. A
+missing, empty, unparseable or unreadable setting all mean "off".
+
+Once enabled this is a correctness guard, not a permission prompt, so YOLO mode
+does not bypass it.
 ``delete_file`` is deliberately unguarded in v1 and retains its normal
 interactive permission flow, matching the source policy's treatment of deletes.
 Shell redirection and browser/MCP file tools are out of scope: only Code Puppy's
@@ -43,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 CONFIG_KEY = "read_before_write_enabled"
 ENABLED_CONFIG_KEY = CONFIG_KEY
-DEFAULT_ENABLED = True
+DEFAULT_ENABLED = False
 
 # Re-export the state primitives from the logic module for focused tests and
 # debugging without making callback registration itself chunky.
@@ -80,14 +84,19 @@ def _scope_key() -> policy.ScopeKey:
 
 
 def _is_enabled() -> bool:
-    """Read defensive boolean config; config failures disable enforcement."""
+    """Return whether enforcement is on (opt-in, off by default).
+
+    Every failure mode leans the same way: a config read error, a missing or
+    empty value, or an unparseable value all leave enforcement OFF. Only an
+    explicit truthy value (``1`` / ``true``) turns it on.
+    """
     try:
         from code_puppy.config import get_value
 
         raw = get_value(CONFIG_KEY)
     except Exception:
         logger.warning(
-            "Could not read %s; read-before-write enforcement is fail-open",
+            "Could not read %s; read-before-write enforcement stays off",
             CONFIG_KEY,
             exc_info=True,
         )
@@ -99,7 +108,7 @@ def _is_enabled() -> bool:
         text = str(raw).strip().lower()
     except Exception:
         logger.warning(
-            "Invalid %s value; read-before-write enforcement is fail-open",
+            "Invalid %s value; read-before-write enforcement stays off",
             CONFIG_KEY,
             exc_info=True,
         )
@@ -112,7 +121,7 @@ def _is_enabled() -> bool:
         return True
 
     logger.warning(
-        "Invalid %s value %r; falling back to enabled",
+        "Invalid %s value %r; read-before-write enforcement stays off",
         CONFIG_KEY,
         raw,
     )

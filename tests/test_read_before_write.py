@@ -15,8 +15,15 @@ from code_puppy_core_plugins.read_before_write import register_callbacks as rbw
 
 
 @pytest.fixture(autouse=True)
-def _isolated_observations():
+def _isolated_observations(_isolate_code_puppy_config):
+    """Fresh state per test, with the opt-in guard explicitly switched on.
+
+    The plugin is off by default, so enforcement tests must opt in through the
+    plugin's own config key. Depending on the config-isolation fixture keeps
+    this write away from the developer's real ``puppy.cfg``.
+    """
     rbw._reset_state()
+    config.set_value(rbw.CONFIG_KEY, "1")
     yield
     rbw._reset_state()
 
@@ -291,6 +298,72 @@ def test_observations_are_isolated_by_conversation_and_subagent(tmp_path, monkey
 
     active["chain"] = ()
     assert _pre("replace_in_file", path) is None
+
+
+def test_guard_is_off_by_default_when_nothing_is_configured(tmp_path):
+    path = tmp_path / "unconfigured.txt"
+    path.write_text("never read", encoding="utf-8")
+    config.reset_value(rbw.CONFIG_KEY)
+    assert config.get_value(rbw.CONFIG_KEY) is None
+
+    assert rbw.DEFAULT_ENABLED is False
+    assert rbw._is_enabled() is False
+    # The same unread-file edits that are blocked once opted in go through.
+    assert _pre("replace_in_file", path) is None
+    assert _pre("delete_snippet", path) is None
+    assert _pre("create_file", path, overwrite=True) is None
+
+
+def test_opting_in_enables_the_same_scenario(tmp_path):
+    path = tmp_path / "opted-in.txt"
+    path.write_text("never read", encoding="utf-8")
+    config.reset_value(rbw.CONFIG_KEY)
+    assert _pre("replace_in_file", path) is None
+
+    config.set_value(rbw.CONFIG_KEY, "1")
+
+    assert _pre("replace_in_file", path)["blocked"] is True
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, False),
+        ("", False),
+        ("  ", False),
+        ("maybe", False),
+        ("0", False),
+        ("false", False),
+        ("1", True),
+        ("true", True),
+        (" TRUE ", True),
+    ],
+)
+def test_is_enabled_parses_config_and_defaults_to_off(raw, expected, monkeypatch):
+    monkeypatch.setattr(config, "get_value", lambda key: raw)
+
+    assert rbw._is_enabled() is expected
+
+
+def test_unparseable_config_value_stays_off_and_warns(monkeypatch, caplog):
+    monkeypatch.setattr(config, "get_value", lambda key: "maybe")
+
+    with caplog.at_level(logging.WARNING):
+        assert rbw._is_enabled() is False
+
+    assert "stays off" in caplog.text
+
+
+def test_unreadable_config_stays_off_and_warns(monkeypatch, caplog):
+    def broken_get_value(key):
+        raise OSError("config unreadable")
+
+    monkeypatch.setattr(config, "get_value", broken_get_value)
+
+    with caplog.at_level(logging.WARNING):
+        assert rbw._is_enabled() is False
+
+    assert "stays off" in caplog.text
 
 
 def test_config_disabled_allows_guarded_operations(tmp_path):
