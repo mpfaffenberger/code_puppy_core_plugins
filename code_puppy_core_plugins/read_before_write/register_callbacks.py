@@ -18,7 +18,7 @@ interactive permission flow, matching the source policy's treatment of deletes.
 Shell redirection and browser/MCP file tools are out of scope: only Code Puppy's
 named file tools pass these hooks. Raw paths are Pydantic-coerced and resolved
 through the same session working-directory helper as those tools before
-``realpath(abspath(...))`` canonicalization.
+``realpath`` canonicalization.
 
 Versions use local metadata rather than content hashes. A pre-read snapshot
 prevents a changed path/version from being blessed by the post hook, but tiny
@@ -46,7 +46,6 @@ from . import policy
 logger = logging.getLogger(__name__)
 
 CONFIG_KEY = "read_before_write_enabled"
-ENABLED_CONFIG_KEY = CONFIG_KEY
 DEFAULT_ENABLED = False
 
 # Re-export the state primitives from the logic module for focused tests and
@@ -236,14 +235,7 @@ register_callback("post_tool_call", _on_post_tool_call)
 __all__ = [
     "CONFIG_KEY",
     "DEFAULT_ENABLED",
-    "ENABLED_CONFIG_KEY",
     "MutationSnapshot",
     "Observation",
     "ReadSnapshot",
-    "_is_enabled",
-    "_observations",
-    "_on_post_tool_call",
-    "_on_pre_tool_call",
-    "_reset_state",
-    "_scope_key",
 ]

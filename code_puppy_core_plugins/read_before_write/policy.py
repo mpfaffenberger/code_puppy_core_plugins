@@ -73,7 +73,9 @@ def _normalize_path(file_path: Any) -> str | None:
     if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
         return None
     effective_path = resolve_path(raw_path)
-    return os.path.realpath(os.path.abspath(effective_path))
+    # resolve_path() already returns an absolute, normalized path, so realpath
+    # only has symlinks left to resolve.
+    return os.path.realpath(effective_path)
 
 
 def _path_details(tool_args: Any) -> tuple[str, str] | None:
@@ -364,9 +366,6 @@ __all__ = [
     "ReadSnapshot",
     "ScopeKey",
     "Version",
-    "_normalize_path",
-    "_observations",
-    "_reset_state",
     "capture_mutation_snapshot",
     "capture_read_snapshot",
     "enforce",

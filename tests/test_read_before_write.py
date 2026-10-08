@@ -369,7 +369,7 @@ def test_unreadable_config_stays_off_and_warns(monkeypatch, caplog):
 def test_config_disabled_allows_guarded_operations(tmp_path):
     path = tmp_path / "disabled.txt"
     path.write_text("unread", encoding="utf-8")
-    config.set_value(rbw.ENABLED_CONFIG_KEY, "false")
+    config.set_value(rbw.CONFIG_KEY, "false")
 
     assert _pre("replace_in_file", path) is None
     assert _pre("delete_snippet", path) is None
@@ -379,10 +379,10 @@ def test_config_disabled_allows_guarded_operations(tmp_path):
 def test_config_disabled_still_records_observations(tmp_path):
     path = tmp_path / "recorded-while-disabled.txt"
     path.write_text("content", encoding="utf-8")
-    config.set_value(rbw.ENABLED_CONFIG_KEY, "0")
+    config.set_value(rbw.CONFIG_KEY, "0")
 
     _record_read(path)
-    config.set_value(rbw.ENABLED_CONFIG_KEY, "1")
+    config.set_value(rbw.CONFIG_KEY, "1")
 
     assert _pre("replace_in_file", path) is None
 
