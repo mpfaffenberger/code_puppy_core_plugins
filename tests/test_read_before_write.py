@@ -366,6 +366,103 @@ def test_unreadable_config_stays_off_and_warns(monkeypatch, caplog):
     assert "stays off" in caplog.text
 
 
+def _config_warnings(caplog):
+    return [r for r in caplog.records if rbw.CONFIG_KEY in r.getMessage()]
+
+
+def _guarded_calls(path, times=6):
+    return [_pre("replace_in_file", path) for _ in range(times)]
+
+
+def test_repeated_invalid_value_is_reported_once(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "repeat-invalid.txt"
+    path.write_text("unread", encoding="utf-8")
+    monkeypatch.setattr(config, "get_value", lambda key: "maybe")
+
+    with caplog.at_level(logging.WARNING):
+        decisions = _guarded_calls(path)
+
+    assert decisions == [None] * 6
+    assert len(_config_warnings(caplog)) == 1
+
+
+def test_persistent_config_read_error_is_reported_once_with_traceback(
+    tmp_path, monkeypatch, caplog
+):
+    path = tmp_path / "repeat-error.txt"
+    path.write_text("unread", encoding="utf-8")
+
+    def broken_get_value(key):
+        raise OSError("config unreadable")
+
+    monkeypatch.setattr(config, "get_value", broken_get_value)
+
+    with caplog.at_level(logging.WARNING):
+        decisions = _guarded_calls(path)
+
+    warnings = _config_warnings(caplog)
+    assert decisions == [None] * 6
+    assert len(warnings) == 1
+    assert warnings[0].exc_info is not None
+
+
+def test_changed_bad_value_is_reported_again(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "changed-bad.txt"
+    path.write_text("unread", encoding="utf-8")
+    value = {"raw": "maybe"}
+    monkeypatch.setattr(config, "get_value", lambda key: value["raw"])
+
+    with caplog.at_level(logging.WARNING):
+        _guarded_calls(path, 3)
+        value["raw"] = "perhaps"
+        _guarded_calls(path, 3)
+
+    warnings = _config_warnings(caplog)
+    assert len(warnings) == 2
+    assert "maybe" in warnings[0].getMessage()
+    assert "perhaps" in warnings[1].getMessage()
+
+
+@pytest.mark.parametrize("clean_value", ["1", "0", None, ""])
+def test_bad_value_is_reported_again_after_a_clean_read(
+    clean_value, tmp_path, monkeypatch, caplog
+):
+    path = tmp_path / "recovery.txt"
+    path.write_text("unread", encoding="utf-8")
+    value = {"raw": "maybe"}
+    monkeypatch.setattr(config, "get_value", lambda key: value["raw"])
+
+    with caplog.at_level(logging.WARNING):
+        _guarded_calls(path, 2)
+        value["raw"] = clean_value
+        _guarded_calls(path, 2)
+        value["raw"] = "maybe"
+        _guarded_calls(path, 2)
+
+    assert len(_config_warnings(caplog)) == 2
+
+
+def test_enabling_and_disabling_at_runtime_takes_effect_between_calls(
+    tmp_path, monkeypatch, caplog
+):
+    path = tmp_path / "runtime-toggle.txt"
+    path.write_text("unread", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        config.set_value(rbw.CONFIG_KEY, "maybe")
+        assert _pre("replace_in_file", path) is None
+        config.set_value(rbw.CONFIG_KEY, "1")
+        assert _pre("replace_in_file", path)["blocked"] is True
+        config.set_value(rbw.CONFIG_KEY, "0")
+        assert _pre("replace_in_file", path) is None
+        config.set_value(rbw.CONFIG_KEY, "1")
+        assert _pre("replace_in_file", path)["blocked"] is True
+        config.set_value(rbw.CONFIG_KEY, "maybe")
+        assert _pre("replace_in_file", path) is None
+
+    assert len(_config_warnings(caplog)) == 2
+
+
 def test_config_disabled_allows_guarded_operations(tmp_path):
     path = tmp_path / "disabled.txt"
     path.write_text("unread", encoding="utf-8")

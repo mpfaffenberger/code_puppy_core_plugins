@@ -82,44 +82,53 @@ def _scope_key() -> policy.ScopeKey:
     return (get_conversation_root_id() or "global", get_subagent_chain())
 
 
+# The most recent config problem that was logged, as (kind, detail). The config
+# is re-read on every guarded call (so enabling at runtime works) but an
+# unchanged problem is logged only once; a clean read clears it.
+_last_diagnostic: tuple[str, str] | None = None
+
+
+def _warn_once(kind: str, detail: str, message: str, *args: Any, **kwargs: Any) -> None:
+    global _last_diagnostic
+    if _last_diagnostic != (kind, detail):
+        _last_diagnostic = (kind, detail)
+        logger.warning(message, *args, **kwargs)
+
+
 def _is_enabled() -> bool:
     """Return whether enforcement is on (opt-in, off by default).
 
     Every failure mode leans the same way: a config read error, a missing or
     empty value, or an unparseable value all leave enforcement OFF. Only an
-    explicit truthy value (``1`` / ``true``) turns it on.
+    explicit truthy value (``1`` / ``true``) turns it on. The config is read on
+    every call; a problem is logged once until it changes or the config reads
+    cleanly again.
     """
+    global _last_diagnostic
     try:
         from code_puppy.config import get_value
 
         raw = get_value(CONFIG_KEY)
-    except Exception:
-        logger.warning(
+        text = "" if raw is None else str(raw).strip().lower()
+    except Exception as exc:
+        _warn_once(
+            "unreadable",
+            f"{type(exc).__name__}: {exc}",
             "Could not read %s; read-before-write enforcement stays off",
             CONFIG_KEY,
             exc_info=True,
         )
         return False
 
-    if raw is None:
-        return DEFAULT_ENABLED
-    try:
-        text = str(raw).strip().lower()
-    except Exception:
-        logger.warning(
-            "Invalid %s value; read-before-write enforcement stays off",
-            CONFIG_KEY,
-            exc_info=True,
-        )
-        return False
-    if not text:
-        return DEFAULT_ENABLED
-    if text in {"0", "false"}:
-        return False
-    if text in {"1", "true"}:
-        return True
+    if text in {"", "0", "false", "1", "true"}:
+        _last_diagnostic = None
+        if not text:
+            return DEFAULT_ENABLED
+        return text in {"1", "true"}
 
-    logger.warning(
+    _warn_once(
+        "invalid",
+        repr(raw),
         "Invalid %s value %r; read-before-write enforcement stays off",
         CONFIG_KEY,
         raw,
@@ -223,6 +232,8 @@ def _on_post_tool_call(
 
 def _reset_state() -> None:
     """Clear every recorded scope (used by tests and defensive re-init)."""
+    global _last_diagnostic
+    _last_diagnostic = None
     policy._reset_state()
     _read_attempt.set(None)
     _mutation_attempt.set(None)
