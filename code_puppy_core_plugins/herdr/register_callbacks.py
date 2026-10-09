@@ -61,6 +61,7 @@ import atexit
 import logging
 import os
 import signal
+from pathlib import Path
 
 from code_puppy.callbacks import register_callback
 
@@ -280,8 +281,23 @@ def _launcher_command(command: str, name: str):
     return execute(command)
 
 
+def _inside_herdr() -> bool:
+    return os.environ.get("HERDR_ENV") == "1" and bool(os.environ.get("HERDR_PANE_ID"))
+
+
+def _register_herdr_skill() -> list[dict]:
+    if not _inside_herdr():
+        return []
+    return [
+        {
+            "name": "herdr-code-puppy",
+            "skill_md_path": str(Path(__file__).resolve().parent / "SKILL.md"),
+        }
+    ]
+
+
 def _launcher_prompt():
-    if os.environ.get("HERDR_ENV") != "1" or not os.environ.get("HERDR_PANE_ID"):
+    if not _inside_herdr():
         return None
     from .command_intent import GUIDANCE
 
@@ -289,6 +305,7 @@ def _launcher_prompt():
 
 
 # Guidance is registered globally but returns None outside a herdr pane.
+register_callback("register_skills", _register_herdr_skill)
 register_callback("load_prompt", _launcher_prompt)
 register_callback("custom_command_help", _launcher_help)
 # Register outside herdr too so dispatch explains why it cannot act there.

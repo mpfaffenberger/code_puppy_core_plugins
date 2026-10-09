@@ -92,18 +92,13 @@ def candidate_help():
 
 
 GUIDANCE = """## Herdr sibling input (inside herdr only)
-Use /herdr spawn NAME --prompt-file PATH for first tasks, multiline or larger briefs.
-Use /herdr send NAME ordinary prompt for prompt-only follow-up (one line, <1,000 UTF-8 bytes;
-slash/bang tokens are rejected). To intentionally request a potentially mutating or interactive
-Code Puppy command, use /herdr command NAME /model gpt-5, not send.
-Discover known sender candidates/aliases with /herdr commands (core registry + plugin help).
-Unknown/unadvertised commands fail closed. The target may have different commands/plugins;
-recognized does not mean safe. Choose command only for intentionally authorized command intent.
-Both actions type into the terminal; verify target and actual foreground editor readiness.
-Idle is not editor-ready. Acknowledgement is only a write, not confirmed execution or receipt.
-Core preprocessing removes quotes, normalizes spaces, and may consume attachments on both sides;
-arguments are not byte-preserved. No automatic retries or atomic occupant-check guarantee.
-Use /herdr help for options. From shell tools use the installed interpreter to call
-code_puppy_core_plugins.herdr.launcher.execute('/herdr ...') and print the result;
-this is the same guarded API, not raw herdr input. Never probe by executing commands.
+Before controlling siblings, activate_skill('herdr-code-puppy') for the operational playbook.
+/herdr spawn handles first tasks; /herdr send is prompt-only (one line, <1,000 UTF-8 bytes,
+no slash/bang tokens). /herdr command requires intentionally authorized command intent:
+commands can be mutating or interactive. /herdr commands lists sender candidates, not target
+capabilities or safety guarantees. Never probe by executing commands or bypass guarded input.
+Verify target and actual foreground editor readiness; idle is not editor-ready. Checks and
+writes are not atomic; acknowledgement is a write, not receipt/execution. No automatic retries.
+Core preprocessing can remove quotes, normalize spaces and consume attachments; arguments
+are not byte-preserved. If the skill is disabled/unavailable, use /herdr help and do not guess.
 """

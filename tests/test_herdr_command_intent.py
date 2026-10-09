@@ -172,6 +172,12 @@ def test_agent_guidance_and_help(launcher_env, candidates):
         "mutating",
         "editor",
         "target",
+        "activate_skill('herdr-code-puppy')",
+        "intentionally authorized",
+        "not target",
+        "No automatic retries",
+        "not byte-preserved",
+        "disabled/unavailable",
     ):
         assert text in guidance
     assert "command" in hooks._launcher_help()[0][1]
