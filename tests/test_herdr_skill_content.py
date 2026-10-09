@@ -12,6 +12,9 @@ def test_playbook_preserves_operational_safety():
         .read_text(encoding="utf-8")
         .split()
     )
+    # Deliberate wording tripwires: these operational limits and prohibitions
+    # must not silently erode. Intentional rewording needs a safety review of
+    # the matching assertion, not a weaker length/structure proxy.
     for phrase in (
         "before controlling sibling panes",
         "/herdr spawn NAME --prompt-file PATH",
@@ -41,4 +44,3 @@ def test_playbook_preserves_operational_safety():
         "do not substitute raw",
     ):
         assert phrase in body
-    assert len(body) > len(command_intent.GUIDANCE) * 3

@@ -72,59 +72,9 @@ def test_wheel_gated_discovery_and_activation(tmp_path):
         assert "code_puppy_core_plugins/herdr/SKILL.md" in archive.namelist()
         archive.extractall(installed)
     env["PYTHONPATH"] = str(installed)
-    script = r"""
-import asyncio
-import os
-from importlib import resources
-from importlib.metadata import entry_points
-
-# Import with HERDR scrubbed: never create live import-time pane authority.
-assert not any(key.startswith("HERDR_") for key in os.environ)
-assert resources.files("code_puppy_core_plugins.herdr").joinpath("SKILL.md").is_file()
-# Load only the relevant entry points; no unrelated provider/auth plugins.
-for name in ("agent_skills", "herdr"):
-    next(ep for ep in entry_points(group="code_puppy.plugins") if ep.name == name).load()
-from code_puppy_core_plugins.herdr import register_callbacks as hooks
-assert not hooks._reporter.active
-from code_puppy.tools.skills_tools import register_activate_skill, register_list_or_search_skills
-from code_puppy_core_plugins.agent_skills import config, discovery
-from code_puppy_core_plugins.agent_skills.provider import AgentSkillsProvider
-
-config.get_skill_directories = lambda: []
-discovery.get_skill_directories = lambda: []
-discovery.get_default_skill_directories = lambda: []
-class Agent:
-    def tool(self, function=None, **kwargs):
-        return function if function is not None else lambda function: function
-activate = register_activate_skill(Agent())
-listing = register_list_or_search_skills(Agent())
-provider = AgentSkillsProvider()
-assert provider.find_enabled_skill_path("herdr-code-puppy") is None
-os.environ.update(HERDR_ENV="1", HERDR_PANE_ID="fake:p1")
-path = provider.find_enabled_skill_path("herdr-code-puppy")
-assert path is not None
-signature = discovery._plugin_skills_signature
-result = asyncio.run(activate(None, "herdr-code-puppy"))
-assert result.error is None, result
-assert "# Herdr Code Puppy" in result.content
-assert result.resources == []
-assert discovery._plugin_skills_signature == signature
-assert asyncio.run(listing(None, "herdr-code-puppy")).total_count == 1
-config.get_disabled_skills = lambda: {"herdr-code-puppy"}
-assert asyncio.run(activate(None, "herdr-code-puppy")).content == ""
-assert asyncio.run(listing(None, "herdr-code-puppy")).total_count == 0
-config.get_disabled_skills = set
-assert asyncio.run(activate(None, "herdr-code-puppy")).error is None
-os.environ.pop("HERDR_ENV")
-assert asyncio.run(activate(None, "herdr-code-puppy")).content == ""
-assert asyncio.run(listing(None, "herdr-code-puppy")).total_count == 0
-assert provider.find_enabled_skill_path("herdr-code-puppy") is None
-assert not path.exists()
-discovery.refresh_skill_cache()
-assert provider.find_enabled_skill_path("herdr-code-puppy") is None
-"""
+    script = Path(__file__).with_name("herdr_skill_wheel_support.py")
     smoke = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, str(script), str(installed)],
         cwd=tmp_path,
         env=env,
         capture_output=True,

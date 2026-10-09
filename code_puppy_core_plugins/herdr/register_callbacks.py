@@ -70,6 +70,7 @@ from .client import HerdrClient
 from .reporter import HerdrReporter
 
 logger = logging.getLogger(__name__)
+_SKILL_DIR = Path(__file__).resolve().parent
 
 #: Signals that terminate the process without unwinding the interpreter, so
 #: neither the ``finally:`` in cli_runner nor ``atexit`` would otherwise run.
@@ -291,7 +292,7 @@ def _register_herdr_skill() -> list[dict]:
     return [
         {
             "name": "herdr-code-puppy",
-            "skill_md_path": str(Path(__file__).resolve().parent / "SKILL.md"),
+            "skill_md_path": str(_SKILL_DIR / "SKILL.md"),
         }
     ]
 
