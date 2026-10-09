@@ -58,7 +58,13 @@ def _translate(spec: Any) -> Optional[Any]:
 
 
 def attach(agent: Any, specs: List[Any]) -> None:
-    """Append the translated MCP servers from ``specs`` to ``agent``."""
+    """Attach the translated MCP servers from ``specs`` to ``agent``.
+
+    Uses ``BaseAgent.set_runtime_mcp_toolsets`` when the core provides it:
+    the servers then join the configured ones on every build of this agent.
+    Older cores only have ``_mcp_servers``, which the builder overwrites from
+    ``mcp_servers.json``, so appending there is a best-effort fallback.
+    """
     servers: List[Any] = []
     for spec in specs or []:
         try:
@@ -69,6 +75,10 @@ def attach(agent: Any, specs: List[Any]) -> None:
         if translated is not None:
             servers.append(translated)
     if not servers:
+        return
+    setter = getattr(agent, "set_runtime_mcp_toolsets", None)
+    if callable(setter):
+        setter(servers)
         return
     existing = getattr(agent, "_mcp_servers", None) or []
     agent._mcp_servers = list(existing) + servers

@@ -80,3 +80,43 @@ def test_acp_replay_skips_unknown_non_text_part_kind():
     part = SimpleNamespace(part_kind="tool-availability-delta", tools_added=["x"])
 
     assert replay._updates_for_message(SimpleNamespace(parts=[part])) == []
+
+
+def _stdio_spec(name: str = "local-tools") -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        command="python",
+        args=["server.py"],
+        env=[],
+        type=None,
+        url=None,
+        headers=[],
+    )
+
+
+def test_acp_mcp_attach_uses_the_agent_runtime_toolsets():
+    """Client servers go where the builder merges them on every build."""
+
+    class Agent:
+        def __init__(self) -> None:
+            self.runtime: list = []
+            self._mcp_servers: list = []
+
+        def set_runtime_mcp_toolsets(self, toolsets: list) -> None:
+            self.runtime = list(toolsets)
+
+    agent = Agent()
+
+    mcp_config.attach(agent, [_stdio_spec()])
+
+    assert [toolset.prefix for toolset in agent.runtime] == ["local-tools"]
+    assert agent._mcp_servers == []
+
+
+def test_acp_mcp_attach_falls_back_to_mcp_servers_on_older_cores():
+    agent = SimpleNamespace(_mcp_servers=["configured"])
+
+    mcp_config.attach(agent, [_stdio_spec()])
+
+    assert agent._mcp_servers[0] == "configured"
+    assert len(agent._mcp_servers) == 2
