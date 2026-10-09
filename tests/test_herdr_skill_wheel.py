@@ -44,9 +44,8 @@ def test_wheel_gated_discovery_and_activation(tmp_path):
     if shutil.which("uv") is None:
         pytest.skip("uv is required for the offline wheel smoke test")
     env = _isolated_env(tmp_path)
-    # Reuse only build artifacts, never developer config or credentials.
-    if "UV_CACHE_DIR" in os.environ:
-        env["UV_CACHE_DIR"] = os.environ["UV_CACHE_DIR"]
+    # A clean runner must not depend on a developer's populated build cache.
+    env["UV_CACHE_DIR"] = str(tmp_path / "uv-cache")
     repo = Path(__file__).resolve().parents[1]
     dist = tmp_path / "dist"
     build = subprocess.run(
@@ -55,6 +54,7 @@ def test_wheel_gated_discovery_and_activation(tmp_path):
             "build",
             "--wheel",
             "--offline",
+            "--no-build-isolation",
             "--python",
             sys.executable,
             "--out-dir",
