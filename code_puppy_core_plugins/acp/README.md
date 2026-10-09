@@ -245,6 +245,17 @@ only an [RFD](https://agentclientprotocol.com), not in stable v1 — no client,
 including Zed, implements it yet). When elicitation lands and the SDK exposes a
 connection method for it, this block becomes a real native picker.
 
+### Clients that present the questions themselves
+
+A client with its own question UI can opt in at `initialize` by setting
+`clientCapabilities._meta.codePuppyQuestionCards` to `true`. For that client the
+`EventBridge` sends `ask_user_question` as a **completed** `tool_call` whose
+`rawInput` holds the questions, still blocks the terminal picker, and gives the
+model a `tool_result` (core's `pre_tool_call` handled-result contract) telling
+it to end the turn and wait. The client renders the questions and sends the
+answers as the user's next prompt. Clients that don't set the flag see no
+change.
+
 ---
 
 ## Testing
