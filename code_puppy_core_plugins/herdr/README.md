@@ -110,8 +110,14 @@ foreground Code Puppy editor readiness before using it. A write acknowledgement
 is **not confirmed execution**, child receipt, or completion. The occupant
 check and write are not atomic; reported idle alone is not editor readiness.
 
-The `load_prompt` hook exposes these choices and `/herdr commands` discovery
-to agents inside herdr; `/herdr help` and the command menu expose them to users.
+The bundled [`herdr-code-puppy` skill](SKILL.md) is the canonical agent
+operational playbook. Its `register_skills` callback checks `HERDR_ENV=1`
+and a present `HERDR_PANE_ID` each time discovery runs; outside that context
+it is absent, not merely disabled. The `load_prompt` hook tells agents to
+activate it before controlling siblings and retains essential safety rules
+even if skills are disabled. `/herdr help` and the command menu expose the
+launcher to users. This README retains the technical transport constraints
+and examples for maintainers.
 Agents with shell tools can call the installed plugin's `launcher.execute`
 API and print the result, using the same guards rather than raw input.
 Its guards do **not** change Herdr's generic CLI transport. The existing

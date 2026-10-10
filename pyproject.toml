@@ -140,6 +140,8 @@ addopts = "--cov=code_puppy_core_plugins --cov-report=term-missing"
 
 [dependency-groups]
 dev = [
+    # Offline wheel tests use the installed backend, not a warm uv build cache.
+    "hatchling",
     # Old-core compat paths (theme merge shim) are still unit-tested.
     "prompt-toolkit>=3.0.0,<4",
     "pytest>=8.3.4",
