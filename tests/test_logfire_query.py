@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import time
 from unittest.mock import AsyncMock
 
@@ -78,3 +80,17 @@ async def test_query_rejects_expired_token(monkeypatch: pytest.MonkeyPatch) -> N
     result = await agent.registered["logfire_query"](None, "SELECT 1")
 
     assert "expired" in result.error
+
+
+def test_module_imports_without_pydantic_ai_mcp() -> None:
+    """Registering the tool must not load the MCP client stack.
+
+    ``pydantic_ai.mcp`` pulls in fastmcp and the mcp SDK; the query tool only
+    needs it when a query actually runs.
+    """
+    script = (
+        "import sys\n"
+        "sys.modules['pydantic_ai.mcp'] = None\n"
+        "import code_puppy_core_plugins.logfire_oauth.query_tool\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
