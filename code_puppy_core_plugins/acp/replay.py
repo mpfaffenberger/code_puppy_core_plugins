@@ -1,6 +1,6 @@
-"""Replay a rehydrated session's history back to the client on load/resume.
+"""Replay a rehydrated session's history back to the client on load.
 
-The ACP ``session/load`` (and ``session/resume``) contract is not just "rebuild
+The ACP ``session/load`` contract is not just "rebuild
 the agent's memory" -- the client rebuilds its *own* thread UI from the
 ``session/update`` notifications the agent streams while handling the request.
 An agent that only rehydrates its internal ``_message_history`` (and streams
@@ -8,7 +8,7 @@ nothing) leaves the client with an empty thread: the conversation looks gone,
 and clients that treat an empty replayed thread as dead will discard it
 outright.
 
-So on load/resume we walk the rehydrated pydantic-ai message history and emit
+So on load we walk the rehydrated pydantic-ai message history and emit
 one ``session/update`` per visible turn -- user prompts, assistant text,
 assistant thinking, and past tool calls (as already-``completed`` entries) --
 in order, before the load response returns. System prompts and tool-return
