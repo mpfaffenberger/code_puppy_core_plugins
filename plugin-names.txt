@@ -27,6 +27,7 @@ fork
 frontend_emitter
 grok_oauth
 herdr
+model_router
 hook_creator
 hook_manager
 logfire_oauth

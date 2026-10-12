@@ -63,6 +63,12 @@ player can play it. Linux uses `notify-send` for desktop notifications when it
 is installed; Windows uses a best-effort PowerShell toast. No external Python
 dependencies are required.
 
+## Model router
+
+The `model_router` plugin routes each turn to the cheapest capable model
+using a systemone judge (TypeSafe Jev or a local Kev). See
+[its README](code_puppy_core_plugins/model_router/README.md).
+
 ## Releases
 
 Pushes to `main` run lint and tests, bump the patch version, build, publish to
