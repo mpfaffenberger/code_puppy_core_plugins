@@ -7,7 +7,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
-from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 
 from .oauth import load_tokens
 
@@ -35,6 +34,10 @@ async def _query_mcp(
         arguments["min_timestamp"] = start
     if end is not None:
         arguments["max_timestamp"] = end
+
+    # Imported on use: pydantic_ai.mcp loads fastmcp and the mcp SDK, which
+    # every launch would otherwise pay just to register this tool.
+    from pydantic_ai.mcp import MCPToolset, StreamableHttpTransport
 
     transport = StreamableHttpTransport(
         f"{base_url.rstrip('/')}/mcp",
