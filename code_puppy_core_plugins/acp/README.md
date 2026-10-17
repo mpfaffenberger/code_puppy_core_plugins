@@ -116,14 +116,14 @@ Every file stays well under the 600-line cap and owns one concern.
 
 | File | Responsibility |
 |------|----------------|
-| `register_callbacks.py` | Register the `--acp` flag; when present, redirect the console to stderr, run `acp.run_agent(CodePuppyAgent())` on its own loop in a thread, and return `{"handled": True}` so the TUI never starts. |
+| `register_callbacks.py` | Register the `--acp` flag; when present, redirect the console to stderr, run `acp.run_agent(CodePuppyAgent(), use_unstable_protocol=True)` on its own loop in a thread (the SDK only routes `session/close`, `session/fork` and `session/resume` with that flag), and return `{"handled": True}` so the TUI never starts. |
 | `agent.py` | `CodePuppyAgent(acp.Agent)` — the SDK agent implementation: initialize, new/load/resume/fork/list/close session, prompt, cancel, set_session_mode/model, set_config_option, authenticate, plus `on_connect` (stashes the client handle + installs approvals). |
 | `capabilities.py` | Declarative capability negotiation in SDK models: our `AgentCapabilities`, and parsing the client's `ClientCapabilities` into `(fs_read, fs_write, terminal)`. |
 | `content.py` | Parse ACP prompt content blocks → text + multimodal attachments (`BinaryContent` / `ImageUrl`), honouring `embeddedContext` + `image`. |
 | `session.py` | `ACPSession`: one ACP session ⇄ one `BaseAgent` + its `_message_history`. Runs each turn as a cancellable `asyncio.Task`; persists history after each turn; owns the final-result fallback. |
 | `commands.py` | Execute client-typed `/slash` commands via `command_handler`, capturing MessageBus output and forwarding it (never touches stdin). |
 | `persistence.py` | Pickle each session's history under `AUTOSAVE_DIR/acp` keyed by session id, plus an ACP metadata sidecar (`cwd` + `additionalDirectories` + title). Rehydrate on `load`/`resume`/`fork`; enumerate for `session/list` (`list_persisted`); tombstone on `session/close` (`delete`). |
-| `replay.py` | On `load`/`resume`, stream the rehydrated history back to the client as ordered `session/update`s (user / agent text / thinking / past tool calls) so the client rebuilds the thread UI. |
+| `replay.py` | On `load`, stream the rehydrated history back to the client as ordered `session/update`s (user / agent text / thinking / past tool calls) so the client rebuilds the thread UI. `resume` rehydrates without replaying. |
 | `mcp_config.py` | Translate client-injected ACP MCP server specs → pydantic-ai servers on the session agent. |
 | `session_config.py` | Build the model list (surfaced as ACP *modes*) + safe config options; apply `set_mode` / `set_config_option`. |
 | `bridge.py` | `EventBridge`: registers `stream_event` / `pre_tool_call` / `post_tool_call` hooks and translates them into SDK `session/update`s via `connection.session_update`. (Hooks, **not** MessageBus — see *Event source*.) |
@@ -189,7 +189,7 @@ double-send.
 | `authenticate` / `logout` | No-op (auth is via Code Puppy's own model config/env). |
 | `session/new` | Create an `ACPSession` (fresh `BaseAgent`) from `cwd` + `additionalDirectories`; attach client `mcpServers`; return models + config options; schedule `available_commands_update`. |
 | `session/load` | Re-open a thread: **replay persisted history into the agent AND stream it back to the client** as `session/update`s so the client rebuilds the thread UI. |
-| `session/resume` | Rehydrate + replay a session across a restart from persisted history. |
+| `session/resume` | Rehydrate a session across a restart from persisted history, without replaying it (the client already shows the thread). |
 | `session/fork` | Branch a session: copy its history into a new id. Works on a live session **or** one persisted by a prior process (rehydrated from disk), so forking survives a restart. |
 | `session/prompt` | Parse content blocks (text + image attachments) or execute a `/slash` command; run the agent as a cancellable task; stream updates; return stop reason **+ token usage**. |
 | `session/cancel` | Cancel the in-flight run's task **and kill local shells** → `cancelled`. |
