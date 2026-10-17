@@ -126,6 +126,9 @@ Every file stays well under the 600-line cap and owns one concern.
 | `replay.py` | On `load`/`resume`, stream the rehydrated history back to the client as ordered `session/update`s (user / agent text / thinking / past tool calls) so the client rebuilds the thread UI. |
 | `mcp_config.py` | Translate client-injected ACP MCP server specs → pydantic-ai servers on the session agent. |
 | `session_config.py` | Build the model list (surfaced as ACP *modes*) + safe config options; apply `set_mode` / `set_config_option`. |
+| `route.py` | `SessionRoute` (agent + model + epoch), the advertised route contract, and its `_meta` wire form. |
+| `route_runtime.py` | Build a session's agent on one exact route, without fallback or global writes. |
+| `route_changes.py` | Apply a `model` / `agent` switch (config option or `/model` / `/agent` prompt): rebuild, save, report. |
 | `bridge.py` | `EventBridge`: registers `stream_event` / `pre_tool_call` / `post_tool_call` hooks and translates them into SDK `session/update`s via `connection.session_update`. (Hooks, **not** MessageBus — see *Event source*.) |
 | `permissions.py` | Wires Code Puppy's two approval edges to the client via the SDK's `request_permission`: the `tools.common` approval backend (files, cross-thread) and the `run_shell_command` hook (shell). Fails closed. |
 | `io_delegation.py` | `DelegatedFileSystemBackend` (sync, cross-thread) + `DelegatedCommandExecutor` (async terminal lifecycle) that plug into the core I/O seams, capability-gated. |
@@ -195,7 +198,7 @@ double-send.
 | `session/cancel` | Cancel the in-flight run's task **and kill local shells** → `cancelled`. |
 | `session/list` / `session/close` | List sessions (**live in-memory + persisted on disk**, deduped, so threads survive a restart and stay revivable) / drop a session (also deletes its persisted copy). |
 | `session/set_mode` | Switch the active model, rebinding the session agent (history preserved). Code Puppy surfaces its model list as ACP *modes* (0.11 removed the separate models API). |
-| `session/set_config_option` | Apply a safe config change (streaming toggle); never yolo. |
+| `session/set_config_option` | Switch this session's `model` or `agent` (see *Session routes*), or apply a safe config change (streaming toggle); never yolo. |
 | `session/set_mode` | No-op (Code Puppy has one mode). |
 
 Not implemented: `elicitation/*` (the SDK connection exposes no elicitation
@@ -228,6 +231,33 @@ family (`create`, `wait_for_exit`, `output`, `kill`, `release`).
 - `cwd` from `session/new` anchors that session's tools.
 
 ---
+
+## Session routes (agent + model per session)
+
+Each ACP session owns a **route**: the agent and model it runs on, plus an
+epoch. The route is session-local -- switching it never writes the terminal's
+global model or agent -- and it is read back from the agent that was actually
+built, so a failed switch keeps reporting the old, still-effective route.
+
+* `initialize` advertises the contract in `agentInfo._meta.codePuppySessionRoute`
+  (`version`, `configOptionIds`, `routeMetaKey`, `legacyLoadPolicy`).
+* Every session response (`new` / `load` / `resume` / `fork` /
+  `set_config_option`) carries `_meta.codePuppyRoute`:
+  `{version, sessionId, agentId, modelId, routeEpoch}`.
+* The `model` and `agent` config options switch the route. A change rebuilds
+  the session's agent with its history and MCP servers, saves the route, then
+  reports it (also as a `config_option_update`). Re-selecting the current
+  value keeps the epoch; an unknown value is rejected. A client may send
+  `_meta.codePuppyRoute.expectedRouteEpoch` to refuse a switch based on a stale
+  view.
+* `/model <id>` and `/agent <name>` prompts switch this session's route
+  instead of the global setting.
+* Routes are saved in the session's `*_acp.json` sidecar, so `load` / `resume`
+  reopen a session on its route. Sessions saved before routes were recorded
+  open on the default route (`legacyLoadPolicy: "default_route"`); an
+  unreadable stored route refuses to load rather than guess.
+* A fork starts on its source's agent and model, at epoch 1.
+* `--agent` / `--model` (with `--acp`) set the route new sessions start on.
 
 ## Interactive tools (`ask_user_question`)
 
