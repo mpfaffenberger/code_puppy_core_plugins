@@ -563,7 +563,7 @@ class TestRegisterCallbacks:
             "code_puppy_core_plugins.theme.register_callbacks._active_terminal_palette",
             return_value=("green-screen", GREEN_SCREEN),
         ):
-            highlighter = _termflow_highlighter(Highlighter())
+            highlighter = _termflow_highlighter(Highlighter(true_color=True))
 
         rendered = highlighter.highlight_line("plain code", "text")
         assert "38;2;114;168;91" in rendered
@@ -580,7 +580,7 @@ class TestRegisterCallbacks:
             "code_puppy_core_plugins.theme.register_callbacks._active_terminal_palette",
             return_value=("green-screen", GREEN_SCREEN),
         ):
-            highlighter = _termflow_highlighter(Highlighter())
+            highlighter = _termflow_highlighter(Highlighter(true_color=True))
 
         rendered = highlighter.highlight_line(
             "# dim comment\ndef glowing():\n    return 42", "python"
@@ -600,11 +600,30 @@ class TestRegisterCallbacks:
             "code_puppy_core_plugins.theme.register_callbacks._active_terminal_palette",
             return_value=("solarized-light", SOLARIZED_LIGHT),
         ):
-            highlighter = _termflow_highlighter(Highlighter())
+            highlighter = _termflow_highlighter(Highlighter(true_color=True))
 
         rendered = highlighter.highlight_line("palette = Palette()", "python")
         assert "38;2;101;123;131" in rendered  # dark base foreground
         assert "38;2;238;232;213" not in rendered  # near-background ANSI white
+
+    def test_highlighter_falls_back_to_256_colors(self):
+        """Terminal.app reads 38;2;R;G;B components as SGR codes (106 = cyan bg)."""
+        from termflow.syntax import Highlighter
+
+        from code_puppy_core_plugins.theme.register_callbacks import (
+            _termflow_highlighter,
+        )
+
+        with patch(
+            "code_puppy_core_plugins.theme.register_callbacks._active_terminal_palette",
+            return_value=("tokyo-night", TOKYO_NIGHT),
+        ):
+            highlighter = _termflow_highlighter(Highlighter(true_color=False))
+
+        rendered = highlighter.highlight_line('echo "TERM=$TERM"', "sh")
+        assert highlighter.true_color is False
+        assert "38;5;" in rendered
+        assert "38;2;" not in rendered
 
     def test_termflow_style_uses_active_terminal_palette(self):
         from termflow.render.style import RenderStyle
