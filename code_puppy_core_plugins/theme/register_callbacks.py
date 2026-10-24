@@ -169,7 +169,10 @@ def _termflow_highlighter(default_highlighter):
     active_theme, palette = active
     ansi = palette["ansi"]
 
-    from pygments.formatters.terminal256 import TerminalTrueColorFormatter
+    from pygments.formatters.terminal256 import (
+        Terminal256Formatter,
+        TerminalTrueColorFormatter,
+    )
     from pygments.style import Style
     from pygments.token import (
         Comment,
@@ -224,8 +227,13 @@ def _termflow_highlighter(default_highlighter):
         (Style,),
         {"background_color": palette.get("bg"), "styles": token_styles},
     )
-    highlighter = Highlighter()
-    highlighter._formatter = TerminalTrueColorFormatter(style=theme_style)
+    # Keep the caller's color depth: terminals without truecolor (macOS
+    # Terminal.app) misread 24-bit SGRs, so a channel value such as 106
+    # becomes a bright cyan background.
+    true_color = default_highlighter.true_color
+    highlighter = Highlighter(true_color=true_color)
+    formatter = TerminalTrueColorFormatter if true_color else Terminal256Formatter
+    highlighter._formatter = formatter(style=theme_style)
     if active_theme in {"green-screen", "green", "crt"}:
         # Added lines lean brighter/yellower; removed lines become cooler and
         # more muted. Small shifts retain the token palette's internal contrast.
