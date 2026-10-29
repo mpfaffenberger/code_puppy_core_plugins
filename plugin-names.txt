@@ -26,6 +26,7 @@ flux_bootstrap
 force_push_guard
 fork
 frontend_emitter
+gemini_no_thinking_guard
 grok_oauth
 herdr
 hook_creator
