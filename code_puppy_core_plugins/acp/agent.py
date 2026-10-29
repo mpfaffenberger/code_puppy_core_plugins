@@ -189,13 +189,18 @@ class CodePuppyAgent(Agent):
         mcp_servers: Optional[List[Any]] = None,
         **kwargs: Any,
     ) -> Any:
-        """Resume a session across a restart, rehydrating + replaying history."""
+        """Resume a session across a restart, rehydrating its history.
+
+        Unlike ``session/load``, resume does not stream the conversation back:
+        a client resumes a thread it is still showing, so replaying it would
+        duplicate every turn in its transcript. The persisted history is still
+        loaded into the agent so the model continues the real conversation.
+        """
         from acp.schema import ResumeSessionResponse
 
-        session = self._make_session(
+        self._make_session(
             session_id, cwd, additional_directories, mcp_servers, rehydrate=True
         )
-        await replay.replay_history(session_id, session.agent.get_message_history())
         self._announce_commands_soon(session_id)
         return ResumeSessionResponse(
             config_options=session_config.config_options() or None,
