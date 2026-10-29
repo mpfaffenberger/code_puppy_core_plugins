@@ -19,11 +19,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from acp.schema import Usage
 
 from code_puppy_core_plugins.acp import commands, content, persistence, state
+from code_puppy_core_plugins.acp.route import SessionRoute
 
 if TYPE_CHECKING:
     from code_puppy.agents.base_agent import BaseAgent
@@ -54,6 +56,8 @@ class ACPSession:
         cwd: Optional[str] = None,
         additional_directories: Optional[List[str]] = None,
         mcp_specs: Optional[List[Any]] = None,
+        route: Optional[SessionRoute] = None,
+        persistence_base_dir: Optional[Path] = None,
     ) -> None:
         self.session_id = session_id
         self.agent = agent
@@ -62,11 +66,66 @@ class ACPSession:
         # Raw client-injected ACP MCP specs, retained so they can be re-attached
         # if the session's agent is rebuilt (e.g. on ``session/set_mode``).
         self.mcp_specs = list(mcp_specs or [])
+        self.route = route
+        self.persistence_base_dir = persistence_base_dir
+        # Serializes the full prompt/save lifecycle with route changes and close.
+        self.route_lock = asyncio.Lock()
+        self.closing = False
         # Set while a ``session/prompt`` is in flight so ``cancel`` has a task
         # to cancel. ``None`` means idle.
         self._task: Optional["asyncio.Task[Any]"] = None
 
+    @property
+    def is_busy(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def persist(self) -> bool:
+        """Persist history and the exact effective route as one acknowledgement gate."""
+        return persistence.save(
+            self.session_id,
+            self.agent,
+            self.cwd,
+            self.additional_directories,
+            base_dir=self.persistence_base_dir,
+            route=self.route,
+        )
+
+    async def persist_settled(
+        self, agent: "BaseAgent", route: Optional[SessionRoute]
+    ) -> tuple[bool, bool]:
+        """Finish a worker save before releasing serialization, even if cancelled.
+
+        Returns ``(persisted, was_cancelled)`` so callers can reconcile live
+        state with a completed write before propagating cancellation.
+        """
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                persistence.save,
+                self.session_id,
+                agent,
+                self.cwd,
+                self.additional_directories,
+                base_dir=self.persistence_base_dir,
+                route=route,
+            )
+        )
+        was_cancelled = False
+        while True:
+            try:
+                return await asyncio.shield(worker), was_cancelled
+            except asyncio.CancelledError:
+                was_cancelled = True
+                if worker.done():
+                    return worker.result(), was_cancelled
+
     async def prompt(self, blocks: List[Any]) -> PromptResult:
+        """Serialize one complete turn, including its durable save."""
+        async with self.route_lock:
+            if self.closing:
+                raise ValueError(f"session is closing: {self.session_id}")
+            return await self._prompt_locked(blocks)
+
+    async def _prompt_locked(self, blocks: List[Any]) -> PromptResult:
         """Run the agent on a user turn and return the stop reason + usage.
 
         Flow:
@@ -153,15 +212,17 @@ class ACPSession:
         # Persist off the event loop so pickling a large history can't stall other
         # sessions' streaming. Best-effort; never fails the turn.
         try:
-            await asyncio.to_thread(
-                persistence.save,
-                self.session_id,
-                self.agent,
-                self.cwd,
-                self.additional_directories,
+            persisted, was_cancelled = await self.persist_settled(
+                self.agent, self.route
             )
+            if not persisted:
+                logger.debug("ACP: async persist failed")
         except Exception:  # noqa: BLE001
             logger.debug("ACP: async persist failed", exc_info=True)
+            was_cancelled = False
+
+        if was_cancelled:
+            raise asyncio.CancelledError
 
         if stop_reason == STOP_END_TURN and not streamed and result is not None:
             await self._send_final_result(result)
