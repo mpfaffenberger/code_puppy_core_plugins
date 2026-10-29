@@ -99,22 +99,41 @@ def test_recorder_resumes_after_re_enable(kennel_root: Path) -> None:
 
 
 def test_retriever_returns_none_when_disabled(kennel_root: Path) -> None:
-    from code_puppy_core_plugins.puppy_kennel import recorder, retriever, state
+    from code_puppy_core_plugins.puppy_kennel import (
+        kennel,
+        recorder,
+        retriever,
+        state,
+        wings,
+    )
 
-    # Has to be longer than MIN_DRAWER_CHARS (80) to clear the packer's
-    # noise filter; otherwise the block would be empty for unrelated reasons.
     state.set_enabled(True)
+    # P2 excludes the current conversation room, so seed an *other* room's
+    # assistant drawer for the enabled-path sanity check. Length must clear
+    # MIN_DRAWER_CHARS (80) or the packer drops it as noise.
+    repo_w = wings.repo_wing()
+    wing_id = kennel.ensure_wing(repo_w)
+    other_room = kennel.ensure_room(wing_id, "session-other-for-recall")
+    kennel.add_drawer(
+        other_room,
+        content=(
+            "Something to recall - and importantly, long enough that the "
+            "packer doesn't silently drop it as noise below the minimum "
+            "drawer-length threshold."
+        ),
+        role="assistant",
+    )
+    # Also write a current-room drawer (should not be required for the block).
     recorder.record_run_end(
         agent_name="code-puppy",
         model_name="m",
         success=True,
         response_text=(
-            "Something to recall - and importantly, long enough that the "
-            "packer doesn't silently drop it as noise below the minimum "
-            "drawer-length threshold."
+            "Current-room assistant text that P2 must exclude from recall, "
+            "padded so it clears the minimum drawer-length threshold too."
         ),
     )
-    # Sanity: enabled returns a block.
+    # Sanity: enabled returns a block (from the other room).
     assert retriever.build_recall_block() is not None
 
     state.set_enabled(False)
