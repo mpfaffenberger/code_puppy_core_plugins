@@ -1,0 +1,4 @@
+{
+  "plugin.file-permission-handler.delete_preview.omitted": "Fichier binaire ou non textuel. Aperçu texte omis.",
+  "plugin.file-permission-handler.delete_preview.omitted_size": "Fichier binaire ou non textuel ({size} octets). Aperçu texte omis."
+}
