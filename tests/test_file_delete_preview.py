@@ -178,7 +178,9 @@ async def test_registered_delete_callback_omits_binary_and_denial_preserves_file
     path.write_bytes(original)
     captured: dict[str, object] = {}
 
-    async def deny_with_feedback(file_path, operation, preview=None, message_group=None):
+    async def deny_with_feedback(
+        file_path, operation, preview=None, message_group=None
+    ):
         captured.update(
             file_path=file_path,
             operation=operation,
