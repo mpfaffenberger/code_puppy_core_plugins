@@ -9,6 +9,25 @@ import pytest
 from code_puppy_core_plugins.file_permission_handler import delete_preview
 
 
+@pytest.fixture(scope="module", autouse=True)
+def register_delete_preview_catalog():
+    """Register plugin translations using the current core's loader contract."""
+    from importlib.resources import files
+
+    resource = files(delete_preview.__package__).joinpath("locales")
+    try:
+        from code_puppy.i18n import register_plugin_catalog
+    except ImportError:  # Older cores expose only the unrestricted catalog API.
+        from code_puppy.i18n import add_catalog_dir
+
+        add_catalog_dir(str(resource))
+    else:
+        from code_puppy.plugins import _plugin_loading_context
+
+        with _plugin_loading_context("file_permission_handler"):
+            assert register_plugin_catalog(resource)
+
+
 @pytest.mark.parametrize(
     ("encoding", "bom"),
     [

@@ -20,6 +20,8 @@ try:
 except ImportError:  # pragma: no cover - older Code Puppy versions
     t = None
 
+_CATALOG_NAMESPACE = "plugin.file-permission-handler.delete_preview"
+
 try:
     from code_puppy.tools.io_backends import get_filesystem_backend
 except ImportError:  # pragma: no cover - older Code Puppy versions
@@ -94,8 +96,8 @@ def _omitted_preview(size: int | None = None) -> str:
         size_text = f" ({size} bytes)" if size is not None else ""
         return f"Binary or non-text file{size_text}. Text preview omitted."
     if size is None:
-        return t("file_permission.delete_preview.omitted")
-    return t("file_permission.delete_preview.omitted_size", size=size)
+        return t(f"{_CATALOG_NAMESPACE}.omitted")
+    return t(f"{_CATALOG_NAMESPACE}.omitted_size", size=size)
 
 
 def preview_delete_file(file_path: str, *, context_lines: int = 3) -> str | None:
