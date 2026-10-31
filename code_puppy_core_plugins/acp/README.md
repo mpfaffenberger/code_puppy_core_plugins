@@ -119,6 +119,7 @@ Every file stays well under the 600-line cap and owns one concern.
 | `register_callbacks.py` | Register the `--acp` flag; when present, redirect the console to stderr, run `acp.run_agent(CodePuppyAgent())` on its own loop in a thread, and return `{"handled": True}` so the TUI never starts. |
 | `agent.py` | `CodePuppyAgent(acp.Agent)` — the SDK agent implementation: initialize, new/load/resume/fork/list/close session, prompt, cancel, set_session_mode/model, set_config_option, authenticate, plus `on_connect` (stashes the client handle + installs approvals). |
 | `capabilities.py` | Declarative capability negotiation in SDK models: our `AgentCapabilities`, and parsing the client's `ClientCapabilities` into `(fs_read, fs_write, terminal)`. |
+| `auth_status.py` | Neutral provider registry that lets any plugin report sign-in state; read-only snapshots feed `authMethods` and `authenticate`. |
 | `content.py` | Parse ACP prompt content blocks → text + multimodal attachments (`BinaryContent` / `ImageUrl`), honouring `embeddedContext` + `image`. |
 | `session.py` | `ACPSession`: one ACP session ⇄ one `BaseAgent` + its `_message_history`. Runs each turn as a cancellable `asyncio.Task`; persists history after each turn; owns the final-result fallback. |
 | `commands.py` | Execute client-typed `/slash` commands via `command_handler`, capturing MessageBus output and forwarding it (never touches stdin). |
@@ -186,7 +187,7 @@ double-send.
 | Method | Behaviour |
 |--------|-----------|
 | `initialize` | Negotiate version + capabilities; install capability-gated I/O delegation. |
-| `authenticate` / `logout` | No-op (auth is via Code Puppy's own model config/env). |
+| `authenticate` / `logout` | `authenticate` reports (read-only) the registered auth status for a known method id, otherwise an empty response; `logout` is a no-op. |
 | `session/new` | Create an `ACPSession` (fresh `BaseAgent`) from `cwd` + `additionalDirectories`; attach client `mcpServers`; return models + config options; schedule `available_commands_update`. |
 | `session/load` | Re-open a thread: **replay persisted history into the agent AND stream it back to the client** as `session/update`s so the client rebuilds the thread UI. |
 | `session/resume` | Rehydrate + replay a session across a restart from persisted history. |
@@ -203,6 +204,64 @@ call in 0.10.1), `plan` updates (no native plan model), and the unstable
 `document/*` / `nes/*` / `providers/*` surface. The SDK router resolves any
 unimplemented method to a clean "method not found", so we advertise honestly
 and stub nothing.
+
+### Reporting sign-in state
+
+`auth_status.py` is a neutral registry: any plugin can register a provider that
+reports its sign-in state, and ACP clients see it in `initialize` (`authMethods`)
+and `authenticate`. Providers must be fast and synchronous; a provider that raises
+or returns an invalid report is skipped.
+
+```python
+from datetime import datetime, timezone
+
+from code_puppy_core_plugins.acp.auth_status import (
+    AuthStatusReport,
+    register_auth_status_provider,
+)
+
+
+def example_auth_status() -> AuthStatusReport | None:
+    session = _load_session()
+    if session is None:
+        return AuthStatusReport("example-login", "Example Login", "missing")
+    return AuthStatusReport(
+        "example-login",
+        "Example Login",
+        "signed_in",
+        expires_at=datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        user_id=session.user_name,
+    )
+
+
+register_auth_status_provider(example_auth_status)
+```
+
+`expires_at` is serialized as ISO-8601 UTC (`...Z`), and `user_id` is a
+display string (trimmed, max 128 chars).
+
+Wire shape in the `initialize` result (`authMethods` is omitted when no provider is registered):
+
+```json
+{
+  "authMethods": [
+    {
+      "id": "example-login",
+      "name": "Example Login",
+      "_meta": {
+        "codePuppy": {
+          "authStatus": { "status": "signed_in", "expiresAt": "2030-01-02T03:04:05Z", "userId": "jdoe" }
+        }
+      }
+    }
+  ]
+}
+```
+
+Readers must never trigger login, network or prompts. Only `status`, `expiresAt`
+and `userId` are serialized, so tokens, claims and file paths cannot leak.
+A `status` of `not_applicable` means the method does not apply to this
+install, so clients should hide any sign-in UI for it.
 
 ### Outbound notifications (us → the client) — `session/update`
 
