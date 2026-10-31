@@ -187,7 +187,7 @@ double-send.
 | Method | Behaviour |
 |--------|-----------|
 | `initialize` | Negotiate version + capabilities; install capability-gated I/O delegation. |
-| `authenticate` / `logout` | `authenticate` reports (read-only) the registered auth status for a known method id, otherwise an empty response; `logout` is a no-op. |
+| `authenticate` / `logout` | `authenticate` reports (read-only) the registered auth status for a known method id as `_meta.codePuppy.authStatus`, and succeeds even when that status is `missing` or `expired`; clients must read `status`, not infer from success. An unknown method id gets an empty response. `logout` is a no-op. |
 | `session/new` | Create an `ACPSession` (fresh `BaseAgent`) from `cwd` + `additionalDirectories`; attach client `mcpServers`; return models + config options; schedule `available_commands_update`. |
 | `session/load` | Re-open a thread: **replay persisted history into the agent AND stream it back to the client** as `session/update`s so the client rebuilds the thread UI. |
 | `session/resume` | Rehydrate + replay a session across a restart from persisted history. |
@@ -210,7 +210,8 @@ and stub nothing.
 `auth_status.py` is a neutral registry: any plugin can register a provider that
 reports its sign-in state, and ACP clients see it in `initialize` (`authMethods`)
 and `authenticate`. Providers must be fast and synchronous; a provider that raises
-or returns an invalid report is skipped.
+or returns a report with wrong-typed fields is skipped. If two providers report the
+same `method_id`, the first registered wins, so the outcome depends on plugin load order.
 
 ```python
 from datetime import datetime, timezone
@@ -237,8 +238,8 @@ def example_auth_status() -> AuthStatusReport | None:
 register_auth_status_provider(example_auth_status)
 ```
 
-`expires_at` is serialized as ISO-8601 UTC (`...Z`), and `user_id` is a
-display string (trimmed, max 128 chars).
+`expires_at` is serialized as ISO-8601 UTC (`...Z`); a naive value is treated as UTC,
+and an aware value is converted to UTC. `user_id` is a display string (trimmed, max 128 chars).
 
 Wire shape in the `initialize` result (`authMethods` is omitted when no provider is registered):
 
@@ -258,8 +259,9 @@ Wire shape in the `initialize` result (`authMethods` is omitted when no provider
 }
 ```
 
-Readers must never trigger login, network or prompts. Only `status`, `expiresAt`
-and `userId` are serialized, so tokens, claims and file paths cannot leak.
+Readers must never trigger login, network or prompts. `id`, `name` and `description`
+are provider-supplied display strings and must never contain secrets; only the contents of
+`_meta.codePuppy.authStatus` are allow-listed to `status`, `expiresAt` and `userId`.
 A `status` of `not_applicable` means the method does not apply to this
 install, so clients should hide any sign-in UI for it.
 

@@ -59,6 +59,12 @@ def _is_valid_report(report: object) -> bool:
     for text in (report.method_id, report.name):
         if not isinstance(text, str) or not text.strip():
             return False
+    if report.description is not None and not isinstance(report.description, str):
+        return False
+    if report.expires_at is not None and not isinstance(report.expires_at, datetime):
+        return False
+    if report.user_id is not None and not isinstance(report.user_id, str):
+        return False
     return True
 
 
@@ -84,7 +90,7 @@ def current_auth_reports() -> list[AuthStatusReport]:
 
 def auth_status_for(method_id: str) -> AuthStatusReport | None:
     for report in current_auth_reports():
-        if report.method_id == method_id:
+        if report.method_id == method_id and _meta_or_none(report) is not None:
             return report
     return None
 
@@ -109,16 +115,34 @@ def auth_status_meta(report: AuthStatusReport) -> dict[str, Any]:
     return {"codePuppy": {"authStatus": inner}}
 
 
-def auth_methods() -> list[AuthMethodAgent] | None:
-    reports = current_auth_reports()
-    if not reports:
-        return None
-    return [
-        AuthMethodAgent(
-            id=report.method_id,
-            name=report.name,
-            description=report.description,
-            field_meta=auth_status_meta(report),
+def _meta_or_none(report: AuthStatusReport) -> dict[str, Any] | None:
+    try:
+        return auth_status_meta(report)
+    except Exception as exc:
+        # Exception type only: messages may carry tokens or other secrets.
+        logger.debug(
+            "auth status report could not be serialized: %s", type(exc).__name__
         )
-        for report in reports
-    ]
+        return None
+
+
+def auth_methods() -> list[AuthMethodAgent] | None:
+    methods: list[AuthMethodAgent] = []
+    for report in current_auth_reports():
+        meta = _meta_or_none(report)
+        if meta is None:
+            continue
+        try:
+            methods.append(
+                AuthMethodAgent(
+                    id=report.method_id,
+                    name=report.name,
+                    description=report.description,
+                    field_meta=meta,
+                )
+            )
+        except Exception as exc:
+            logger.debug(
+                "auth status report could not be serialized: %s", type(exc).__name__
+            )
+    return methods or None

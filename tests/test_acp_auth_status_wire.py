@@ -10,7 +10,7 @@ import json
 import logging
 import socket
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -81,6 +81,15 @@ async def test_each_state_is_advertised_in_auth_methods(agent, state):
     ]
 
 
+@pytest.mark.parametrize("state", ["signed_in", "expired", "missing", "not_applicable"])
+async def test_each_state_is_reported_by_authenticate(agent, state):
+    _register(AuthStatusReport("example-login", "Example Login", state))
+
+    wire_auth = _wire(await agent.authenticate("example-login"))
+
+    assert wire_auth == {"_meta": _auth_meta(state)}
+
+
 async def test_details_round_trip_through_initialize_and_authenticate(agent):
     _register(
         AuthStatusReport(
@@ -108,6 +117,55 @@ async def test_details_round_trip_through_initialize_and_authenticate(agent):
         }
     ]
     assert wire_auth == {"_meta": expected_meta}
+
+
+MALFORMED_REPORTS = [
+    pytest.param(
+        AuthStatusReport("bad-login", "Bad Login", "signed_in", expires_at=123),
+        id="int-expires",
+    ),
+    pytest.param(
+        AuthStatusReport(
+            "bad-login", "Bad Login", "signed_in", expires_at="2030-01-01"
+        ),
+        id="str-expires",
+    ),
+    pytest.param(
+        AuthStatusReport("bad-login", "Bad Login", "signed_in", description=123),
+        id="int-description",
+    ),
+    pytest.param(
+        AuthStatusReport(
+            "bad-login",
+            "Bad Login",
+            "signed_in",
+            expires_at=datetime.max.replace(tzinfo=timezone(timedelta(hours=-23))),
+        ),
+        id="overflow-expires",
+    ),
+]
+
+
+@pytest.mark.parametrize("bad_report", MALFORMED_REPORTS)
+async def test_malformed_report_is_omitted_and_good_sibling_still_advertised(
+    agent, bad_report
+):
+    _register(bad_report)
+    _register(AuthStatusReport("good-login", "Good Login", "signed_in"))
+
+    wire_init = _wire(await agent.initialize(protocol_version=1))
+
+    assert wire_init["authMethods"] == [
+        {
+            "id": "good-login",
+            "name": "Good Login",
+            "_meta": _auth_meta("signed_in"),
+        }
+    ]
+    assert _wire(await agent.authenticate("bad-login")) == {}
+    assert _wire(await agent.authenticate("good-login")) == {
+        "_meta": _auth_meta("signed_in")
+    }
 
 
 async def test_unknown_method_authenticates_to_empty_payload(agent):
