@@ -34,7 +34,8 @@ jobs:
         run: uv run --no-sync pytest -q
 
   # smart_grep ships native code (tree-sitter + grammar wheels) and shells out
-  # to the rg.exe bundled with Code Puppy core, so prove it on Windows.
+  # to the rg.exe bundled with Code Puppy core, so prove it on Windows. Folder
+  # policy path matching must hold on Windows' case-insensitive filesystem.
   windows:
     runs-on: windows-latest
     strategy:
@@ -57,6 +58,11 @@ jobs:
           CI: '1'
           CODE_PUPPY_TEST_FAST: '1'
         run: uv run --no-sync pytest -q --no-cov tests/test_jev_grep.py tests/test_smart_grep_treesitter.py
+      - name: Folder policy tests (case-insensitive FS)
+        env:
+          CI: '1'
+          CODE_PUPPY_TEST_FAST: '1'
+        run: uv run --no-sync pytest -q -rA --no-cov tests/test_folder_policy.py tests/test_folder_command.py tests/test_file_permission_folder_policy.py
       - name: Computer-use regression tests (no desktop automation)
         env:
           CI: '1'
