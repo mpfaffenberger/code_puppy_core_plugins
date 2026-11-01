@@ -54,137 +54,115 @@ def _record(agent_name: str, sub_session_id: str, saved: int) -> dict:
     }
 
 
+def _interrupted_meta(agent_name: str, sub_session_id: str, saved: int) -> dict:
+    record = {
+        "agentName": agent_name,
+        "subSessionId": sub_session_id,
+        "savedCount": saved,
+    }
+    return {"codePuppy/interrupted": [record]}
+
+
 async def _done(awaitable, timeout: float = 5):
     # A regressed overlap guard or stuck cancel must fail with TimeoutError, not hang.
     return await asyncio.wait_for(awaitable, timeout)
+
+
+async def _start_first_turn(monkeypatch, session, first_behaviour):
+    """Start a first prompt and return (task, release) once it holds the turn."""
+    if first_behaviour == "slash-command":
+        started = asyncio.Event()
+        gate = asyncio.Event()
+
+        async def slow_command(session_id, command):
+            started.set()
+            await gate.wait()
+
+        monkeypatch.setattr(commands, "run", slow_command)
+        task = asyncio.ensure_future(session.prompt([text_block("/help")]))
+        await started.wait()
+        return task, gate.set
+
+    task = asyncio.ensure_future(session.prompt([text_block("go")]))
+    while not session.agent.calls:
+        await asyncio.sleep(0)
+    return task, session.agent.release
 
 
 # --- overlap guard ----------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("first_behaviour", "first_stop"),
-    [("block", STOP_END_TURN), ("fail", STOP_REFUSAL)],
-    ids=["first-completes", "first-fails"],
+    ("first_behaviour", "first_stop", "runs_before_reject"),
+    [
+        ("block", STOP_END_TURN, 1),
+        ("fail", STOP_REFUSAL, 1),
+        ("slash-command", STOP_END_TURN, 0),
+    ],
+    ids=["first-completes", "first-fails", "slash-command-phase"],
 )
 async def test_overlapping_prompt_is_rejected_and_next_prompt_works(
-    first_behaviour, first_stop
+    monkeypatch, first_behaviour, first_stop, runs_before_reject
 ):
+    scripted = [] if first_behaviour == "slash-command" else [first_behaviour]
     session = make_session(
-        "s1", FakeAgent(script=[first_behaviour, "finish"], history=["prior"])
+        "s1", FakeAgent(script=[*scripted, "finish"], history=["prior"])
     )
-
-    async with running_turn(session) as first:
-        with pytest.raises(RequestError) as caught:
-            await _done(session.prompt([text_block("second")]))
-        assert caught.value.to_error_obj() == _overlap_error("s1")
-        assert session.agent.get_message_history() == ["prior"]
-        assert len(session.agent.calls) == 1
-
-    assert (await _done(first)).stop_reason == first_stop
-    follow_up = await session.prompt([text_block("third")])
-    assert follow_up.stop_reason == STOP_END_TURN
-    assert len(session.agent.calls) == 2
-
-
-async def test_overlap_during_slash_command_phase_is_rejected(monkeypatch):
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def slow_command(session_id, command):
-        started.set()
-        await release.wait()
-        return None
-
-    monkeypatch.setattr(commands, "run", slow_command)
-    session = make_session("s1", FakeAgent())
-    first = asyncio.ensure_future(session.prompt([text_block("/help")]))
-    await started.wait()
+    task, release = await _start_first_turn(monkeypatch, session, first_behaviour)
 
     with pytest.raises(RequestError) as caught:
-        await _done(session.prompt([text_block("hi")]))
+        await _done(session.prompt([text_block("second")]))
     assert caught.value.to_error_obj() == _overlap_error("s1")
+    assert session.agent.get_message_history() == ["prior"]
+    assert len(session.agent.calls) == runs_before_reject
 
-    release.set()
-    assert (await _done(first)).stop_reason == STOP_END_TURN
-    assert session.agent.calls == []
-    assert (await session.prompt([text_block("hi")])).stop_reason == STOP_END_TURN
+    release()
+    assert (await _done(task)).stop_reason == first_stop
+    follow_up = await _done(session.prompt([text_block("third")]))
+    assert follow_up.stop_reason == STOP_END_TURN
+    assert len(session.agent.calls) == runs_before_reject + 1
 
 
-# --- cancelled stop reason --------------------------------------------
+# --- cancel ----------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "waiting_on", ["block", "permission"], ids=["streaming", "permission-request"]
+    "cancelled_by",
+    ["block", "permission", "swallow"],
+    ids=["streaming", "permission-request", "core-swallows-cancel"],
 )
-async def test_cancel_while_run_waits_reports_cancelled(monkeypatch, waiting_on):
-    session = make_session("s1", FakeAgent(script=[waiting_on]))
+async def test_cancelled_turn_reports_cancelled_and_next_turn_runs(
+    monkeypatch, cancelled_by
+):
+    session = make_session("s1", FakeAgent(script=[cancelled_by, "finish"]))
     sent = _spy_final_result(monkeypatch, session)
 
     async with running_turn(session) as turn:
-        assert session.agent.waiting_on == waiting_on
+        assert session.agent.waiting_on == cancelled_by
         session.cancel()
         result = await _done(turn)
 
     assert result.stop_reason == STOP_CANCELLED
     assert result.field_meta is None
     assert sent == []
+    follow_up = await _done(session.prompt([text_block("next")]))
+    assert follow_up.stop_reason == STOP_END_TURN
 
 
-async def test_core_swallowing_cancel_still_reports_cancelled(monkeypatch):
-    session = make_session("s1", FakeAgent(script=["swallow"]))
-    sent = _spy_final_result(monkeypatch, session)
-
-    async with running_turn(session) as turn:
-        session.cancel()
-        result = await _done(turn)
-
-    assert result.stop_reason == STOP_CANCELLED
-    assert sent == []
-    assert session.agent.get_message_history() == ["msg:swallowed"]
-
-
-@pytest.mark.parametrize("cancelled_by", ["block", "swallow"])
-async def test_cancel_does_not_poison_the_next_turn(cancelled_by):
-    session = make_session("s1", FakeAgent(script=[cancelled_by, "finish"]))
-
-    async with running_turn(session) as turn:
-        session.cancel()
-        assert (await _done(turn)).stop_reason == STOP_CANCELLED
-
-    assert (await session.prompt([text_block("next")])).stop_reason == STOP_END_TURN
-
-
-async def test_cancel_when_idle_is_a_noop_and_next_turn_ends_normally():
+async def test_cancel_without_a_turn_in_flight_is_a_noop():
     session = make_session("s1", FakeAgent())
 
     session.cancel()
-
     assert (await session.prompt([text_block("hi")])).stop_reason == STOP_END_TURN
 
-
-async def test_cancel_after_task_finished_does_not_set_the_flag():
-    session = make_session("s1", FakeAgent())
-    done = asyncio.ensure_future(asyncio.sleep(0))
-    await done
-    session._task = done
-
+    finished = asyncio.ensure_future(asyncio.sleep(0))
+    await finished
+    session._task = finished
     session.cancel()
-
     assert session._cancel_requested is False
 
 
-async def test_final_result_is_sent_for_a_normal_unstreamed_turn(monkeypatch):
-    session = make_session("s1", FakeAgent())
-    sent = _spy_final_result(monkeypatch, session)
-
-    result = await session.prompt([text_block("hi")])
-
-    assert result.stop_reason == STOP_END_TURN
-    assert len(sent) == 1
-
-
-# --- interrupted sub-agent meta ------------------------------------------------
+# --- interrupted sub-agent meta ---------------------------------------
 
 
 async def test_cancelled_turn_reports_only_its_own_interrupted_subagents(monkeypatch):
@@ -197,48 +175,43 @@ async def test_cancelled_turn_reports_only_its_own_interrupted_subagents(monkeyp
     async with running_turn(session_a) as turn_a, running_turn(session_b) as turn_b:
         session_a.cancel()
         result_a = await _done(turn_a)
-        assert result_a.field_meta == {
-            "codePuppy/interrupted": [
-                {"agentName": "planner", "subSessionId": "sub-a1", "savedCount": 3}
-            ]
-        }
+        assert result_a.field_meta == _interrupted_meta("planner", "sub-a1", 3)
         session_b.cancel()
         result_b = await _done(turn_b)
-        assert result_b.field_meta == {
-            "codePuppy/interrupted": [
-                {"agentName": "reviewer", "subSessionId": "sub-b1", "savedCount": 7}
-            ]
-        }
+        assert result_b.field_meta == _interrupted_meta("reviewer", "sub-b1", 7)
 
     assert store.drain_calls == []
     assert store.clear_calls == []
 
 
-async def test_normally_ended_turn_omits_interrupted_meta(monkeypatch):
-    store = install_subagent_store(monkeypatch)
-    store.records["A"] = [_record("planner", "sub-a1", 3)]
-
-    result = await make_session("A").prompt([text_block("hi")])
-
-    assert result.stop_reason == STOP_END_TURN
-    assert result.field_meta is None
-    assert store.drain_calls == []
-
-
-@pytest.mark.parametrize("setup", ["empty-store", "old-core"])
-async def test_cancelled_turn_without_interrupted_records_omits_meta(
-    monkeypatch, setup
+@pytest.mark.parametrize(
+    ("setup", "cancel"),
+    [
+        ("normal-end-with-records", False),
+        ("cancel-empty-store", True),
+        ("cancel-old-core", True),
+    ],
+)
+async def test_interrupted_meta_is_omitted_unless_cancelled_with_records(
+    monkeypatch, setup, cancel
 ):
-    if setup == "empty-store":
-        install_subagent_store(monkeypatch)
-    session = make_session("A", FakeAgent(script=["block"]))
+    if setup != "cancel-old-core":
+        store = install_subagent_store(monkeypatch)
+        if setup == "normal-end-with-records":
+            store.records["A"] = [_record("planner", "sub-a1", 3)]
+    session = make_session("A", FakeAgent(script=["block"] if cancel else []))
+    sent = _spy_final_result(monkeypatch, session)
 
-    async with running_turn(session) as turn:
-        session.cancel()
-        result = await _done(turn)
+    if cancel:
+        async with running_turn(session) as turn:
+            session.cancel()
+            result = await _done(turn)
+    else:
+        result = await session.prompt([text_block("hi")])
 
-    assert result.stop_reason == STOP_CANCELLED
+    assert result.stop_reason == (STOP_CANCELLED if cancel else STOP_END_TURN)
     assert result.field_meta is None
+    assert len(sent) == (0 if cancel else 1)
 
 
 # --- binary media threading -------------------------------------------

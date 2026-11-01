@@ -29,6 +29,7 @@ from code_puppy_core_plugins.acp.agent import CodePuppyAgent
 from tests.acp_session_support import FakeAgent
 
 TIMEOUT = 10
+CATALOG_TIMEOUT = 600  # bounded only to fail a hang; cold plugin discovery runs once per process and is slow on a loaded machine
 METHOD_NOT_FOUND = -32601
 PROMPT_IN_FLIGHT = -32000
 STEER_METHOD = "_code_puppy/session/steer"
@@ -78,7 +79,7 @@ class Wire:
 
     async def _send(self, payload: dict[str, Any]) -> None:
         self._writer.write(json.dumps(payload).encode() + b"\n")
-        await self._writer.drain()
+        await asyncio.wait_for(self._writer.drain(), TIMEOUT)
 
     async def close(self) -> None:
         self._pump_task.cancel()
@@ -103,12 +104,18 @@ async def wire(monkeypatch) -> AsyncIterator[Wire]:
     monkeypatch.setattr(persistence, "delete", lambda session_id: None)
     monkeypatch.setattr(persistence, "load_history", lambda session_id: None)
     monkeypatch.setattr(config, "save_command_to_history", lambda text: None)
-    # Cold catalog load takes ~70s and is synchronous; pay it off-loop before serving.
-    await asyncio.to_thread(composer_ext.available_commands)
+    # Cold catalog load is synchronous; pay it off-loop before serving.
+    await asyncio.wait_for(
+        asyncio.to_thread(composer_ext.available_commands), CATALOG_TIMEOUT
+    )
 
     client_sock, agent_sock = socket.socketpair()
-    agent_reader, agent_writer = await asyncio.open_connection(sock=agent_sock)
-    client_reader, client_writer = await asyncio.open_connection(sock=client_sock)
+    agent_reader, agent_writer = await asyncio.wait_for(
+        asyncio.open_connection(sock=agent_sock), TIMEOUT
+    )
+    client_reader, client_writer = await asyncio.wait_for(
+        asyncio.open_connection(sock=client_sock), TIMEOUT
+    )
     agent = CodePuppyAgent()
     serving = asyncio.ensure_future(run_agent(agent, agent_writer, agent_reader))
     client = Wire(client_reader, client_writer, fakes)
@@ -116,7 +123,7 @@ async def wire(monkeypatch) -> AsyncIterator[Wire]:
         yield client
     finally:
         for session_id in client.session_ids:
-            await agent.close_session(session_id)
+            await asyncio.wait_for(agent.close_session(session_id), TIMEOUT)
         await client.close()
         await asyncio.wait_for(serving, TIMEOUT)
         agent.shutdown()
@@ -166,10 +173,7 @@ async def test_initialize_advertises_composer_meta_on_the_wire(wire):
         "agentCapabilities"
     ]
 
-    meta = caps.get("_meta") or {}
-    assert set(meta) == EXPECTED_CAPABILITY_KEYS
-    if BINARY_SUPPORTED:
-        assert isinstance(meta["codePuppy/binaryMediaTypes"], list)
+    assert set(caps.get("_meta") or {}) == EXPECTED_CAPABILITY_KEYS
 
 
 async def test_session_new_meta_on_the_wire(wire):

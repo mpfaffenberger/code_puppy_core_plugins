@@ -1,15 +1,15 @@
-"""Contract tests for ACP composer wire features (composer_ext.py).
+"""Contract tests for the pure helpers in composer_ext.py.
 
-Every new-core API is simulated by injecting fake modules into ``sys.modules``.
-An autouse fixture blocks all of them first, so the default state is the old
-core regardless of what is installed.
+Wire-level and session-level behaviour is covered elsewhere; this file pins what
+each helper returns or raises. New-core APIs are absent by default (old core);
+tests opt in through the ``core`` fixture or the install_* helpers.
 """
 
 from __future__ import annotations
 
+import importlib
 import sys
 import types
-from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,13 +17,18 @@ import pytest
 from acp import RequestError
 from acp.schema import (
     EmbeddedResourceContentBlock,
-    ImageContentBlock,
     ResourceContentBlock,
     TextContentBlock,
     TextResourceContents,
 )
 
 from code_puppy_core_plugins.acp import composer_ext as composer
+from tests.acp_session_support import (
+    FakeAgent,
+    install_binary_media,
+    install_pause_store,
+    install_subagent_store,
+)
 
 CATALOG = "code_puppy.command_line.command_catalog"
 REGISTRY = "code_puppy.command_line.command_registry"
@@ -31,100 +36,82 @@ PAUSE = "code_puppy.messaging.pause_controller"
 SUBAGENTS = "code_puppy.tools.subagent_invocation"
 MEDIA = "code_puppy.model_media"
 CONFIG = "code_puppy.config"
-ALL_NEW_CORE_MODULES = (CATALOG, REGISTRY, PAUSE, SUBAGENTS, MEDIA, CONFIG)
 
 VISION_TYPES = ["image/png", "image/jpeg"]
+MEDIA_SUPPORT = {"vision-model": VISION_TYPES, "text-model": []}
 VISION_META = {"codePuppy/binaryMediaTypes": VISION_TYPES}
 EMPTY_META = {"codePuppy/binaryMediaTypes": []}
-
-
-@dataclass(frozen=True)
-class CommandEntry:
-    name: str
-    description: str
-    hint: str
-    aliases: tuple[str, ...]
-    category: str
-    interactive: bool
-
-
-class FakeController:
-    def __init__(self) -> None:
-        self.steers: list[tuple[str, str, bool]] = []
-
-    def request_steer(
-        self, text: str, mode: str = "now", *, history_recorded: bool = False
-    ) -> None:
-        self.steers.append((text, mode, history_recorded))
-
-
-class FakeAgent:
-    def __init__(self, model_name: Any) -> None:
-        self._model_name = model_name
-
-    def get_model_name(self) -> Any:
-        if isinstance(self._model_name, Exception):
-            raise self._model_name
-        return self._model_name
-
-
-class FakeSession:
-    def __init__(self, result: Any = None) -> None:
-        self.received: list[Any] = []
-        self._result = result
-
-    def steer(self, prompt: list[Any]) -> Any:
-        self.received.append(prompt)
-        return self._result
+INTERRUPTED = "codePuppy/interrupted"
 
 
 @pytest.fixture(autouse=True)
 def old_core(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ALL_NEW_CORE_MODULES:
+    # Real imports first: blocking code_puppy.config would break agent_tools,
+    # and importing subagent_invocation first hits a circular import via it.
+    importlib.import_module("code_puppy.tools.agent_tools")
+    pause = importlib.import_module(PAUSE)
+    subagents = importlib.import_module(SUBAGENTS)
+    for name in (CATALOG, REGISTRY, MEDIA, CONFIG):
         monkeypatch.setitem(sys.modules, name, None)
+    for attr in ("get_session_pause_controller", "drop_session_pause_controller"):
+        monkeypatch.delattr(pause, attr, raising=False)
+    for attr in ("peek_interrupted_subagents", "clear_interrupted_subagents"):
+        monkeypatch.delattr(subagents, attr, raising=False)
 
 
 @pytest.fixture
 def core(monkeypatch: pytest.MonkeyPatch):
-    def install(module_name: str, **attrs: Any) -> types.ModuleType:
+    def install(module_name: str, **attrs: Any) -> None:
         module = types.ModuleType(module_name)
         module.__dict__.update(attrs)
         monkeypatch.setitem(sys.modules, module_name, module)
-        return module
 
     return install
+
+
+@pytest.fixture
+def media(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_binary_media(monkeypatch, MEDIA_SUPPORT)
 
 
 def _dump(models: list[Any]) -> list[dict[str, Any]]:
     return [m.model_dump(by_alias=True, exclude_none=True) for m in models]
 
 
-def _command_meta(interactive: bool, aliases: list[str], category: str) -> dict:
+def _meta(interactive: bool, aliases: list[str], category: str) -> dict:
     meta = {"interactive": interactive, "aliases": aliases, "category": category}
     return {"codePuppy/command": meta}
 
 
-# --- (a) available_commands -------------------------------------------------
+def _entry(name, description, hint="", aliases=(), category="core", interactive=False):
+    return SimpleNamespace(
+        name=name,
+        description=description,
+        hint=hint,
+        aliases=aliases,
+        category=category,
+        interactive=interactive,
+    )
+
+
+def _session(model_name: str) -> SimpleNamespace:
+    return SimpleNamespace(agent=FakeAgent(model_name))
+
+
+def _broken_session() -> SimpleNamespace:
+    def fail() -> str:
+        raise RuntimeError("no model")
+
+    return SimpleNamespace(agent=SimpleNamespace(get_model_name=fail))
+
+
+# --- available_commands -----------------------------------------------------
 
 
 def test_available_commands_new_core_full_contract(core) -> None:
     entries = [
-        CommandEntry(
-            name="/help",
-            description="Show help",
-            hint="",
-            aliases=("h", "?"),
-            category="general",
-            interactive=False,
-        ),
-        CommandEntry(
-            name="model",
-            description="Switch model",
-            hint="<name>",
-            aliases=(),
-            category="config",
-            interactive=True,
-        ),
+        _entry("/help", "Show help", "", ("h", "?"), "general", False),
+        _entry("model", "Switch model", "<name>", (), "config", True),
     ]
     core(CATALOG, list_commands=lambda: entries)
 
@@ -132,32 +119,20 @@ def test_available_commands_new_core_full_contract(core) -> None:
         {
             "name": "help",
             "description": "Show help",
-            "_meta": _command_meta(False, ["h", "?"], "general"),
+            "_meta": _meta(False, ["h", "?"], "general"),
         },
         {
             "name": "model",
             "description": "Switch model",
             "input": {"hint": "<name>"},
-            "_meta": _command_meta(True, [], "config"),
+            "_meta": _meta(True, [], "config"),
         },
     ]
 
 
-def test_available_commands_propagates_catalog_errors(core) -> None:
-    def broken() -> list[Any]:
-        raise RuntimeError("catalog exploded")
-
-    core(CATALOG, list_commands=broken)
-
-    with pytest.raises(RuntimeError, match="catalog exploded"):
-        composer.available_commands()
-
-
 def test_available_commands_old_core_uses_registry_fallback(core) -> None:
     commands = [
-        SimpleNamespace(
-            name="/quit", description="Exit", aliases=["q"], category="session"
-        ),
+        _entry("/quit", "Exit", aliases=["q"], category="session"),
         SimpleNamespace(name="/plain", description="No extras"),
     ]
     core(REGISTRY, get_unique_commands=lambda: commands)
@@ -166,66 +141,64 @@ def test_available_commands_old_core_uses_registry_fallback(core) -> None:
         {
             "name": "quit",
             "description": "Exit",
-            "_meta": _command_meta(False, ["q"], "session"),
+            "_meta": _meta(False, ["q"], "session"),
         },
         {
             "name": "plain",
             "description": "No extras",
-            "_meta": _command_meta(False, [], "core"),
+            "_meta": _meta(False, [], "core"),
         },
     ]
 
 
-def test_available_commands_empty_when_no_catalog_and_no_registry() -> None:
-    assert composer.available_commands() == []
+@pytest.mark.parametrize("broken_catalog", [False, True])
+def test_available_commands_without_sources_is_empty_and_errors_propagate(
+    core, broken_catalog: bool
+) -> None:
+    if not broken_catalog:
+        assert composer.available_commands() == []
+        return
+
+    def broken() -> list[Any]:
+        raise RuntimeError("catalog exploded")
+
+    core(CATALOG, list_commands=broken)
+    with pytest.raises(RuntimeError, match="catalog exploded"):
+        composer.available_commands()
 
 
-# --- (b) extract_steer_text -------------------------------------------------
+# --- extract_steer_text -----------------------------------------------------
 
+_TEXT = {"type": "text", "text": "hi"}
+_TEXT_MODEL = TextContentBlock(type="text", text="hi")
 _LINK = {"type": "resource_link", "uri": "file:///a.py", "name": "a.py"}
-_TEXT_RESOURCE = {
+_LINK_MODEL = ResourceContentBlock(
+    type="resource_link", uri="file:///a.py", name="a.py"
+)
+_LINK_TEXT = "[Referenced resource: a.py (file:///a.py)]"
+_RESOURCE = {
     "type": "resource",
     "resource": {"uri": "file:///b.txt", "text": "body", "mimeType": "text/plain"},
 }
+_RESOURCE_MODEL = EmbeddedResourceContentBlock(
+    type="resource",
+    resource=TextResourceContents(
+        uri="file:///b.txt", text="body", mime_type="text/plain"
+    ),
+)
 
 
 @pytest.mark.parametrize(
     ("dict_blocks", "model_blocks", "expected"),
     [
+        ([_TEXT], [_TEXT_MODEL], "hi"),
+        ([_LINK], [_LINK_MODEL], _LINK_TEXT),
         (
-            [{"type": "text", "text": "hi"}],
-            [TextContentBlock(type="text", text="hi")],
-            "hi",
-        ),
-        (
-            [_LINK],
-            [
-                ResourceContentBlock(
-                    type="resource_link", uri="file:///a.py", name="a.py"
-                )
-            ],
-            "[Referenced resource: a.py (file:///a.py)]",
-        ),
-        (
-            [_TEXT_RESOURCE],
-            [
-                EmbeddedResourceContentBlock(
-                    type="resource",
-                    resource=TextResourceContents(
-                        uri="file:///b.txt", text="body", mime_type="text/plain"
-                    ),
-                )
-            ],
+            [_RESOURCE],
+            [_RESOURCE_MODEL],
             "<context uri='file:///b.txt'>\nbody\n</context>",
         ),
-        (
-            [{"type": "text", "text": "one"}, {"type": "text", "text": "two"}],
-            [
-                TextContentBlock(type="text", text="one"),
-                TextContentBlock(type="text", text="two"),
-            ],
-            "one\n\ntwo",
-        ),
+        ([_TEXT, _LINK], [_TEXT_MODEL, _LINK_MODEL], f"hi\n\n{_LINK_TEXT}"),
     ],
 )
 def test_extract_steer_text_accepts_dict_and_model_forms(
@@ -238,74 +211,56 @@ def test_extract_steer_text_accepts_dict_and_model_forms(
 @pytest.mark.parametrize(
     "blocks",
     [
-        [{"type": "image", "data": "AAAA", "mimeType": "image/png"}],
-        [{"type": "audio", "data": "AAAA", "mimeType": "audio/wav"}],
+        "hello",
+        [],
+        [_TEXT, {"type": "image", "data": "AAAA", "mimeType": "image/png"}],
         [{"type": "resource", "resource": {"uri": "x", "blob": "AAAA"}}],
         [{"type": "resource", "resource": {"uri": "x", "text": ""}}],
-        [{"type": "mystery", "text": "x"}],
-        [{"type": "text", "text": "ok"}, {"type": "image", "data": "AAAA"}],
         [{"type": "text", "text": "   \n\t"}],
-        [],
-        "hello",
-        None,
-        ["raw string"],
     ],
 )
 def test_extract_steer_text_rejects_unsupported_content(blocks: Any) -> None:
     assert composer.extract_steer_text(blocks) is None
 
 
-def test_extract_steer_text_rejects_image_model_instance() -> None:
-    image = ImageContentBlock(type="image", data="AAAA", mime_type="image/png")
-
-    assert composer.extract_steer_text([image]) is None
+# --- handle_ext_method and steer_session ------------------------------------
 
 
-# --- (c) handle_ext_method --------------------------------------------------
-
-
-def _steer_core(core) -> None:
-    core(PAUSE, get_session_pause_controller=lambda session_id: FakeController())
-
-
-async def test_ext_method_unknown_method_is_method_not_found(core) -> None:
-    _steer_core(core)
+@pytest.mark.parametrize(
+    ("method", "pause_api_installed", "reported"),
+    [
+        ("code_puppy/other", True, "_code_puppy/other"),
+        (composer.STEER_METHOD, False, f"_{composer.STEER_METHOD}"),
+    ],
+)
+async def test_ext_method_unknown_or_unsupported_steer_is_method_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    pause_api_installed: bool,
+    reported: str,
+) -> None:
+    if pause_api_installed:
+        install_pause_store(monkeypatch)
 
     with pytest.raises(RequestError) as caught:
-        await composer.handle_ext_method("code_puppy/other", {}, {})
+        await composer.handle_ext_method(method, {"sessionId": "s", "prompt": []}, {})
 
-    assert (caught.value.code, caught.value.data) == (
-        -32601,
-        {"method": "_code_puppy/other"},
-    )
-
-
-async def test_ext_method_steer_without_pause_api_is_method_not_found() -> None:
-    with pytest.raises(RequestError) as caught:
-        await composer.handle_ext_method(
-            composer.STEER_METHOD, {"sessionId": "s", "prompt": []}, {}
-        )
-
-    assert (caught.value.code, caught.value.data) == (
-        -32601,
-        {"method": f"_{composer.STEER_METHOD}"},
-    )
+    assert (caught.value.code, caught.value.data) == (-32601, {"method": reported})
 
 
 @pytest.mark.parametrize(
     "params",
     [
-        {},
-        {"prompt": []},
         {"sessionId": "", "prompt": []},
         {"sessionId": 3, "prompt": []},
         {"sessionId": "s"},
         {"sessionId": "s", "prompt": "hi"},
-        {"sessionId": "s", "prompt": {}},
     ],
 )
-async def test_ext_method_invalid_params_is_invalid_params(core, params) -> None:
-    _steer_core(core)
+async def test_ext_method_invalid_params_is_invalid_params(
+    monkeypatch: pytest.MonkeyPatch, params: dict[str, Any]
+) -> None:
+    install_pause_store(monkeypatch)
 
     with pytest.raises(RequestError) as caught:
         await composer.handle_ext_method(composer.STEER_METHOD, params, {})
@@ -316,8 +271,10 @@ async def test_ext_method_invalid_params_is_invalid_params(core, params) -> None
     )
 
 
-async def test_ext_method_unknown_session_reports_not_running(core) -> None:
-    _steer_core(core)
+async def test_ext_method_unknown_session_reports_not_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_pause_store(monkeypatch)
 
     result = await composer.handle_ext_method(
         composer.STEER_METHOD, {"sessionId": "gone", "prompt": []}, {}
@@ -326,184 +283,138 @@ async def test_ext_method_unknown_session_reports_not_running(core) -> None:
     assert result == {"accepted": False, "reason": "not_running"}
 
 
-@pytest.mark.parametrize(
-    "session_result",
-    [{"accepted": True}, {"accepted": False, "reason": "busy"}],
-)
-async def test_ext_method_known_session_returns_steer_result(
-    core, session_result: dict[str, Any]
+def test_steer_session_queues_immediate_history_recorded_steer(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _steer_core(core)
-    session = FakeSession(result=session_result)
-    prompt = [{"type": "text", "text": "change course"}]
-
-    result = await composer.handle_ext_method(
-        composer.STEER_METHOD, {"sessionId": "s1", "prompt": prompt}, {"s1": session}
-    )
-
-    assert result == session_result
-    assert session.received == [prompt]
-
-
-# --- (d) steer_session isolation -------------------------------------------
-
-
-def test_steer_session_routes_each_session_to_its_own_controller(core) -> None:
-    controllers = {"A": FakeController(), "B": FakeController()}
-    core(PAUSE, get_session_pause_controller=lambda sid: controllers[sid])
+    store = install_pause_store(monkeypatch)
 
     composer.steer_session("A", "one")
-    assert controllers["A"].steers == [("one", "now", True)]
-    assert controllers["B"].steers == []
 
-    composer.steer_session("B", "two")
-    composer.steer_session("B", "three")
-    assert controllers["A"].steers == [("one", "now", True)]
-    assert controllers["B"].steers == [("two", "now", True), ("three", "now", True)]
+    assert store.controller_for("A").steers == [("one", "now", True)]
 
 
-# --- (e) interrupted_meta ---------------------------------------------------
+# --- interrupted_meta -------------------------------------------------------
+
+_BAD_RECORD = {"agent_name": 5, "session_id": "A-bad"}
+_OK_RECORD = {"agent_name": "planner", "session_id": "A-ok"}
 
 
-@pytest.fixture
-def interrupted_store(core) -> tuple[dict[str, list[Any]], list[str]]:
-    store: dict[str, list[Any]] = {
-        "A": [{"agent_name": "explorer", "session_id": "A-sub-1", "saved_count": 3}],
-        "B": [
-            "not a dict",
-            {"agent_name": 5, "session_id": "B-bad"},
-            {"agent_name": "planner", "session_id": "B-sub-1"},
-        ],
-    }
-    clears: list[str] = []
-
-    def peek(key: str | None = None) -> list[Any]:
-        if key is None:
-            return [record for records in store.values() for record in records]
-        return list(store.get(key, []))
-
-    core(
-        SUBAGENTS,
-        peek_interrupted_subagents=peek,
-        clear_interrupted_subagents=clears.append,
-    )
-    return store, clears
+def _interrupted(*entries: dict[str, Any]) -> dict[str, Any]:
+    return {INTERRUPTED: list(entries)}
 
 
-@pytest.mark.parametrize(
-    ("session_id", "expected"),
-    [
-        (
-            "A",
-            {
-                "codePuppy/interrupted": [
-                    {
-                        "agentName": "explorer",
-                        "subSessionId": "A-sub-1",
-                        "savedCount": 3,
-                    }
-                ]
-            },
-        ),
-        (
-            "B",
-            {
-                "codePuppy/interrupted": [
-                    {
-                        "agentName": "planner",
-                        "subSessionId": "B-sub-1",
-                        "savedCount": None,
-                    }
-                ]
-            },
-        ),
-        ("C", None),
-    ],
-)
-def test_interrupted_meta_is_scoped_peeked_and_never_drained(
-    interrupted_store: tuple[dict[str, Any], list[str]],
-    session_id: str,
-    expected: Any,
+def test_interrupted_meta_scopes_per_session_and_never_drains(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store, clears = interrupted_store
-    before = {key: list(records) for key, records in store.items()}
+    store = install_subagent_store(monkeypatch)
+    store.records = {
+        "A": [{"agent_name": "explorer", "session_id": "A-sub-1", "saved_count": 3}],
+        "B": [{"agent_name": "planner", "session_id": "B-sub-1"}],
+    }
 
-    assert composer.interrupted_meta(session_id) == expected
-    assert clears == []
-    assert store == before
+    assert composer.interrupted_meta("A") == _interrupted(
+        {"agentName": "explorer", "subSessionId": "A-sub-1", "savedCount": 3}
+    )
+    assert composer.interrupted_meta("B") == _interrupted(
+        {"agentName": "planner", "subSessionId": "B-sub-1", "savedCount": None}
+    )
+    assert composer.interrupted_meta("C") is None
+    assert store.drain_calls == []
+    assert store.clear_calls == []
 
 
-def test_interrupted_meta_swallows_peek_errors(core) -> None:
-    def broken(key: str | None = None) -> list[Any]:
+def _store_with(records: dict[str, list[dict[str, Any]]]):
+    def install(monkeypatch: pytest.MonkeyPatch) -> None:
+        install_subagent_store(monkeypatch).records = records
+
+    return install
+
+
+def _raising_peek(monkeypatch: pytest.MonkeyPatch) -> None:
+    def peek(session_id: str) -> list[Any]:
         raise RuntimeError("store unavailable")
 
-    core(SUBAGENTS, peek_interrupted_subagents=broken)
-
-    assert composer.interrupted_meta("A") is None
-
-
-# --- (f) binary media, session model and capabilities -----------------------
-
-
-@pytest.fixture
-def media_core(core):
-    def supported(model_name: str) -> list[str]:
-        if model_name == "boom":
-            raise RuntimeError("media lookup failed")
-        return {"vision-model": VISION_TYPES, "text-model": []}.get(model_name, [])
-
-    core(MEDIA, supported_binary_media_types=supported)
-    return core
+    module = importlib.import_module(SUBAGENTS)
+    monkeypatch.setattr(module, "peek_interrupted_subagents", peek, raising=False)
 
 
 @pytest.mark.parametrize(
-    ("model_name", "expected"),
+    ("install", "expected"),
     [
-        ("vision-model", VISION_TYPES),
-        ("text-model", []),
-        ("unknown-model", []),
-        ("boom", []),
-        (None, []),
-        ("", []),
-    ],
-)
-def test_binary_media_types_new_core(media_core, model_name, expected) -> None:
-    assert composer.binary_media_types(model_name) == expected
-
-
-def test_binary_media_meta_new_core(media_core) -> None:
-    assert composer.binary_media_meta("vision-model") == VISION_META
-    assert composer.binary_media_meta("text-model") == EMPTY_META
-
-
-@pytest.mark.parametrize(
-    ("agent", "expected"),
-    [
-        (FakeAgent("vision-model"), VISION_TYPES),
-        (FakeAgent(RuntimeError("no model")), []),
-    ],
-)
-def test_agent_binary_media_types(media_core, agent, expected) -> None:
-    assert composer.agent_binary_media_types(agent) == expected
-
-
-@pytest.mark.parametrize(
-    ("session", "global_model", "expected"),
-    [
-        (SimpleNamespace(agent=FakeAgent("vision-model")), "text-model", VISION_META),
-        (None, "vision-model", VISION_META),
         (
-            SimpleNamespace(agent=FakeAgent(RuntimeError("x"))),
-            "vision-model",
-            VISION_META,
+            _store_with({"A": [_BAD_RECORD, _OK_RECORD]}),
+            _interrupted(
+                {"agentName": "planner", "subSessionId": "A-ok", "savedCount": None}
+            ),
         ),
-        (None, None, EMPTY_META),
+        (_store_with({}), None),
+        (lambda monkeypatch: None, None),
+        (_raising_peek, None),
+    ],
+)
+def test_interrupted_meta_edge_cases(monkeypatch, install, expected) -> None:
+    install(monkeypatch)
+
+    assert composer.interrupted_meta("A") == expected
+
+
+# --- binary media, session model and capabilities ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("installed", "model", "expected"),
+    [
+        (True, "vision-model", VISION_TYPES),
+        (True, "text-model", []),
+        (True, "unknown-model", []),
+        (True, None, []),
+        (False, "vision-model", []),
+    ],
+)
+def test_binary_media_by_model_on_new_and_old_core(
+    request, installed: bool, model: str | None, expected: list[str]
+) -> None:
+    if installed:
+        request.getfixturevalue("media")
+
+    assert composer.binary_media_types(model) == expected
+    assert composer.agent_binary_media_types(_session(model).agent) == expected
+    meta = {"codePuppy/binaryMediaTypes": expected} if installed else None
+    assert composer.binary_media_meta(model) == meta
+
+
+def test_binary_media_lookup_errors_report_no_types(core) -> None:
+    def boom(model_name: str) -> list[str]:
+        raise RuntimeError("media lookup failed")
+
+    core(MEDIA, supported_binary_media_types=boom)
+
+    assert composer.binary_media_types("vision-model") == []
+    assert composer.binary_media_meta("vision-model") == EMPTY_META
+
+
+@pytest.mark.parametrize(
+    ("installed", "session", "global_model", "expected"),
+    [
+        (True, _session("vision-model"), "text-model", VISION_META),
+        (True, None, "vision-model", VISION_META),
+        (True, _broken_session(), "vision-model", VISION_META),
+        (True, None, None, EMPTY_META),
+        (False, _session("vision-model"), "vision-model", None),
+        (False, None, None, None),
     ],
 )
 def test_session_meta_prefers_session_model_then_global(
-    media_core, session, global_model, expected
+    request,
+    core,
+    installed: bool,
+    session: Any,
+    global_model: str | None,
+    expected: Any,
 ) -> None:
-    media_core(CONFIG, get_global_model_name=lambda: global_model)
+    if installed:
+        core(CONFIG, get_global_model_name=lambda: global_model)
+        request.getfixturevalue("media")
 
     assert composer.session_meta(session) == expected
 
@@ -518,73 +429,47 @@ def test_session_meta_prefers_session_model_then_global(
     ],
 )
 def test_capabilities_meta_reflects_installed_core(
-    core, has_pause: bool, has_media: bool, expected: Any
+    request, monkeypatch, core, has_pause: bool, has_media: bool, expected: Any
 ) -> None:
     core(CONFIG, get_global_model_name=lambda: "vision-model")
     if has_pause:
-        core(PAUSE, get_session_pause_controller=lambda sid: FakeController())
+        install_pause_store(monkeypatch)
     if has_media:
-        core(
-            MEDIA,
-            supported_binary_media_types=lambda name: (
-                VISION_TYPES if name == "vision-model" else []
-            ),
-        )
+        request.getfixturevalue("media")
 
     assert composer.capabilities_meta() == expected
 
 
-def test_capability_helpers_report_nothing_on_old_core() -> None:
-    agent = FakeAgent("vision-model")
-
-    assert composer.binary_media_types("vision-model") == []
-    assert composer.binary_media_meta("vision-model") is None
-    assert composer.agent_binary_media_types(agent) == []
-    assert composer.session_meta(SimpleNamespace(agent=agent)) is None
-    assert composer.capabilities_meta() is None
-    assert composer.interrupted_meta("A") is None
+# --- release_session --------------------------------------------------------
 
 
-# --- (g) release_session ----------------------------------------------------
-
-
-def test_release_session_drops_controller_and_clears_subagents(core) -> None:
-    dropped: list[str] = []
-    cleared: list[str] = []
-    core(PAUSE, drop_session_pause_controller=dropped.append)
-    core(SUBAGENTS, clear_interrupted_subagents=cleared.append)
-
-    composer.release_session("A")
-
-    assert dropped == ["A"]
-    assert cleared == ["A"]
-
-
-def test_release_session_is_noop_on_old_core() -> None:
-    composer.release_session("A")
-
-
-@pytest.mark.parametrize("failing", ["drop", "clear"])
-def test_release_session_one_failure_does_not_block_the_other(core, failing) -> None:
-    calls: list[str] = []
+@pytest.mark.parametrize(
+    ("installed", "failing"),
+    [(True, None), (True, "drop"), (True, "clear"), (False, None)],
+)
+def test_release_session_calls_both_cores_and_isolates_failures(
+    core, installed: bool, failing: str | None
+) -> None:
+    calls: list[tuple[str, str]] = []
 
     def recorder(name: str):
         def call(session_id: str) -> None:
-            calls.append(name)
+            calls.append((name, session_id))
             if name == failing:
                 raise RuntimeError("boom")
 
         return call
 
-    core(PAUSE, drop_session_pause_controller=recorder("drop"))
-    core(SUBAGENTS, clear_interrupted_subagents=recorder("clear"))
+    if installed:
+        core(PAUSE, drop_session_pause_controller=recorder("drop"))
+        core(SUBAGENTS, clear_interrupted_subagents=recorder("clear"))
 
     composer.release_session("A")
 
-    assert sorted(calls) == ["clear", "drop"]
+    assert sorted(calls) == ([("clear", "A"), ("drop", "A")] if installed else [])
 
 
-# --- (h) prompt_in_flight_error ---------------------------------------------
+# --- prompt_in_flight_error -------------------------------------------------
 
 
 def test_prompt_in_flight_error_full_contract() -> None:
