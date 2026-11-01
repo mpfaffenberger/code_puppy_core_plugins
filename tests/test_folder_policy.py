@@ -268,6 +268,21 @@ def test_protected_name_match_follows_platform_case_rule(
     assert folder_policy.is_protected("/proj/.ENV") is expected_protected
 
 
+def test_real_case_insensitive_filesystem_matches_policy(project):
+    """Real-FS evidence (no sys.platform patching) that casing cannot bypass policy."""
+    if sys.platform not in ("darwin", "win32"):
+        pytest.skip("policy only folds case on macOS and Windows")
+    (project / "CaseProbe.txt").touch()
+    if not (project / "caseprobe.txt").exists():
+        pytest.skip("filesystem is case-sensitive")
+    (project / ".env").touch()
+    (project / ".git").mkdir()
+    assert decide(project / ".ENV", project) is ASK
+    assert decide(project / ".GIT" / "config", project) is ASK
+    # project fixture is tmp_path/"project"; PROJECT is the same dir on this FS.
+    assert decide(project.parent / "PROJECT" / "sub" / "a.txt", project) is ALLOW
+
+
 def test_add_user_folder_persists_normalized_path(project, config_store):
     result = folder_policy.add_user_folder(str(project))
     assert result == [os.path.realpath(project)]
