@@ -65,6 +65,8 @@ class ACPSession:
         # Set while a ``session/prompt`` is in flight so ``cancel`` has a task
         # to cancel. ``None`` means idle.
         self._task: Optional["asyncio.Task[Any]"] = None
+        # Set only when cancel() cancels a live task; see cancel().
+        self._cancel_requested = False
 
     async def prompt(self, blocks: List[Any]) -> PromptResult:
         """Run the agent on a user turn and return the stop reason + usage.
@@ -117,6 +119,7 @@ class ACPSession:
         state.begin_run(self.session_id)
         result: Any = None
         error: Optional[BaseException] = None
+        self._cancel_requested = False
         try:
             self._task = asyncio.ensure_future(
                 self.agent.run_with_mcp(
@@ -126,8 +129,13 @@ class ACPSession:
                 )
             )
             result = await self._task
+            # Core swallows cancellation, so the handler's own cancel would be lost;
+            # the SDK response send then hangs after the connection closes.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise asyncio.CancelledError
             self._absorb_history(result)
-            stop_reason = STOP_END_TURN
+            stop_reason = STOP_CANCELLED if self._cancel_requested else STOP_END_TURN
         except asyncio.CancelledError:
             # Two ways here: our own cancel cancelled the inner task (report
             # ``cancelled``), or THIS coroutine was cancelled (SDK teardown) while the
@@ -195,7 +203,9 @@ class ACPSession:
 
         Besides cancelling the asyncio task, force-kill any local shell
         processes the run spawned so they don't orphan. (Shells delegated to
-        the client run client-side and are unaffected.)
+        the client run client-side and are unaffected.) Core may swallow the
+        cancel, so ``_cancel_requested`` is the authoritative signal that the
+        turn was cancelled.
 
         Only *requests* cancellation -- delivery happens at the task's next
         await point, whenever that is, not immediately. Callers that need
@@ -204,6 +214,8 @@ class ACPSession:
         """
         task = self._task
         if task is not None and not task.done():
+            # Live-task only, so an idle cancel can't mark the next turn cancelled.
+            self._cancel_requested = True
             task.cancel()
         try:
             from code_puppy.tools.command_runner import (
