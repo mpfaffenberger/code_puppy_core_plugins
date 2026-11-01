@@ -44,7 +44,6 @@ from code_puppy.banners import (
     Banner,
     banner_for_call,
     banner_for_result,
-    result_status,
     result_text,
 )
 from code_puppy.callbacks import register_callback, unregister_callback
@@ -237,7 +236,6 @@ class EventBridge:
         tool_call_id = state.pop_tool_call(tool_name)
         if tool_call_id is None:
             return
-        status, _ = result_status(result)
         banner = banner_for_result(tool_name, tool_args, result, duration_ms)
         content = []
         text = result_text(result)
@@ -246,7 +244,7 @@ class EventBridge:
         content.extend(self._content_for(result))
         update = update_tool_call(
             tool_call_id,
-            status=status,
+            status=banner.status,
             title=banner.title,
             content=content or None,
             raw_output=self._summarize(result),
