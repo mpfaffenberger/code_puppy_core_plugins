@@ -16,12 +16,12 @@ edges to the client.
 > `session/load` (replays persisted history), `session/prompt`,
 > `session/cancel` (also kills local shells), `session/list`, `session/close`,
 > `session/fork` (duplicates history), `session/resume` (rehydrates across
-restarts), `session/set_mode`, `session/set_config_option`. Assistant text +
+> restarts), `session/set_mode`, `session/set_config_option`, and the `_code_puppy/session/steer` extension. Assistant text +
 > thinking stream as `agent_message_chunk` / `agent_thought_chunk`; tool calls
 > stream as `tool_call` / `tool_call_update` (with `kind`, file `locations`,
 > friendly titles, and inline diffs); slash commands are advertised via
 > `available_commands_update` **and executed** when the client sends one. Prompt
-> turns report token usage; **image** input is accepted. Client-injected MCP
+> turns report token usage; **image** and embedded **binary** input are accepted (see [Composer extensions](#composer-extensions)). Client-injected MCP
 > servers and multi-root `additionalDirectories` are honoured. Workspace file
 > I/O and shell delegate to the client (capability-gated), and **permissions**
 > for file writes and shell commands are surfaced in the client's own allow/deny
@@ -119,8 +119,9 @@ Every file stays well under the 600-line cap and owns one concern.
 | `register_callbacks.py` | Register the `--acp` flag; when present, redirect the console to stderr, run `acp.run_agent(CodePuppyAgent())` on its own loop in a thread, and return `{"handled": True}` so the TUI never starts. |
 | `agent.py` | `CodePuppyAgent(acp.Agent)` — the SDK agent implementation: initialize, new/load/resume/fork/list/close session, prompt, cancel, set_session_mode/model, set_config_option, authenticate, plus `on_connect` (stashes the client handle + installs approvals). |
 | `capabilities.py` | Declarative capability negotiation in SDK models: our `AgentCapabilities`, and parsing the client's `ClientCapabilities` into `(fs_read, fs_write, terminal)`. |
-| `content.py` | Parse ACP prompt content blocks → text + multimodal attachments (`BinaryContent` / `ImageUrl`), honouring `embeddedContext` + `image`. |
-| `session.py` | `ACPSession`: one ACP session ⇄ one `BaseAgent` + its `_message_history`. Runs each turn as a cancellable `asyncio.Task`; persists history after each turn; owns the final-result fallback. |
+| `content.py` | Parse ACP prompt content blocks → text + multimodal attachments (`BinaryContent` / `ImageUrl`), honouring `embeddedContext` + `image`. Attaches embedded `blob` resources the current model accepts; any other blob becomes a visible notice. |
+| `composer_ext.py` | Composer wire features: the `_code_puppy/session/steer` extension method, slash-command metadata, binary-media and interrupted-subagent `_meta`, and the `-32000` prompt-in-flight error. Imports newer core APIs lazily, so an older core only advertises less. |
+| `session.py` | `ACPSession`: one ACP session ⇄ one `BaseAgent` + its `_message_history`. Runs each turn as a cancellable `asyncio.Task`; persists history after each turn; owns the final-result fallback and `steer()`, which queues mid-turn text. |
 | `commands.py` | Execute client-typed `/slash` commands via `command_handler`, capturing MessageBus output and forwarding it (never touches stdin). |
 | `persistence.py` | Pickle each session's history under `AUTOSAVE_DIR/acp` keyed by session id, plus an ACP metadata sidecar (`cwd` + `additionalDirectories` + title). Rehydrate on `load`/`resume`/`fork`; enumerate for `session/list` (`list_persisted`); tombstone on `session/close` (`delete`). |
 | `replay.py` | On `load`/`resume`, stream the rehydrated history back to the client as ordered `session/update`s (user / agent text / thinking / past tool calls) so the client rebuilds the thread UI. |
@@ -185,18 +186,18 @@ double-send.
 
 | Method | Behaviour |
 |--------|-----------|
-| `initialize` | Negotiate version + capabilities; install capability-gated I/O delegation. |
+| `initialize` | Negotiate version + capabilities; install capability-gated I/O delegation. Advertises the `codePuppy/*` `_meta` keys. |
 | `authenticate` / `logout` | No-op (auth is via Code Puppy's own model config/env). |
 | `session/new` | Create an `ACPSession` (fresh `BaseAgent`) from `cwd` + `additionalDirectories`; attach client `mcpServers`; return models + config options; schedule `available_commands_update`. |
 | `session/load` | Re-open a thread: **replay persisted history into the agent AND stream it back to the client** as `session/update`s so the client rebuilds the thread UI. |
 | `session/resume` | Rehydrate + replay a session across a restart from persisted history. |
 | `session/fork` | Branch a session: copy its history into a new id. Works on a live session **or** one persisted by a prior process (rehydrated from disk), so forking survives a restart. |
-| `session/prompt` | Parse content blocks (text + image attachments) or execute a `/slash` command; run the agent as a cancellable task; stream updates; return stop reason **+ token usage**. |
-| `session/cancel` | Cancel the in-flight run's task **and kill local shells** → `cancelled`. |
+| `session/prompt` | Parse content blocks (text, image, and binary attachments) or execute a `/slash` command; run the agent as a cancellable task; stream updates; return stop reason **+ token usage**. A second prompt on a running session fails with `-32000` (see [Overlapping prompts](#overlapping-prompts)). |
+| `session/cancel` | Cancel the in-flight run's task **and kill local shells**. The turn returns `stopReason: "cancelled"`. |
 | `session/list` / `session/close` | List sessions (**live in-memory + persisted on disk**, deduped, so threads survive a restart and stay revivable) / drop a session (also deletes its persisted copy). |
-| `session/set_mode` | Switch the active model, rebinding the session agent (history preserved). Code Puppy surfaces its model list as ACP *modes* (0.11 removed the separate models API). |
-| `session/set_config_option` | Apply a safe config change (streaming toggle); never yolo. |
-| `session/set_mode` | No-op (Code Puppy has one mode). |
+| `session/set_mode` | Accepts any mode id as a no-op (Code Puppy has one mode); model selection uses `session/set_config_option` with the `model` option, which rebinds the session agent on the new model (history preserved). |
+| `session/set_config_option` | Apply a config change (model picker, streaming toggle); never yolo. |
+| `_code_puppy/session/steer` (extension) | Queue text into a running turn. The SDK strips the leading underscore, so the agent sees `code_puppy/session/steer`. See [Steer a running turn](#steer-a-running-turn). |
 
 Not implemented: `elicitation/*` (the SDK connection exposes no elicitation
 call in 0.10.1), `plan` updates (no native plan model), and the unstable
@@ -207,7 +208,7 @@ and stub nothing.
 ### Outbound notifications (us → the client) — `session/update`
 
 `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`,
-`available_commands_update`. Tool calls carry human-friendly titles
+`available_commands_update` (entries carry `codePuppy/command` metadata). Tool calls carry human-friendly titles
 ("Edit foo.py", "Run: pytest"), a `kind`, file `locations`, and — on completion
 — the unified diff as an inline `diff` content block so edits are visible in
 the client's tool-call entry.
@@ -217,6 +218,82 @@ the client's tool-call entry.
 `session/request_permission` (approvals), and — when the client advertises the
 capability — `fs/read_text_file`, `fs/write_text_file`, and the `terminal/*`
 family (`create`, `wait_for_exit`, `output`, `kill`, `release`).
+
+---
+
+## Composer extensions
+
+These additions are backward compatible. An older Code Puppy omits the new keys and answers `-32601` (method not found) for the extension method. Clients detect support from the advertised keys, not from the version string.
+
+The SDK router strips the leading underscore from extension methods. The wire method `_code_puppy/session/steer` reaches the agent as `code_puppy/session/steer`. This section uses the wire name.
+
+### Capabilities and `_meta` keys
+
+| Where | Key | Value |
+|-------|-----|-------|
+| `initialize` → `agentCapabilities._meta` | `codePuppy/steer` | `true`, only when this core supports per-session steer. |
+| `initialize` → `agentCapabilities._meta` | `codePuppy/binaryMediaTypes` | `string[]`. Media types the default model accepts as binary files, such as `application/pdf`. Absent on older cores. Image types go out as image blocks, so they aren't listed. |
+| `session/new`, `session/load`, `session/resume`, `session/set_config_option` results → `_meta` | `codePuppy/binaryMediaTypes` | `string[]` for that session's current model. Re-sent after a model change. |
+| `session/prompt` result → `_meta` | `codePuppy/interrupted` | `[{agentName, subSessionId, savedCount}]`. Present only when `session/cancel` ended the turn and sub-agents were interrupted. Omitted when empty. `savedCount` is an integer or `null`. No capability flag. The records stay queued, so the next turn in that session gets a resume note. |
+| `session/update` `available_commands_update` entries | `_meta["codePuppy/command"]` | Command metadata. See the bullets below. |
+
+Each command entry in `available_commands_update` has these fields:
+
+- `name`: the command name, without a leading slash.
+- `description`: the command description.
+- `input: {hint}`: present only for commands that take arguments.
+- `_meta["codePuppy/command"]`: `{interactive: boolean, aliases: string[], category: string}`. `interactive` is `true` for commands that open a picker or need a terminal, such as `/model`, `/agent`, and `/theme`. `category` is the registry category, or `plugin`.
+
+The list covers every command the session can run: built-in, registry, and plugin commands. After a model or mode change, the agent re-sends the list to every open session, but only when the list has changed.
+
+### Steer a running turn
+
+Send `_code_puppy/session/steer` to add text to a turn that is already running. The request params are `{sessionId: string, prompt: ContentBlock[]}`. The result is `{accepted: boolean, reason?: "not_running" | "unsupported_content"}`.
+
+Request:
+
+```json
+{"jsonrpc": "2.0", "id": 7, "method": "_code_puppy/session/steer",
+ "params": {"sessionId": "sess_example",
+            "prompt": [{"type": "text", "text": "Use the v2 API instead."}]}}
+```
+
+Response:
+
+```json
+{"jsonrpc": "2.0", "id": 7, "result": {"accepted": true}}
+```
+
+- Accepted text waits for the next safe turn boundary of that session's running turn. Two sessions in one process never see each other's steers.
+- `not_running`: the session is unknown, or no agent run is in flight.
+- `unsupported_content`: the prompt holds any block other than `text`, `resource_link`, or a `resource` with text. Images, audio, and blobs can't be steered. Empty text also returns this reason.
+- Steer text is not written to the terminal's command history, because the client owns the input.
+
+The terminal `/steer` command is unchanged.
+
+### Send binary files
+
+An embedded `resource` with a `blob` reaches the model as binary content when its media type appears in the model's `codePuppy/binaryMediaTypes` list. Otherwise, the turn shows this notice in place of the file:
+
+```text
+[Attachment not sent: <name or uri> (<mime>) is not supported by the current model.]
+```
+
+Code Puppy never logs file content.
+
+### Cancelled turns
+
+A turn that `session/cancel` ends returns `stopReason: "cancelled"`. This applies whether the turn waits on a permission request or streams model output.
+
+### Overlapping prompts
+
+A `session/prompt` fails when its session already has a running turn. A turn runs while an agent run or a slash command is in flight. The running turn and the session history are unaffected. Idle sessions accept prompts as usual. To add input to a running turn, use [steer](#steer-a-running-turn) instead.
+
+```json
+{"jsonrpc": "2.0", "id": 9, "error": {"code": -32000,
+  "message": "Session already has a running prompt",
+  "data": {"sessionId": "sess_example", "reason": "prompt_in_flight"}}}
+```
 
 ---
 
@@ -260,8 +337,19 @@ change.
 
 ## Testing
 
-`tests/test_acp_plugin.py` drives `CodePuppyAgent` directly against a fake SDK
-connection (no real stdio) and covers:
+The composer tests cover the additions in [Composer extensions](#composer-extensions):
+
+- `tests/test_acp_composer_ext.py`: the steer ext method, `codePuppy/*` `_meta` helpers, and command metadata.
+- `tests/test_acp_content_binary.py`: embedded blob attachments and the unsupported-media notice.
+- `tests/test_acp_session_turns.py`: the `cancelled` stop reason, the `-32000` overlap error, and interrupted-subagent metadata.
+- `tests/test_acp_session_steer.py`: steer acceptance, `not_running`, `unsupported_content`, and per-session isolation.
+- `tests/test_acp_agent_composer.py`: `initialize` advertisement, command re-send on change, and steer routing.
+- `tests/test_acp_composer_wire.py`: in-process JSON-RPC checks of the real wire shapes (`_meta`, `-32000`, `cancelled`, steer ext method) through the SDK.
+- `tests/test_acp_composer_real_core.py`: runs against the real newer core and is skipped on older cores: command catalog, per-session steer, and interrupted records.
+
+Run these with the newer core installed to cover both paths. The other tests simulate both core versions with fakes.
+
+Other ACP tests drive `CodePuppyAgent` against a fake SDK connection (no real stdio) and cover:
 
 - capability negotiation + client-cap parsing,
 - content-block flattening (incl. embedded resources),
