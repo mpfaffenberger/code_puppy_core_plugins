@@ -149,6 +149,30 @@ async def test_cancelled_turn_reports_cancelled_and_next_turn_runs(
     assert follow_up.stop_reason == STOP_END_TURN
 
 
+async def test_cancel_during_slash_command_phase_skips_expanded_prompt(monkeypatch):
+    session = make_session("s1", FakeAgent(script=["finish"]))
+    started = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def expanding_command(session_id, command):
+        started.set()
+        await gate.wait()
+        return "expanded prompt"
+
+    monkeypatch.setattr(commands, "run", expanding_command)
+    task = asyncio.ensure_future(session.prompt([text_block("/expand")]))
+    await _done(started.wait())
+    session.cancel()
+    gate.set()
+
+    assert (await _done(task)).stop_reason == STOP_CANCELLED
+    assert session.agent.calls == []
+    # A slash follow-up proves the cancelled turn left no stale flag behind.
+    follow_up = await _done(session.prompt([text_block("/expand")]))
+    assert follow_up.stop_reason == STOP_END_TURN
+    assert len(session.agent.calls) == 1
+
+
 async def test_cancel_after_the_task_finished_does_not_set_the_flag():
     session = make_session("s1", FakeAgent())
 

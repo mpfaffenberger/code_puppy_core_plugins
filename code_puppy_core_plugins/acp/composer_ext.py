@@ -144,9 +144,12 @@ def _is_steerable(block: Any) -> bool:
     return True
 
 
-# Editor-owned input must not land in the user's terminal command history.
 def steer_session(session_id: str, text: str) -> None:
-    """Queue ``text`` as an immediate steer; caller must check steer_supported()."""
+    """Queue ``text`` as an immediate steer; caller must check steer_supported().
+
+    ``history_recorded=True`` because editor-owned input must not land in the
+    user's terminal command history.
+    """
     get_controller = _core_attr(_PAUSE, "get_session_pause_controller")
     get_controller(session_id).request_steer(text, mode="now", history_recorded=True)
 

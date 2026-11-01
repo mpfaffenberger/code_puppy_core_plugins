@@ -108,6 +108,7 @@ class ACPSession:
         """Run one turn; the caller owns the ``_running`` flag."""
         from code_puppy.messaging import set_session_context
 
+        self._cancel_requested = False
         media_types = composer_ext.agent_binary_media_types(self.agent)
         parsed = content.parse_prompt(blocks, media_types)
         text = parsed.text
@@ -122,6 +123,8 @@ class ACPSession:
             and commands.is_command(text)
         ):
             expanded = await commands.run(self.session_id, text)
+            if self._cancel_requested:
+                return PromptResult(STOP_CANCELLED)
             if not expanded:
                 return PromptResult(STOP_END_TURN)
             text = expanded
@@ -146,7 +149,6 @@ class ACPSession:
         state.begin_run(self.session_id)
         result: Any = None
         error: Optional[BaseException] = None
-        self._cancel_requested = False
         try:
             self._task = asyncio.ensure_future(
                 self.agent.run_with_mcp(
@@ -245,9 +247,10 @@ class ACPSession:
         included) before they act should use :meth:`cancel_and_wait` instead.
         """
         task = self._task
-        if task is not None and not task.done():
-            # Live-task only, so an idle cancel can't mark the next turn cancelled.
+        if self._running:
+            # Turn-scoped (incl. slash-command phase); idle cancels stay no-ops.
             self._cancel_requested = True
+        if task is not None and not task.done():
             task.cancel()
         try:
             from code_puppy.tools.command_runner import (
