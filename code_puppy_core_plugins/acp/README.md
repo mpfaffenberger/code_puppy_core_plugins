@@ -258,6 +258,155 @@ change.
 
 ---
 
+## Turn metadata and reply feedback
+
+Clients read per-turn metadata and send thumbs-up or thumbs-down feedback on a
+reply. **Not covered:** terminal command parity is not part of this change.
+
+### Turn metadata
+
+The `session/prompt` result includes `_meta` for every outcome that ran the agent
+(`end_turn`, `cancelled`, or `refusal`):
+
+```json
+{"stopReason": "end_turn", "_meta": {"codePuppy": {"turn": {
+  "model": "claude-sonnet-5-5", "correlationId": "corr_7f3a-01"}}}}
+```
+
+- `model` comes from the session agent. Plugins cannot override it.
+- `correlationId` comes from the first registered provider that returns a valid
+  value (1 to 128 characters from `A-Za-z0-9_.:-`). Providers run in the prompt
+  task, right after the run finishes. Code Puppy omits the key when none returns one.
+- Code Puppy omits `_meta` when both values are unknown.
+
+### Feedback capability
+
+Show thumbs controls only when `initialize` returns `agentCapabilities._meta.codePuppy.feedback`
+with `"method": "_code_puppy/feedback"` and `"version": 1`.
+
+### Send feedback
+
+Send `_code_puppy/feedback` as a JSON-RPC request:
+
+```json
+{"jsonrpc": "2.0", "id": 7, "method": "_code_puppy/feedback", "params": {
+  "sessionId": "sess-4c2d", "correlationId": "corr_7f3a-01", "rating": "down",
+  "reasons": ["wrong", "other"], "comment": "Used the old flag name."}}
+```
+
+Response:
+
+```json
+{"jsonrpc": "2.0", "id": 7, "result": {"accepted": true, "feedbackId": "9b1e6c2a-5d3f-4a8e-b7c0-2f4d8e1a6c93"}}
+```
+
+| Parameter | Required | Rules |
+|-----------|----------|-------|
+| `sessionId` | Yes | Non-empty string, not whitespace-only, at most 256 characters. |
+| `correlationId` | No | Same rules as turn metadata. |
+| `rating` | Yes | `up` or `down`. |
+| `reasons` | No | Array of `wrong`, `slow`, `unsafe`, or `other`. Only with `down`. No duplicates. |
+| `comment` | No | String. Only with `down`. Required when `reasons` includes `other`. |
+
+With `up`, a non-null `reasons` or `comment` is rejected, even when empty.
+
+A raw `comment` longer than 4096 characters is rejected before cleanup. Code Puppy
+then turns control, format, and line or paragraph separator characters into one
+space, collapses and trims whitespace, and requires the result to be 254 characters
+or fewer. An empty result counts as no comment, so `reasons` with `other` still
+fails. The comment is stored and forwarded as data only.
+
+Unknown keys are ignored. Invalid params return JSON-RPC error `-32602`; `error.data`
+holds only the field name and a fixed problem text, never a parameter value. An
+unknown extension name returns `-32601`. A failed save returns `-32603` and never
+reports `accepted`. The result returns once the event is saved; summarizing and
+sending happen later, in the background.
+
+### Feedback storage and delivery
+
+Code Puppy appends one JSON object per line to `feedback.jsonl` in
+`code_puppy.config.DATA_DIR`, calling `fsync` before the reply. Each record has `id`,
+`createdAt`, `state`, `attempts`, `sessionId`, `correlationId`, `rating`, `reasons`,
+`comment`, `model`, `tags`, and `reason`. State changes rewrite the file atomically,
+and reads skip unreadable lines.
+
+| State | Meaning |
+|-------|---------|
+| `queued` | Saved. Nothing else has run. |
+| `summarized` | Thumbs-down summary stored. Thumbs-up events skip this state. |
+| `delivered` | Final. Every registered sink accepted the record, or no sink is registered. |
+
+Code Puppy retries unfinished entries when the next ACP connection starts, in a
+background task so startup is never blocked, and after each new accepted event.
+A failure keeps the entry in its current state.
+
+### Summarizer
+
+Only thumbs-down events run the summarizer: one non-streaming, tool-free model call
+using `get_summarization_model_name()`. It reads only the session's latest exchange
+from saved ACP history and returns:
+
+- `tags`: a subset of `incorrect`, `incomplete`, `off_topic`, `too_slow`,
+  `unsafe_action`, `formatting`, `tool_failure`, `unclear`, and `other`.
+- `reason`: at most 120 characters.
+
+Code Puppy enforces these privacy rules in code:
+
+- It never sends your comment to the model.
+- It drops the reason if the reason shares a run of three words with the prompt
+  or reply, repeats an identifier of 12 or more characters from them, or contains
+  quotes, backticks, or path-like text.
+- Prompt and reply text never enter `feedback.jsonl`, logs, or sink records.
+
+**Known limit:** the wire has no turn index. Feedback on an older reply
+summarizes the latest exchange.
+
+### Plugin hooks
+
+Each hook has a matching `unregister_*` function.
+
+- `register_turn_metadata_provider(fn)` in `turn_metadata.py`: `fn(agent,
+  session_id)` returns `{"correlationId": "<id>"}` or `None`.
+- `register_feedback_sink(fn)` in `feedback.py`: `async fn(record)` returns `True`
+  once it accepts the record. `False` or an exception keeps the entry for retry.
+  A sink can run more than once per entry, so dedupe on `id`.
+- `register_feedback_scope(fn)` in `feedback.py`: `fn(record)` returns a context
+  manager that wraps the summarizer and sinks, for example to restore a correlation ID.
+
+```python
+from contextlib import contextmanager
+
+from code_puppy_core_plugins.acp.feedback import (
+    register_feedback_scope,
+    register_feedback_sink,
+)
+from code_puppy_core_plugins.acp.turn_metadata import (
+    register_turn_metadata_provider,
+)
+
+
+def example_correlation(agent, session_id):
+    trace_id = lookup_trace_id(session_id)
+    return {"correlationId": trace_id} if trace_id else None
+
+
+async def example_sink(record):
+    return store_once(record["id"], record)
+
+
+@contextmanager
+def example_scope(record):
+    with restore_trace(record.get("correlationId")):
+        yield
+
+
+register_turn_metadata_provider(example_correlation)
+register_feedback_sink(example_sink)
+register_feedback_scope(example_scope)
+```
+
+---
+
 ## Testing
 
 `tests/test_acp_plugin.py` drives `CodePuppyAgent` directly against a fake SDK
