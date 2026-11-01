@@ -1,12 +1,11 @@
 """Folder policy wiring in the file permission prompts (sync and async).
 
-Outside-approved paths live under the real home directory: the cwd and temp
-folders are always approved, so the home path is the only non-approved fixture.
+The outside path is a tmp_path sibling that is outside the cwd and outside the
+patched temp roots, so it never depends on the real HOME or TMPDIR.
 Nothing is created or written, so the path need not exist.
 """
 
 import asyncio
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -23,12 +22,13 @@ def project(tmp_path, monkeypatch):
     root = tmp_path / "project"
     root.mkdir()
     monkeypatch.chdir(root)
+    monkeypatch.setattr(folder_policy, "_temp_roots", lambda: [str(tmp_path / "temp")])
     return root
 
 
 @pytest.fixture
-def outside():
-    return str(Path.home() / ".acp-folder-policy-test" / "notes.md")
+def outside(tmp_path, project):
+    return str(tmp_path / "outside" / "notes.md")
 
 
 @pytest.fixture
