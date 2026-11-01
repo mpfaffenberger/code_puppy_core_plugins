@@ -17,8 +17,11 @@ option by its ``category``, so this is the shape that actually populates them:
 * **Streaming toggle** — an On/Off ``select`` option. (A boolean option would
   be more natural, but Zed 1.7.2 renders only ``select`` options in its bottom
   bar -- a boolean shows as "Unknown" -- so every control here is a select.) We
-  deliberately expose only this safe setting; we do **not** expose a
-  yolo/approval-bypass toggle (permissions must stay client-driven).
+  deliberately expose only this safe setting.
+
+* **Approvals** — a read-only ``select`` (``approval_mode``) reporting ``ask`` or
+  ``auto`` from the CLI's yolo setting. Clients cannot change it: writes fall
+  through like unknown ids, so permissions stay client-driven.
 
 All accessors are best-effort and degrade to "nothing to offer" on error.
 """
@@ -42,6 +45,13 @@ MODE_OPTION_ID = "mode"
 _STREAMING_ID = "enable_streaming"
 _STREAMING_ON = "on"
 _STREAMING_OFF = "off"
+_APPROVAL_ID = "approval_mode"
+_APPROVAL_ASK = "ask"
+_APPROVAL_AUTO = "auto"
+_APPROVAL_DESCRIPTIONS = {
+    _APPROVAL_ASK: "Ask before commands and edits",
+    _APPROVAL_AUTO: "Run without asking",
+}
 
 # Exactly one operating mode, but advertised as a category="mode" select so the
 # client's dropdown shows "Default" rather than an empty "Unknown" control.
@@ -105,6 +115,30 @@ def _model_option() -> Optional[SessionConfigOptionSelect]:
     )
 
 
+def _approval_option() -> SessionConfigOptionSelect:
+    """Report the CLI's approval mode as a read-only select (ask or auto).
+
+    Only the current value is listed, so the client has nothing to pick.
+    """
+    from code_puppy import config
+
+    current = _APPROVAL_AUTO if config.get_yolo_mode() else _APPROVAL_ASK
+    return SessionConfigOptionSelect(
+        id=_APPROVAL_ID,
+        name="Approvals",
+        type="select",
+        current_value=current,
+        options=[
+            SessionConfigSelectOption(
+                value=current,
+                name=current.capitalize(),
+                description=_APPROVAL_DESCRIPTIONS[current],
+            )
+        ],
+        description="Read-only: set by the CLI configuration.",
+    )
+
+
 def set_model(model_id: str) -> bool:
     """Switch the active model. Returns ``True`` on success."""
     try:
@@ -156,6 +190,10 @@ def config_options() -> List[Any]:
         )
     except Exception:  # noqa: BLE001
         logger.debug("ACP: could not build streaming option", exc_info=True)
+    try:
+        opts.append(_approval_option())
+    except Exception:  # noqa: BLE001
+        logger.debug("ACP: could not build approval option", exc_info=True)
     return opts
 
 
