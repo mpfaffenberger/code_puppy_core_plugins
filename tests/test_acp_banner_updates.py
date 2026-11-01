@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from code_puppy.banners import banner_for_call, banner_for_result
+from code_puppy.banners import banner_for_call, banner_for_result, result_text
 from code_puppy.tools.command_runner import ShellCommandOutput
 from code_puppy.tools.common import resolve_path
 from code_puppy.tools.file_operations import ReadFileOutput
@@ -69,8 +69,8 @@ FINISH_CASES = [
             exit_code=3,
         ),
         "failed",
-        "boom err",
-        "boom err",
+        "exit code 3: boom err",
+        "exit code 3: boom err",
         3,
         id="shell-nonzero",
     ),
@@ -81,7 +81,7 @@ FINISH_CASES = [
             success=True, command="pytest -q", stdout="ok", stderr="", exit_code=0
         ),
         "completed",
-        '{"success": true',
+        "ok",
         None,
         0,
         id="shell-zero",
@@ -207,6 +207,9 @@ async def test_finish_update_reports_result(
     assert banner.get("error") == error
     assert banner.get("exitCode") == exit_code
     assert _texts(update)[0].startswith(text_prefix)
+    assert _texts(update)[0] == result_text(result)
+    if error is not None:
+        assert _texts(update)[0].splitlines()[0] == banner["error"]
 
 
 @pytest.mark.asyncio

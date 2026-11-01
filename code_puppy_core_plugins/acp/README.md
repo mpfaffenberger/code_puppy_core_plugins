@@ -232,7 +232,11 @@ version that ships `code_puppy.banners`.
   fails on an exception, a truthy `error` field on dict or pydantic outputs
   (such as `ReadFileOutput`), `success is False`, an integer `exit_code != 0`,
   or `timeout is True`. `title` is re-sent. `content` is a text block with the
-  result text (max 4000 chars; on failure it starts with a one-line error),
+  human-readable result text (file content for reads, stdout then stderr for
+  shell, matches for grep; never a JSON dump of the result object; max 4000
+  chars). On failure it starts with the one-line error, equal to
+  `_meta.code_puppy.banner.error` (shell failures read `exit code N: <last
+  stderr line>`),
   plus the fenced diff block for edits (capped at 8000 chars). `rawOutput` is
   unchanged (size-bounded summary). `_meta.code_puppy.banner` is the result
   banner.
