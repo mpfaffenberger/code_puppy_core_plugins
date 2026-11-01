@@ -19,7 +19,7 @@ edges to the client.
 restarts), `session/set_mode`, `session/set_config_option`. Assistant text +
 > thinking stream as `agent_message_chunk` / `agent_thought_chunk`; tool calls
 > stream as `tool_call` / `tool_call_update` (with `kind`, file `locations`,
-> friendly titles, and inline diffs); slash commands are advertised via
+> banner titles, and inline diffs); slash commands are advertised via
 > `available_commands_update` **and executed** when the client sends one. Prompt
 > turns report token usage; **image** input is accepted. Client-injected MCP
 > servers and multi-root `additionalDirectories` are honoured. Workspace file
@@ -156,7 +156,8 @@ attaches; agent text streams through pydantic-ai's `event_stream_handler`
 | `stream_event` (`part_delta`, `TextPartDelta`) | `event_data.delta.content_delta` | `agent_message_chunk` |
 | `stream_event` (`part_delta`, `ThinkingPartDelta`) | `event_data.delta.content_delta` | `agent_thought_chunk` |
 | `pre_tool_call` | `tool_name`, `tool_args` | `tool_call` (status `in_progress`) |
-| `post_tool_call` | `tool_name`, `result` | `tool_call_update` (status `completed`/`failed`) |
+| `post_tool_call` | `tool_name`, `result` | `tool_call_update` (status `completed`/`failed`; result banner in `_meta`) |
+| `banner_notice` | banner dict | `tool_call` (`toolCallId` `notice-<hex>`, status `completed`) |
 
 Run context (active session id, whether text streamed, the open-tool-call
 stack) lives in `state`, so `bridge`, `permissions`, and `io_delegation` share
@@ -207,10 +208,65 @@ and stub nothing.
 ### Outbound notifications (us → the client) — `session/update`
 
 `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`,
-`available_commands_update`. Tool calls carry human-friendly titles
-("Edit foo.py", "Run: pytest"), a `kind`, file `locations`, and — on completion
-— the unified diff as an inline `diff` content block so edits are visible in
-the client's tool-call entry.
+`available_commands_update`. Tool calls carry banner titles (for example
+`READ FILE sample.txt`), a `kind`, file `locations`, and — on completion — the
+unified diff as an inline `diff` content block so edits are visible in the
+client's tool-call entry. Details below.
+
+### Tool-call banners (`_meta.code_puppy.banner`)
+
+Titles, kinds, and failure status come from core's shared banner contract
+(`code_puppy.banners`). Core keeps one definition per tool, shared with the
+terminal, so the bridge has no private title or kind tables. Requires a core
+version that ships `code_puppy.banners`.
+
+* **Title:** `<LABEL> <target>`, e.g. `READ FILE sample.txt` or
+  `SHELL COMMAND pytest -q`. Path targets use the basename; commands are cut
+  at 60 characters.
+* **Kind:** from the definition: `read`, `edit`, `delete`, `search`, `execute`,
+  `think`, `fetch`, or `other`.
+* **`tool_call` (start):** `title`, `kind`, `locations` (path targets, resolved
+  against the session cwd), unchanged `rawInput`, and
+  `_meta.code_puppy.banner` (the banner object).
+* **`tool_call_update` (finish):** `status` is `completed` or `failed`. A result
+  fails on an exception, a truthy `error` field on dict or pydantic outputs
+  (such as `ReadFileOutput`), `success is False`, an integer `exit_code != 0`,
+  or `timeout is True`. `title` is re-sent. `content` is a text block with the
+  result text (max 4000 chars; on failure it starts with a one-line error),
+  plus the fenced diff block for edits (capped at 8000 chars). `rawOutput` is
+  unchanged (size-bounded summary). `_meta.code_puppy.banner` is the result
+  banner.
+
+Banner object keys (camelCase; keys without a value are omitted):
+
+| Key | Values |
+|-----|--------|
+| `v` | `1` |
+| `event` | `tool_call`, `tool_result`, `plugin_notice` |
+| `name` | Tool name |
+| `label` | Label used in the title, e.g. `READ FILE` |
+| `kind` | `read`, `edit`, `delete`, `search`, `execute`, `think`, `fetch`, `other` |
+| `title` | `<LABEL> <target>` |
+| `target` | Path, command, query, URL, or text |
+| `targetType` | `path`, `command`, `query`, `url`, `text` |
+| `status` | `in_progress`, `completed`, `failed`, `info` |
+| `details` | Extra details, when present |
+| `error` | Error text, failures only (<=300 chars) |
+| `durationMs` | Duration in milliseconds |
+| `exitCode` | Exit code (shell only) |
+
+**Plugin notices:** plugins call core's `emit_notice(notice(...))`. Core fires
+the `banner_notice` callback phase. With an active session, the bridge sends a
+`tool_call` update with `toolCallId` `notice-<uuid4 hex>`, `kind: other`,
+`status: completed`, `title` set to the banner title, and
+`_meta.code_puppy.banner` with `event: plugin_notice` and `status: info`. With
+no active session the notice is dropped. Notices are never sent as
+`agent_message_chunk`.
+
+**Capability:** `initialize` returns
+`agentCapabilities._meta.code_puppy.banners = {"v": 1}`. Clients use it to
+detect support. All additions sit under `_meta`, so existing clients are
+unaffected.
 
 ### Outbound requests (us → the client)
 
