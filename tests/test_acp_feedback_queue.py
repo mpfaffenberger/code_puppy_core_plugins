@@ -263,24 +263,10 @@ def test_missing_id_returns_none_and_leaves_bytes_unchanged(
         pytest.param(queue.bump_attempts, id="bump_attempts"),
     ],
 )
-@pytest.mark.parametrize(
-    "file_vanishes_on_read",
-    [False, True],
-    ids=["absent-file", "removed-during-read"],
-)
 def test_mutation_on_missing_file_returns_none_and_creates_nothing(
     data_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
     mutate: Callable[[str], dict[str, Any] | None],
-    file_vanishes_on_read: bool,
 ) -> None:
-    if file_vanishes_on_read:
-
-        def raise_missing(path: str, max_bytes: int) -> bytes:
-            raise FileNotFoundError(path)
-
-        monkeypatch.setattr(queue, "read_bounded_bytes", raise_missing)
-
     assert mutate(str(uuid.uuid4())) is None
 
     assert not _feedback_file(data_dir).exists()

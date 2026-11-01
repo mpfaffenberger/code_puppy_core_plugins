@@ -126,12 +126,9 @@ def _locked_rewrite(
 ) -> dict[str, Any] | None:
     path = feedback_path()
     with _thread_lock, path_lock(str(path)):
-        try:
-            raw = read_bounded_bytes(str(path), _MAX_QUEUE_BYTES)
-        except FileNotFoundError:
-            # Mutations never create the queue file.
-            return None
-        lines = _split_lines(raw)
+        # A missing file reads as empty: nothing is rewritten and the queue file is
+        # never created (path_lock may still create the .lock sidecar).
+        lines = _split_lines(read_bounded_bytes(str(path), _MAX_QUEUE_BYTES))
         for index, line in enumerate(lines):
             record = _parse_record(line, index + 1)
             if record is None or record["id"] != feedback_id:

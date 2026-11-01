@@ -75,6 +75,8 @@ class ACPSession:
         self._task: Optional["asyncio.Task[Any]"] = None
         # Turn metadata collected after the agent run, reset per prompt().
         self._turn_values: dict[str, str] = {}
+        # Model that answered the last finished turn; survives agent rebinds.
+        self.last_turn_model: Optional[str] = None
 
     async def prompt(self, blocks: List[Any]) -> PromptResult:
         """Run the agent on a user turn and return the stop reason + usage.
@@ -178,6 +180,8 @@ class ACPSession:
             await self._send_final_result(result)
         elif stop_reason == STOP_REFUSAL:
             await self._send_error_notice(error)
+        if "model" in self._turn_values:
+            self.last_turn_model = self._turn_values["model"]
         return PromptResult(
             stop_reason,
             _to_acp_usage(result),

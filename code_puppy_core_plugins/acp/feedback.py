@@ -38,6 +38,8 @@ _RAW_COMMENT_MAX_CHARS = 4096
 _SESSION_ID_MAX_CHARS = 256
 _RATINGS = ("up", "down")
 _CONTROL_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+# A hung summarizer or sink counts as a failure so one entry cannot stall the pass.
+STEP_TIMEOUT_SECONDS = 60.0
 
 FeedbackSink = Callable[[dict[str, Any]], Awaitable[bool]]
 FeedbackScope = Callable[[dict[str, Any]], AbstractContextManager[Any]]
@@ -280,8 +282,9 @@ def _enter_scopes(stack: contextlib.ExitStack, record: dict[str, Any]) -> None:
 async def _summarize_if_needed(record: dict[str, Any]) -> dict[str, Any] | None:
     if record.get("rating") != "down" or record.get("state") != STATE_QUEUED:
         return record
-    summary = await feedback_summarizer.summarize(
-        record["sessionId"], record.get("reasons") or []
+    summary = await asyncio.wait_for(
+        feedback_summarizer.summarize(record["sessionId"], record.get("reasons") or []),
+        STEP_TIMEOUT_SECONDS,
     )
     if summary is None:
         return None
@@ -307,7 +310,8 @@ async def _deliver(record: dict[str, Any]) -> None:
 
 async def _call_sink(sink: FeedbackSink, record: dict[str, Any]) -> bool:
     try:
-        return (await sink(dict(record))) is True
+        result = await asyncio.wait_for(sink(dict(record)), STEP_TIMEOUT_SECONDS)
+        return result is True
     except Exception as exc:
         logger.debug("feedback sink failed: %s", type(exc).__name__)
         return False
