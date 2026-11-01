@@ -46,7 +46,7 @@ except ImportError:  # pragma: no cover - code_puppy without the marker type
 
 logger = logging.getLogger(__name__)
 
-# In-flight file-approval bridges per session, so ``cancel_pending`` can unblock
+# In-flight approval bridges (file and shell) per session, so ``cancel_pending`` can unblock
 # the tool threads waiting on them.
 _PENDING: Dict[str, Set[concurrent.futures.Future]] = {}
 _PENDING_LOCK = threading.Lock()
@@ -135,7 +135,7 @@ def _untrack_pending(session_id: str, future: concurrent.futures.Future) -> None
 
 
 def cancel_pending(session_id: Optional[str] = None) -> None:
-    """Cancel in-flight file approvals for one session, or all when ``None``.
+    """Cancel in-flight approvals (file and shell) for one session, or all when ``None``.
 
     Each cancelled wait returns ``PermissionNotDecided``, so the blocked tool
     thread unwinds instead of waiting on a dialog nobody will answer.

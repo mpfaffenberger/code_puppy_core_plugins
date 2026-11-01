@@ -11,7 +11,7 @@ import inspect
 from typing import Any, List
 
 import pytest
-from acp.schema import AllowedOutcome, RequestPermissionResponse
+from acp.schema import AllowedOutcome, DeniedOutcome, RequestPermissionResponse
 
 from code_puppy.callbacks import get_callbacks
 from code_puppy.tools import common
@@ -192,3 +192,37 @@ async def test_backend_maps_allow_and_reject_unchanged(connect, option_id, expec
 
     assert result == expected
     assert not permissions._PENDING
+
+
+@pytest.mark.skipif(
+    not hasattr(common, "can_prompt_for_approval"),
+    reason="needs core's shared shell approval gate",
+)
+@pytest.mark.asyncio
+async def test_core_shell_gate_reports_cancelled_dialog_as_not_decided(
+    connect, installed, monkeypatch
+):
+    """Core's ``run_shell_command`` must not turn a cancelled dialog into USER REJECTED."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from code_puppy.tools import command_runner
+
+    dialog = _Dialog()
+    dialog.outcome = DeniedOutcome(outcome="cancelled")
+    dialog.answer.set()
+    connect(dialog)
+    permissions.install()
+    monkeypatch.setattr("code_puppy.config.get_yolo_mode", lambda: False)
+    monkeypatch.setattr(
+        "code_puppy.callbacks.on_run_shell_command", AsyncMock(return_value=[])
+    )
+    execute = AsyncMock()
+    monkeypatch.setattr(command_runner, "_execute_shell_command", execute)
+
+    result = await command_runner.run_shell_command(MagicMock(), "echo hi")
+
+    execute.assert_not_awaited()
+    assert result.success is False
+    assert "USER REJECTED" not in result.error
+    assert "did not reject it" in result.error
+    assert result.user_feedback is None

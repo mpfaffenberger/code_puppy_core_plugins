@@ -101,8 +101,9 @@ the approval decision lives in core and ACP only supplies the prompting backend,
 * **ACP's backend** (`permissions.py`) asks the client via the SDK's
   `request_permission`. Sync file tools run in the tool threadpool, so that path
   bridges to the ACP loop with `run_coroutine_threadsafe` and blocks the worker
-  for the answer; it refuses to run on the loop itself (deadlock guard). Shell commands go through core's same gate, which calls this backend (from a
-  worker thread, so the same bridge applies).
+  for the answer; it refuses to run on the loop itself (deadlock guard). Shell
+  commands go through core's same gate, which calls this backend (from a worker
+  thread, so the same bridge applies).
 * **No timeout:** like the terminal, the request waits. It ends on the client's
   answer, on `session/cancel`, or when the connection closes. Cancel and
   disconnect deny (fail closed).

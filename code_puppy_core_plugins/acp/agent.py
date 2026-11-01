@@ -380,7 +380,7 @@ class CodePuppyAgent(Agent):
         return PromptResponse(stop_reason=outcome.stop_reason, usage=outcome.usage)
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
-        """Cancel the in-flight run and any pending file approval for a session."""
+        """Cancel the in-flight run and any pending approval (file or shell) for a session."""
         permissions.cancel_pending(session_id)
         session = self._sessions.get(session_id)
         if session is not None:
