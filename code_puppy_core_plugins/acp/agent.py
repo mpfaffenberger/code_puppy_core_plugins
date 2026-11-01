@@ -379,7 +379,7 @@ class CodePuppyAgent(Agent):
         return CloseSessionResponse()
 
     async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        """Route ``_code_puppy/themes/*`` extension requests to the theme catalog."""
+        """Route ext requests (currently only themes) to the theme catalog."""
         return await themes.handle_ext_method(method, params)
 
     # ---- Prompt turn ------------------------------------------------------
