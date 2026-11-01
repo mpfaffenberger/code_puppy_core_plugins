@@ -233,6 +233,11 @@ async def _legacy_shell_hook(
     }
 
 
+# Kept so existing importers/tests of the pre-rename name keep working; core's
+# tests/test_acp_plugin.py still calls it.
+_on_run_shell_command = _legacy_shell_hook
+
+
 _legacy_shell_hook_registered = False
 
 
