@@ -35,7 +35,7 @@ def unregister_turn_metadata_provider(fn: TurnMetadataProvider) -> None:
             _providers.remove(fn)
 
 
-def _model_name(agent: Any) -> str | None:
+def model_name(agent: Any) -> str | None:
     try:
         name = agent.get_model_name()
     except Exception as exc:
@@ -58,7 +58,7 @@ def _valid_correlation_id(result: object) -> str | None:
 
 def collect_turn_metadata(agent: Any, session_id: str) -> dict[str, str]:
     values: dict[str, str] = {}
-    model = _model_name(agent)
+    model = model_name(agent)
     if model is not None:
         values["model"] = model
 

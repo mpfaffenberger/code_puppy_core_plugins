@@ -26,8 +26,8 @@ from acp.schema import (
 )
 
 
-# Extension method a client calls to send reply feedback. Imported by name from
-# other modules, so keep it stable.
+# Extension method a client calls to send reply feedback. Depends on:
+# feedback.py :: EXT_NAME derives the routed name from this constant.
 FEEDBACK_METHOD = "_code_puppy/feedback"
 FEEDBACK_VERSION = 1
 

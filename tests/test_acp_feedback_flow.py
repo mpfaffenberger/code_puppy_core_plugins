@@ -254,6 +254,39 @@ async def test_triage_failure_keeps_entry_queued(
     assert sink.records == []
 
 
+@pytest.mark.parametrize("failure", ["no_summary", "raises"])
+async def test_triage_failure_is_capped_then_delivered_untagged(
+    summarizer: FakeSummarizer, failure: str
+) -> None:
+    sink = _add_sink(FakeSink())
+    if failure == "no_summary":
+        summarizer.result = None
+    else:
+        summarizer.error = RuntimeError("triage backend down")
+
+    feedback_id = (await _send())["feedbackId"]
+    await feedback.drain()
+    for _ in range(feedback.MAX_TRIAGE_ATTEMPTS + 2):
+        feedback.schedule_processing()
+        await feedback.drain()
+
+    final = _state(feedback_id)
+    assert final["state"] == "delivered"
+    assert final["tags"] == []
+    assert final["reason"] is None
+    assert len(summarizer.calls) == feedback.MAX_TRIAGE_ATTEMPTS
+    (record,) = sink.records
+    assert record["state"] == "summarized"
+
+
+async def test_no_sinks_skips_triage_call(summarizer: FakeSummarizer) -> None:
+    feedback_id = (await _send())["feedbackId"]
+    await feedback.drain()
+
+    assert summarizer.calls == []
+    assert _state(feedback_id)["state"] == "delivered"
+
+
 @pytest.mark.parametrize(
     "sink_behaviour",
     [{"result": False}, {"error": RuntimeError("sink down")}],

@@ -29,7 +29,7 @@ pytestmark = pytest.mark.usefixtures("feedback_data_dir", "clean_feedback_state"
 
 SESSION_ID = "sess_model"
 SENTINEL = "SENTINEL-never-log"
-AGENT_LOGGER = "code_puppy_core_plugins.acp.agent"
+AGENT_LOGGER = "code_puppy_core_plugins.acp.turn_metadata"
 
 
 class _Agent:

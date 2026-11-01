@@ -410,20 +410,12 @@ class CodePuppyAgent(Agent):
 
     def _model_for_session(self, session_id: str) -> Optional[str]:
         """Prefer the model that answered the last finished turn; never raises."""
-        try:
-            session = self._sessions.get(session_id)
-            if session is None:
-                return None
-            if isinstance(session.last_turn_model, str) and session.last_turn_model:
-                return session.last_turn_model
-            name = session.agent.get_model_name()
-        except Exception as exc:  # noqa: BLE001
-            # Exception type only: messages may carry tokens or other secrets.
-            logger.debug(
-                "ACP: model lookup for feedback failed: %s", type(exc).__name__
-            )
+        session = self._sessions.get(session_id)
+        if session is None:
             return None
-        return name if isinstance(name, str) and name else None
+        if isinstance(session.last_turn_model, str) and session.last_turn_model:
+            return session.last_turn_model
+        return turn_metadata.model_name(session.agent)
 
     # ---- Helpers ----------------------------------------------------------
     def _agent_capabilities(self) -> AgentCapabilities:

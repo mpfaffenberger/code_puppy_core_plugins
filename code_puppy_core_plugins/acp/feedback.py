@@ -21,6 +21,7 @@ from typing import Any
 from acp import RequestError
 
 from code_puppy_core_plugins.acp import feedback_queue, feedback_summarizer
+from code_puppy_core_plugins.acp.capabilities import FEEDBACK_METHOD
 from code_puppy_core_plugins.acp.feedback_queue import (
     STATE_DELIVERED,
     STATE_QUEUED,
@@ -30,7 +31,8 @@ from code_puppy_core_plugins.acp.turn_metadata import CORRELATION_ID_RE
 
 logger = logging.getLogger(__name__)
 
-EXT_NAME = "code_puppy/feedback"
+# The SDK strips the leading "_" before routing to ext_method().
+EXT_NAME = FEEDBACK_METHOD.removeprefix("_")
 REASONS = ("wrong", "slow", "unsafe", "other")
 COMMENT_MAX_CHARS = 254
 # Memory guard: bounds the work done before sanitizing, far above the sanitized limit.
@@ -40,6 +42,8 @@ _RATINGS = ("up", "down")
 _CONTROL_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 # A hung summarizer or sink counts as a failure so one entry cannot stall the pass.
 STEP_TIMEOUT_SECONDS = 60.0
+# Triage is best effort: after this many passes the vote is delivered untagged.
+MAX_TRIAGE_ATTEMPTS = 3
 
 FeedbackSink = Callable[[dict[str, Any]], Awaitable[bool]]
 FeedbackScope = Callable[[dict[str, Any]], AbstractContextManager[Any]]
@@ -282,12 +286,14 @@ def _enter_scopes(stack: contextlib.ExitStack, record: dict[str, Any]) -> None:
 async def _summarize_if_needed(record: dict[str, Any]) -> dict[str, Any] | None:
     if record.get("rating") != "down" or record.get("state") != STATE_QUEUED:
         return record
-    summary = await asyncio.wait_for(
-        feedback_summarizer.summarize(record["sessionId"], record.get("reasons") or []),
-        STEP_TIMEOUT_SECONDS,
-    )
+    if not _snapshot(_sinks):
+        # Nothing consumes tags, so skip the paid summarization call.
+        return record
+    summary = await _triage(record)
     if summary is None:
-        return None
+        if record.get("attempts", 0) < MAX_TRIAGE_ATTEMPTS:
+            return None
+        summary = feedback_summarizer.FeedbackSummary(tags=[], reason=None)
     return await asyncio.to_thread(
         feedback_queue.update,
         record["id"],
@@ -295,6 +301,19 @@ async def _summarize_if_needed(record: dict[str, Any]) -> dict[str, Any] | None:
         tags=summary.tags,
         reason=summary.reason,
     )
+
+
+async def _triage(record: dict[str, Any]) -> feedback_summarizer.FeedbackSummary | None:
+    try:
+        return await asyncio.wait_for(
+            feedback_summarizer.summarize(
+                record["sessionId"], record.get("reasons") or []
+            ),
+            STEP_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        logger.debug("feedback triage failed: %s", type(exc).__name__)
+        return None
 
 
 async def _deliver(record: dict[str, Any]) -> None:
