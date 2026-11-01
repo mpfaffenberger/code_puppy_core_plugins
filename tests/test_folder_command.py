@@ -30,6 +30,8 @@ def config_store(monkeypatch, tmp_path):
         config, "set_config_value", lambda key, value: store.__setitem__(key, value)
     )
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # Windows expanduser reads USERPROFILE, not HOME.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     (tmp_path / "home").mkdir()
     return store
 

@@ -83,6 +83,8 @@ def isolated_env(monkeypatch, tmp_path, config_store):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    # Windows expanduser reads USERPROFILE, not HOME.
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("TMPDIR", str(tmp_dir))
     monkeypatch.delenv("TEMP", raising=False)
     monkeypatch.delenv("TMP", raising=False)
@@ -142,6 +144,10 @@ def test_protected_inside_literal_tmp_still_asks(project, monkeypatch):
     assert decide("/tmp/app/.git/config", project, is_delete=True) is ASK
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows has no literal /tmp temp root; see test_system_tmp_is_a_temp_root_only_off_windows",
+)
 def test_literal_tmp_is_approved(project, monkeypatch):
     monkeypatch.setattr(folder_policy, "_SYSTEM_TMP", "/tmp")
     assert decide("/tmp/acp-probe/out.txt", project) is ALLOW
