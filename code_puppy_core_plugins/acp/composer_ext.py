@@ -5,10 +5,10 @@ capabilities, and interrupted-subagent metadata. Every new-core API is imported
 lazily through ``_core_attr`` so an older installed core keeps working and only
 advertises less; callers never see the difference beyond missing keys.
 
-Called by: agent.py :: CodePuppyAgent.ext_method(), _announce_commands(),
-    close_session(), new_session(), load_session(), resume_session(),
-    fork_session(); capabilities.py :: agent_capabilities();
-    session.py :: ACPSession.steer(), _run_turn(), prompt()
+Called by: agent.py :: CodePuppyAgent :: ext_method(), _announce_commands(),
+    new_session(), load_session(), resume_session(), set_config_option(),
+    close_session(); capabilities.py :: agent_capabilities();
+    session.py :: ACPSession :: steer(), _run_turn(), prompt()
 Depends on: session.py :: ACPSession.steer() (sync, returns {"accepted", "reason"?});
     content.py :: parse_prompt()
 """

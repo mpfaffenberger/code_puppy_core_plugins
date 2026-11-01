@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import logging
-from types import SimpleNamespace
 
 import pytest
 from acp.schema import (
@@ -15,6 +14,7 @@ from acp.schema import (
 )
 from pydantic_ai import BinaryContent
 
+from code_puppy_core_plugins.acp import content
 from code_puppy_core_plugins.acp.content import flatten_prompt, parse_prompt
 
 PDF_BYTES = b"%PDF-1.4 fake pdf body"
@@ -27,6 +27,9 @@ PDF_NOTICE = (
 )
 # 11 base64 chars is never valid padding, so decoding raises binascii.Error.
 INVALID_B64 = "SECRETMARK1"
+DECODE_FAILED_NOTICE = (
+    f"[Attachment not sent: {PDF_URI} ({PDF_MIME}) could not be decoded.]"
+)
 
 
 def _blob_block(
@@ -60,20 +63,6 @@ def test_unsupported_blob_yields_notice_not_attachment(media_types):
     assert parsed.text == PDF_NOTICE
 
 
-def test_notice_prefers_resource_name_over_uri():
-    resource = SimpleNamespace(
-        blob=PDF_B64, mime_type=PDF_MIME, uri=PDF_URI, name="Q3 report"
-    )
-    block = SimpleNamespace(type="resource", resource=resource)
-
-    parsed = parse_prompt([block], None)
-
-    assert parsed.text == (
-        f"[Attachment not sent: Q3 report ({PDF_MIME}) "
-        "is not supported by the current model.]"
-    )
-
-
 def test_missing_mime_type_is_reported_as_unknown_type():
     parsed = parse_prompt([_blob_block(mime=None)], [PDF_MIME])
 
@@ -84,11 +73,30 @@ def test_missing_mime_type_is_reported_as_unknown_type():
     )
 
 
-def test_invalid_base64_yields_notice_without_raising():
-    parsed = parse_prompt([_blob_block(blob=INVALID_B64)], [PDF_MIME])
+@pytest.mark.parametrize(
+    ("media_types", "expected_notice", "expected_attempts"),
+    [
+        ([PDF_MIME], DECODE_FAILED_NOTICE, [PDF_MIME]),
+        (["image/png"], PDF_NOTICE, []),
+    ],
+)
+def test_invalid_base64_yields_notice_without_raising(
+    media_types, expected_notice, expected_attempts, monkeypatch
+):
+    attempts = []
+    real_make_binary = content._make_binary
+
+    def spy(data_b64, media_type):
+        attempts.append(media_type)
+        return real_make_binary(data_b64, media_type)
+
+    monkeypatch.setattr(content, "_make_binary", spy)
+
+    parsed = parse_prompt([_blob_block(blob=INVALID_B64)], media_types)
 
     assert parsed.attachments == []
-    assert parsed.text == PDF_NOTICE
+    assert parsed.text == expected_notice
+    assert attempts == expected_attempts
 
 
 @pytest.mark.parametrize("media_types", [None, [PDF_MIME]])
@@ -130,6 +138,7 @@ def test_logs_never_contain_blob_content(caplog):
 
     parsed = parse_prompt([_blob_block(blob=marker_blob)], [PDF_MIME])
 
+    assert parsed.text == DECODE_FAILED_NOTICE
     assert "MARKER" not in parsed.text
     assert "MARKER" not in caplog.text
     decode_records = [

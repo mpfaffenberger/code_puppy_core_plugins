@@ -5,7 +5,8 @@ Run Code Puppy inside any ACP-capable editor's agent panel (e.g.
 by speaking the **Agent Client Protocol (ACP)** — the same JSON-RPC-over-stdio
 protocol these editors use to host Gemini CLI and Claude Code.
 
-This plugin is built on the **official [`agent-client-protocol`](https://pypi.org/project/agent-client-protocol/)
+This plugin is built on the **official
+[`agent-client-protocol`](https://pypi.org/project/agent-client-protocol/)
 Python SDK** (`acp`). The SDK owns the wire — stdio binding, JSON-RPC framing,
 typed Pydantic models, and the bidirectional connection — so this plugin is
 pure *behaviour*: mapping ACP sessions to Code Puppy agents, translating
@@ -16,16 +17,18 @@ edges to the client.
 > `session/load` (replays persisted history), `session/prompt`,
 > `session/cancel` (also kills local shells), `session/list`, `session/close`,
 > `session/fork` (duplicates history), `session/resume` (rehydrates across
-> restarts), `session/set_mode`, `session/set_config_option`, and the `_code_puppy/session/steer` extension. Assistant text +
+> restarts), `session/set_mode`, `session/set_config_option`, and the
+> `_code_puppy/session/steer` extension. Assistant text +
 > thinking stream as `agent_message_chunk` / `agent_thought_chunk`; tool calls
 > stream as `tool_call` / `tool_call_update` (with `kind`, file `locations`,
 > friendly titles, and inline diffs); slash commands are advertised via
 > `available_commands_update` **and executed** when the client sends one. Prompt
-> turns report token usage; **image** and embedded **binary** input are accepted (see [Composer extensions](#composer-extensions)). Client-injected MCP
-> servers and multi-root `additionalDirectories` are honoured. Workspace file
-> I/O and shell delegate to the client (capability-gated), and **permissions**
-> for file writes and shell commands are surfaced in the client's own allow/deny
-> dialog in non-yolo mode.
+> turns report token usage; **image** and embedded **binary** input are
+> accepted (see [Composer extensions](#composer-extensions)). Client-injected
+> MCP servers and multi-root `additionalDirectories` are honoured. Workspace
+> file I/O and shell delegate to the client (capability-gated), and
+> **permissions** for file writes and shell commands are surfaced in the
+> client's own allow/deny dialog in non-yolo mode.
 >
 > Not implemented: `elicitation/*` (the SDK's connection API exposes no
 > elicitation call in 0.10.1), `plan` updates (Code Puppy has no plan model),
@@ -244,7 +247,7 @@ Each command entry in `available_commands_update` has these fields:
 - `input: {hint}`: present only for commands that take arguments.
 - `_meta["codePuppy/command"]`: `{interactive: boolean, aliases: string[], category: string}`. `interactive` is `true` for commands that open a picker or need a terminal, such as `/model`, `/agent`, and `/theme`. `category` is the registry category, or `plugin`.
 
-The list covers every command the session can run: built-in, registry, and plugin commands. After a model or mode change, the agent re-sends the list to every open session, but only when the list has changed.
+The list covers every command the session can run: built-in, registry, and plugin commands. After a `session/set_config_option` change, the agent re-sends the list to every open session, but only when the list has changed. Commands that a plugin adds later appear the next time the client opens a session, or after the next config-option change.
 
 ### Steer a running turn
 
@@ -276,7 +279,13 @@ The terminal `/steer` command is unchanged.
 An embedded `resource` with a `blob` reaches the model as binary content when its media type appears in the model's `codePuppy/binaryMediaTypes` list. Otherwise, the turn shows this notice in place of the file:
 
 ```text
-[Attachment not sent: <name or uri> (<mime>) is not supported by the current model.]
+[Attachment not sent: <uri> (<mime>) is not supported by the current model.]
+```
+
+The notice shows the resource URI, not a name. A supported file whose data cannot be decoded gets this notice instead:
+
+```text
+[Attachment not sent: <uri> (<mime>) could not be decoded.]
 ```
 
 Code Puppy never logs file content.
@@ -348,6 +357,13 @@ The composer tests cover the additions in [Composer extensions](#composer-extens
 - `tests/test_acp_composer_real_core.py`: runs against the real newer core and is skipped on older cores: command catalog, per-session steer, and interrupted records.
 
 Run these with the newer core installed to cover both paths. The other tests simulate both core versions with fakes.
+
+Shared fakes and the remaining ACP test modules:
+
+- `tests/acp_session_support.py`: shared fakes for the session turn, steer, wire, and real-core tests.
+- `tests/test_acp_compat.py`: compatibility with the pydantic-ai seams.
+- `tests/test_acp_permission_outcomes.py`: permission outcomes, including fail-closed denials.
+- `tests/test_acp_question_cards.py`: opt-in client-rendered `ask_user_question` cards.
 
 Other ACP tests drive `CodePuppyAgent` against a fake SDK connection (no real stdio) and cover:
 

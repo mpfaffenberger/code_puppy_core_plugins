@@ -139,8 +139,13 @@ def _render_embedded_resource(
 def _collect_embedded_blob(
     resource: Any, blob: str, result: ParsedPrompt, media_types: Sequence[str]
 ) -> str:
-    """Attach a blob the model accepts; otherwise return a notice naming it."""
+    """Attach a blob the model accepts; otherwise return a notice naming its uri.
+
+    A supported media type whose base64 fails to decode gets its own notice so
+    the user can tell a corrupt payload from an unsupported one.
+    """
     mime = getattr(resource, "mime_type", None)
+    uri = getattr(resource, "uri", None) or "embedded resource"
     if mime and mime in media_types:
         try:
             result.attachments.append(_make_binary(blob, mime))
@@ -148,12 +153,8 @@ def _collect_embedded_blob(
         except Exception as exc:  # noqa: BLE001
             # Type only: the exception message can echo blob bytes.
             logger.debug("ACP: could not decode embedded blob: %s", type(exc).__name__)
-    label = (
-        getattr(resource, "name", None)
-        or getattr(resource, "uri", None)
-        or "embedded resource"
-    )
+            return f"[Attachment not sent: {uri} ({mime}) could not be decoded.]"
     return (
-        f"[Attachment not sent: {label} ({mime or 'unknown type'}) "
+        f"[Attachment not sent: {uri} ({mime or 'unknown type'}) "
         "is not supported by the current model.]"
     )

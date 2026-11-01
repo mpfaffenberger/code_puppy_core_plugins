@@ -261,7 +261,6 @@ class CodePuppyAgent(Agent):
         method exists only to satisfy the SDK router's ``session/set_mode``
         route; any mode id is accepted as a no-op.
         """
-        self._refresh_commands()
         return SetSessionModeResponse()
 
     def _rebind_session_model(self, session_id: str) -> None:
@@ -512,6 +511,9 @@ class CodePuppyAgent(Agent):
             return
         if not available or available == session.commands_sent:
             return
+        # Mark before the await so an overlapping announce sees it and skips.
+        previous = session.commands_sent
+        session.commands_sent = available
         update = AvailableCommandsUpdate(
             session_update="available_commands_update",
             available_commands=available,
@@ -519,6 +521,5 @@ class CodePuppyAgent(Agent):
         try:
             await connection.session_update(session_id, update)
         except Exception:  # noqa: BLE001
+            session.commands_sent = previous
             logger.debug("ACP: available_commands_update failed", exc_info=True)
-            return
-        session.commands_sent = available

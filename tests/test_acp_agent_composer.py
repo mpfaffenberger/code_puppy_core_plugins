@@ -1,7 +1,8 @@
-"""ACP agent composer wiring: commands, ``_meta``, ext methods, session release.
+"""ACP agent composer plumbing: announce timing, ``_meta`` wiring, steer routing, release.
 
-New-core APIs are faked via ``sys.modules``; the default is the old core. Real
-``code_puppy`` modules are never imported (slow, and circular in this venv).
+The shape and logic of advertised values belong to ``test_acp_composer_ext.py``;
+here ``composer_ext`` is the oracle. New-core APIs are faked via ``sys.modules``;
+the default is the old core. Real ``code_puppy`` modules are never imported.
 """
 
 from __future__ import annotations
@@ -13,11 +14,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from acp import RequestError
 from acp.schema import CloseSessionResponse, PromptResponse
 
 from code_puppy_core_plugins.acp import (
     agent as agent_mod,
+    composer_ext,
     io_delegation,
     persistence,
     replay,
@@ -25,6 +26,7 @@ from code_puppy_core_plugins.acp import (
     state,
 )
 from code_puppy_core_plugins.acp.agent import CodePuppyAgent
+from tests.acp_session_support import FakeAgent
 
 CATALOG = "code_puppy.command_line.command_catalog"
 REGISTRY = "code_puppy.command_line.command_registry"
@@ -34,80 +36,54 @@ MEDIA = "code_puppy.model_media"
 CONFIG = "code_puppy.config"
 BUILDER = "code_puppy.agents._builder"
 
-STEER_KEY = "codePuppy/steer"
 MEDIA_KEY = "codePuppy/binaryMediaTypes"
-COMMAND_KEY = "codePuppy/command"
 STEER_METHOD = "code_puppy/session/steer"
 SESSION_METHODS = ["new_session", "load_session", "resume_session", "set_config_option"]
 
-IMAGE_TYPES = ["image/png", "image/jpeg"]
-MEDIA_TABLE = {"model-a": IMAGE_TYPES, "model-b": ["image/gif"]}
+MEDIA_TABLE = {"model-a": ["image/png", "image/jpeg"], "model-b": ["image/gif"]}
 
 
 async def _noop_async(*args: Any, **kwargs: Any) -> None:
     return None
 
 
-class FakeAgent:
-    def __init__(self, model: str) -> None:
-        self.model = model
-        self.history: list[Any] = []
-
-    def get_model_name(self) -> str:
-        return self.model
-
-    def get_message_history(self) -> list[Any]:
-        return list(self.history)
-
-    def set_message_history(self, history: list[Any]) -> None:
-        self.history = list(history)
-
-
 class FakeConnection:
     def __init__(self) -> None:
         self.updates: list[tuple[str, Any]] = []
         self.fail_next = False
+        self.gate: asyncio.Event | None = None
 
     async def session_update(self, session_id: str, update: Any) -> None:
+        if self.gate is not None:
+            await self.gate.wait()
         if self.fail_next:
             self.fail_next = False
             raise RuntimeError("transport closed")
         self.updates.append((session_id, update))
 
 
-def _module(name: str, **attrs: Any) -> types.ModuleType:
+def _install(monkeypatch, name: str, **attrs: Any) -> None:
     module = types.ModuleType(name)
     module.__dict__.update(attrs)
-    return module
+    monkeypatch.setitem(sys.modules, name, module)
 
 
-def _entry(name: str, description: str, **fields: Any) -> SimpleNamespace:
-    defaults = {"hint": "", "interactive": False, "aliases": [], "category": "core"}
-    return SimpleNamespace(name=name, description=description, **{**defaults, **fields})
+def _entry(name: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        description=f"{name} command",
+        hint="",
+        interactive=False,
+        aliases=[],
+        category="core",
+    )
 
 
-def _wire(
-    name: str,
-    description: str,
-    hint: str | None = None,
-    interactive: bool = False,
-    aliases: tuple[str, ...] = (),
-    category: str = "core",
-) -> dict[str, Any]:
-    """The exact ``available_commands`` entry the client receives."""
-    meta = {"interactive": interactive, "aliases": list(aliases), "category": category}
-    wire = {"name": name, "description": description, "_meta": {COMMAND_KEY: meta}}
-    return {**wire, "input": {"hint": hint}} if hint is not None else wire
-
-
-def _announced(connection: FakeConnection, session_id: str) -> list[list[dict]]:
-    """Command lists sent to ``session_id`` as wire dicts, in send order."""
+def _announced(connection: FakeConnection, session_id: str) -> list[list[str]]:
+    """Command names sent to ``session_id``, in send order."""
     return [
-        [
-            c.model_dump(by_alias=True, exclude_none=True, mode="json")
-            for c in u.available_commands
-        ]
-        for sid, u in connection.updates
+        [c.name for c in update.available_commands]
+        for sid, update in connection.updates
         if sid == session_id
     ]
 
@@ -129,7 +105,7 @@ async def _respond(agent: CodePuppyAgent, method: str, session_id: str) -> Any:
 # ---- Environment: old core by default -------------------------------------
 @pytest.fixture(autouse=True)
 def world(monkeypatch) -> SimpleNamespace:
-    world = SimpleNamespace(model="model-a", legacy_commands=[], fallback_scopes=[])
+    world = SimpleNamespace(model="model-a", fallback_scopes=[])
 
     def set_model(name: str) -> bool:
         world.model = name
@@ -141,31 +117,25 @@ def world(monkeypatch) -> SimpleNamespace:
     )
     monkeypatch.setattr(agent_mod, "asyncio", SimpleNamespace(sleep=_noop_async))
     monkeypatch.setattr(
-        CodePuppyAgent, "_new_agent", staticmethod(lambda: FakeAgent(world.model))
+        CodePuppyAgent,
+        "_new_agent",
+        staticmethod(lambda: FakeAgent(model_name=world.model)),
     )
     monkeypatch.setattr(persistence, "load_history", lambda session_id: None)
     monkeypatch.setattr(persistence, "delete", lambda session_id: None)
     monkeypatch.setattr(replay, "replay_history", _noop_async)
     monkeypatch.setattr(io_delegation, "install", lambda caps: None)
     monkeypatch.setattr(session_config, "set_model", set_model)
-    monkeypatch.setitem(
-        sys.modules, CONFIG, _module(CONFIG, get_global_model_name=lambda: world.model)
-    )
-    monkeypatch.setitem(
-        sys.modules,
+    _install(monkeypatch, CONFIG, get_global_model_name=lambda: world.model)
+    _install(
+        monkeypatch,
         BUILDER,
-        _module(
-            BUILDER,
-            reset_model_fallback_warnings=lambda scope=None: (
-                world.fallback_scopes.append(scope)
-            ),
+        reset_model_fallback_warnings=lambda scope=None: world.fallback_scopes.append(
+            scope
         ),
     )
-    monkeypatch.setitem(
-        sys.modules,
-        REGISTRY,
-        _module(REGISTRY, get_unique_commands=lambda: list(world.legacy_commands)),
-    )
+    # Empty legacy registry: blocks the real import on old-core paths.
+    _install(monkeypatch, REGISTRY, get_unique_commands=lambda: [])
     for name in (CATALOG, PAUSE, SUBAGENTS, MEDIA):
         monkeypatch.setitem(sys.modules, name, None)
     return world
@@ -173,37 +143,28 @@ def world(monkeypatch) -> SimpleNamespace:
 
 def install_catalog(monkeypatch) -> list[SimpleNamespace]:
     entries: list[SimpleNamespace] = []
-    monkeypatch.setitem(
-        sys.modules, CATALOG, _module(CATALOG, list_commands=lambda: list(entries))
-    )
+    _install(monkeypatch, CATALOG, list_commands=lambda: list(entries))
     return entries
 
 
 def install_pause(monkeypatch) -> SimpleNamespace:
     """Steer support plus the release hooks; returns the spies."""
     spies = SimpleNamespace(dropped=[], cleared=[])
-    monkeypatch.setitem(
-        sys.modules,
+    _install(
+        monkeypatch,
         PAUSE,
-        _module(
-            PAUSE,
-            get_session_pause_controller=lambda session_id: None,
-            drop_session_pause_controller=spies.dropped.append,
-        ),
+        get_session_pause_controller=lambda session_id: None,
+        drop_session_pause_controller=spies.dropped.append,
     )
-    monkeypatch.setitem(
-        sys.modules,
-        SUBAGENTS,
-        _module(SUBAGENTS, clear_interrupted_subagents=spies.cleared.append),
-    )
+    _install(monkeypatch, SUBAGENTS, clear_interrupted_subagents=spies.cleared.append)
     return spies
 
 
 def install_media(monkeypatch) -> None:
-    monkeypatch.setitem(
-        sys.modules,
+    _install(
+        monkeypatch,
         MEDIA,
-        _module(MEDIA, supported_binary_media_types=lambda m: MEDIA_TABLE.get(m, [])),
+        supported_binary_media_types=lambda model: MEDIA_TABLE.get(model, []),
     )
 
 
@@ -221,42 +182,21 @@ async def connection():
     state.set_connection(None, None)
 
 
-# ---- Available commands ---------------------------------------------------
-async def test_new_session_announces_exact_command_wire_shape(
-    agent, connection, monkeypatch
-):
-    entries = install_catalog(monkeypatch)
-    entries.append(
-        _entry("/model", "Pick a model", hint="<name>", interactive=True, aliases=["m"])
-    )
-    entries.append(_entry("/clear", "Clear history", category="session"))
+# ---- Available commands: announce plumbing -------------------------------
+async def test_new_session_announces_the_catalog_once(agent, connection, monkeypatch):
+    install_catalog(monkeypatch).append(_entry("/help"))
 
     response = await agent.new_session(cwd="/w")
     await _settle()
 
-    assert connection.updates[0][1].session_update == "available_commands_update"
-    assert _announced(connection, response.session_id) == [
-        [
-            _wire(
-                "model", "Pick a model", hint="<name>", interactive=True, aliases=["m"]
-            ),
-            _wire("clear", "Clear history", category="session"),
-        ]
-    ]
+    assert len(connection.updates) == 1
+    session_id, update = connection.updates[0]
+    assert session_id == response.session_id
+    assert update.session_update == "available_commands_update"
+    assert update.available_commands == composer_ext.available_commands()
 
 
-async def test_old_core_falls_back_to_registry_with_default_meta(
-    agent, connection, world
-):
-    world.legacy_commands = [SimpleNamespace(name="help", description="Show help")]
-
-    response = await agent.new_session(cwd="/w")
-    await _settle()
-
-    assert _announced(connection, response.session_id) == [[_wire("help", "Show help")]]
-
-
-async def test_no_commands_sends_nothing(agent, connection, monkeypatch):
+async def test_empty_catalog_sends_nothing(agent, connection, monkeypatch):
     install_catalog(monkeypatch)
 
     await agent.new_session(cwd="/w")
@@ -267,7 +207,7 @@ async def test_no_commands_sends_nothing(agent, connection, monkeypatch):
 
 @pytest.mark.parametrize("trigger", ["set_config_option", "set_session_mode"])
 async def test_unchanged_catalog_is_not_resent(agent, connection, monkeypatch, trigger):
-    install_catalog(monkeypatch).append(_entry("/help", "Help"))
+    install_catalog(monkeypatch).append(_entry("/help"))
     session_id = (await agent.new_session(cwd="/w")).session_id
     await _settle()
 
@@ -284,78 +224,103 @@ async def test_changed_catalog_resends_to_every_open_session_only(
     agent, connection, monkeypatch
 ):
     entries = install_catalog(monkeypatch)
-    entries.append(_entry("/help", "Help"))
+    entries.append(_entry("/help"))
     first = (await agent.new_session(cwd="/w")).session_id
     second = (await agent.new_session(cwd="/w")).session_id
     closed = (await agent.new_session(cwd="/w")).session_id
     await _settle()
     await agent.close_session(closed)
 
-    entries.append(_entry("/clear", "Clear history"))
-    await agent.set_session_mode("default", first)
+    entries.append(_entry("/clear"))
+    await agent.set_config_option("model", first, "model-b")
     await _settle()
 
-    expected = [_wire("help", "Help"), _wire("clear", "Clear history")]
     for session_id in (first, second):
-        assert _announced(connection, session_id)[-1] == expected
-        assert len(_announced(connection, session_id)) == 2
+        assert _announced(connection, session_id) == [["help"], ["help", "clear"]]
     assert len(_announced(connection, closed)) == 1
 
 
 async def test_failed_send_is_retried_on_next_refresh(agent, connection, monkeypatch):
-    install_catalog(monkeypatch).append(_entry("/help", "Help"))
+    install_catalog(monkeypatch).append(_entry("/help"))
     connection.fail_next = True
     session_id = (await agent.new_session(cwd="/w")).session_id
     await _settle()
     assert agent._sessions[session_id].commands_sent is None
 
-    await agent.set_session_mode("default", session_id)
+    await agent.set_config_option("model", session_id, "model-b")
     await _settle()
 
-    assert len(_announced(connection, session_id)) == 1
+    assert _announced(connection, session_id) == [["help"]]
+
+
+async def test_overlapping_announces_send_once(agent, connection, monkeypatch):
+    install_catalog(monkeypatch).append(_entry("/help"))
+    agent._make_session("sess_a", "/w", None, None)
+    connection.gate = asyncio.Event()
+
+    sends = [
+        asyncio.ensure_future(agent._announce_commands("sess_a")) for _ in range(2)
+    ]
+    await _settle()
+    connection.gate.set()
+    await asyncio.gather(*sends)
+
+    assert len(_announced(connection, "sess_a")) == 1
+
+
+async def test_failed_awaited_send_restores_marker_for_next_announce(
+    agent, connection, monkeypatch
+):
+    install_catalog(monkeypatch).append(_entry("/help"))
+    session = agent._make_session("sess_a", "/w", None, None)
+    connection.gate = asyncio.Event()
+    connection.fail_next = True
+
+    pending = asyncio.ensure_future(agent._announce_commands("sess_a"))
+    await _settle()
+    assert session.commands_sent is not None  # claimed while the send is in flight
+    connection.gate.set()
+    await pending
+    assert session.commands_sent is None
+
+    connection.gate = None
+    await agent._announce_commands("sess_a")
+
+    assert _announced(connection, "sess_a") == [["help"]]
 
 
 @pytest.mark.parametrize("reopen", ["load_session", "resume_session"])
 async def test_reopening_a_session_resends_its_commands(
     agent, connection, monkeypatch, reopen
 ):
-    install_catalog(monkeypatch).append(_entry("/help", "Help"))
+    install_catalog(monkeypatch).append(_entry("/help"))
     session_id = (await agent.new_session(cwd="/w")).session_id
     await _settle()
 
     await getattr(agent, reopen)(cwd="/w", session_id=session_id)
     await _settle()
 
-    assert _announced(connection, session_id) == [[_wire("help", "Help")]] * 2
+    assert _announced(connection, session_id) == [["help"], ["help"]]
 
 
-# ---- Advertised _meta -----------------------------------------------------
-@pytest.mark.parametrize(
-    ("steer", "media", "expected"),
-    [
-        (True, True, {STEER_KEY: True, MEDIA_KEY: IMAGE_TYPES}),
-        (True, False, {STEER_KEY: True}),
-        (False, True, {MEDIA_KEY: IMAGE_TYPES}),
-        (False, False, None),
-    ],
-    ids=["steer-and-media", "steer-only", "media-only", "old-core"],
-)
-async def test_initialize_advertises_only_available_composer_meta(
-    agent, monkeypatch, steer, media, expected
+# ---- Advertised _meta: each response delegates to composer_ext ------------
+@pytest.mark.parametrize("new_core", [True, False], ids=["new-core-both", "old-core"])
+async def test_initialize_advertises_composer_capabilities(
+    agent, monkeypatch, new_core
 ):
-    if steer:
+    if new_core:
         install_pause(monkeypatch)
-    if media:
         install_media(monkeypatch)
 
     response = await agent.initialize(protocol_version=1)
 
-    assert response.agent_capabilities.field_meta == expected
+    assert (response.agent_capabilities.field_meta is None) is (not new_core)
+    assert response.agent_capabilities.field_meta == composer_ext.capabilities_meta()
 
 
 @pytest.mark.parametrize("method", SESSION_METHODS)
 @pytest.mark.parametrize("new_core", [True, False], ids=["new-core", "old-core"])
-async def test_session_responses_advertise_the_session_model_media(
+async def test_session_responses_advertise_session_meta(
     agent, monkeypatch, world, method, new_core
 ):
     if new_core:
@@ -365,11 +330,24 @@ async def test_session_responses_advertise_the_session_model_media(
 
     response = await _respond(agent, method, session_id)
 
-    expected = {MEDIA_KEY: MEDIA_TABLE["model-b"]} if new_core else None
-    assert response.field_meta == expected
+    if not new_core:
+        assert response.field_meta is None
+        return
+    target = response.session_id if method == "new_session" else session_id
+    assert response.field_meta is not None
+    assert response.field_meta == composer_ext.session_meta(agent._sessions[target])
 
 
-# ---- ext_method -----------------------------------------------------------
+async def test_model_switch_advertises_the_new_model_media(agent, monkeypatch):
+    install_media(monkeypatch)
+    session_id = (await agent.new_session(cwd="/w")).session_id
+
+    response = await agent.set_config_option("model", session_id, "model-b")
+
+    assert response.field_meta == {MEDIA_KEY: MEDIA_TABLE["model-b"]}
+
+
+# ---- Steer ext routing ----------------------------------------------------
 @pytest.mark.parametrize(
     ("session_id", "expected"),
     [
@@ -391,23 +369,6 @@ async def test_steer_ext_method_routes_to_the_live_session(
     )
 
     assert result == expected
-
-
-@pytest.mark.parametrize(
-    ("method", "new_core"),
-    [("code_puppy/unknown", True), (STEER_METHOD, False)],
-    ids=["unknown-method", "steer-on-old-core"],
-)
-async def test_unroutable_ext_methods_are_method_not_found(
-    agent, monkeypatch, method, new_core
-):
-    if new_core:
-        install_pause(monkeypatch)
-
-    with pytest.raises(RequestError) as raised:
-        await agent.ext_method(method, {"sessionId": "sess_a", "prompt": []})
-
-    assert raised.value.code == -32601  # JSON-RPC method not found
 
 
 # ---- Session release and prompt meta --------------------------------------
