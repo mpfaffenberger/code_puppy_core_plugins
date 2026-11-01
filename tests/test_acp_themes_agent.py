@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 
 import pytest
@@ -17,8 +18,14 @@ from code_puppy_core_plugins.acp import (
     themes,
 )
 from code_puppy_core_plugins.acp.agent import CodePuppyAgent
-from code_puppy_core_plugins.theme import content_styles, osc_palette, rich_themes
+from code_puppy_core_plugins.theme import (
+    catalog as catalog_module,
+    content_styles,
+    osc_palette,
+    rich_themes,
+)
 from code_puppy_core_plugins.theme.catalog import ACTIVE_THEME_CONFIG_KEY, build_catalog
+from code_puppy_core_plugins.theme.themes import CURATED_THEMES, MENU
 
 
 class _Connection:
@@ -93,6 +100,24 @@ async def test_session_responses_carry_active_theme_meta(monkeypatch, method, ac
     response = await getattr(agent, method)(cwd="/work", session_id="sess_saved")
 
     assert response.field_meta == {themes.META_KEY: {"active": active}}
+
+
+async def test_new_cli_theme_is_listed_and_reported_active_over_acp(monkeypatch):
+    theme = copy.deepcopy(CURATED_THEMES["ocean"])
+    theme["label"] = "Zz New"
+    monkeypatch.setitem(CURATED_THEMES, "zz-new", theme)
+    menu = [*MENU]
+    menu.insert([name for name, _ in menu].index("surprise"), ("zz-new", theme))
+    monkeypatch.setattr(catalog_module, "MENU", menu)
+    set_config_value(ACTIVE_THEME_CONFIG_KEY, "zz-new")
+    agent = CodePuppyAgent()
+
+    listed = await agent.ext_method(themes.EXT_LIST, {})
+    response = await agent.new_session(cwd="/work", session_id="sess_new")
+
+    assert listed == {"schemaVersion": 1, "active": "zz-new", "themes": build_catalog()}
+    assert "zz-new" in [entry["id"] for entry in listed["themes"]]
+    assert response.field_meta == {themes.META_KEY: {"active": "zz-new"}}
 
 
 async def test_on_connect_starts_watcher_and_shutdown_stops_it():

@@ -25,8 +25,6 @@ _ADJUST_STEPS = 20  # 5% blend increments toward white or black
 _WHITE = (255, 255, 255)
 _BLACK = (0, 0, 0)
 _HEX_RE = re.compile(r"#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})")
-_CURATED_IDS = [name for name, _ in MENU if name in CURATED_THEMES]
-_CATALOG_IDS = frozenset([*_CURATED_IDS, "default"])
 
 
 def appearance_for(bg_hex: str) -> str:
@@ -69,13 +67,13 @@ def build_catalog() -> list[dict[str, Any]]:
 
     Every call builds new containers, so callers cannot mutate shared state.
     """
-    entries = [_curated_entry(theme_id) for theme_id in _CURATED_IDS]
+    entries = [_curated_entry(theme_id) for theme_id in _curated_ids()]
     entries.append(_default_entry())
     return entries
 
 
 def active_theme_id(raw: object) -> str | None:
-    if isinstance(raw, str) and raw in _CATALOG_IDS:
+    if isinstance(raw, str) and (raw == "default" or raw in _curated_ids()):
         return raw
     return None
 
@@ -85,6 +83,11 @@ def read_active_theme_id() -> str | None:
         return active_theme_id(get_value(ACTIVE_THEME_CONFIG_KEY))
     except Exception:
         return None
+
+
+def _curated_ids() -> list[str]:
+    # Resolved per call so a theme added to MENU/CURATED_THEMES reaches ACP without edits here.
+    return [name for name, _ in MENU if name in CURATED_THEMES]
 
 
 def _curated_entry(theme_id: str) -> dict[str, Any]:

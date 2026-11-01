@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from code_puppy import config
+from code_puppy_core_plugins.theme import catalog as catalog_module
 from code_puppy_core_plugins.theme import content_styles, osc_palette, rich_themes
 from code_puppy_core_plugins.theme.catalog import (
     ACTIVE_THEME_CONFIG_KEY,
@@ -25,34 +26,12 @@ from code_puppy_core_plugins.theme.catalog import (
     read_active_theme_id,
     semantic_roles,
 )
-from code_puppy_core_plugins.theme.themes import CURATED_THEMES, DEFAULT
+from code_puppy_core_plugins.theme.themes import CURATED_THEMES, DEFAULT, MENU
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HEX_RE = re.compile(r"#[0-9a-f]{6}")
-CURATED_IDS = [
-    "ocean",
-    "forest",
-    "sunset",
-    "vaporwave",
-    "bubblegum-pink",
-    "purple-puppy",
-    "catppuccin-mocha",
-    "catppuccin-latte",
-    "tokyo-night",
-    "green-screen",
-    "deep-black",
-    "solarized-light",
-    "github-light",
-    "rose-pine-dawn",
-]
+CURATED_IDS = [name for name, _ in MENU if name in CURATED_THEMES]
 EXPECTED_IDS = [*CURATED_IDS, "default"]
-EXPECTED_APPEARANCE = {
-    **{theme_id: "dark" for theme_id in CURATED_IDS},
-    "catppuccin-latte": "light",
-    "solarized-light": "light",
-    "github-light": "light",
-    "rose-pine-dawn": "light",
-}
 ROLE_KEYS = {
     "background",
     "surface",
@@ -325,8 +304,10 @@ class TestSemanticRoles:
 
 
 class TestAppearance:
-    @pytest.mark.parametrize(("theme_id", "expected"), EXPECTED_APPEARANCE.items())
-    def test_entry_appearance_follows_background_luminance(self, theme_id, expected):
+    @pytest.mark.parametrize("theme_id", CURATED_IDS)
+    def test_entry_appearance_follows_background_luminance(self, theme_id):
+        bg = CURATED_THEMES[theme_id]["terminal_palette"]["bg"]
+        expected = "dark" if _wcag_luminance(bg) < 0.179 else "light"
         assert _entry(theme_id)["appearance"] == expected
 
     @pytest.mark.parametrize(
@@ -442,6 +423,33 @@ class TestNoSideEffects:
         out, err = capsys.readouterr()
         assert (out, err) == ("", "")
         assert path.read_bytes() == before
+
+
+class TestCliThemeAddedToMenu:
+    @pytest.fixture
+    def new_cli_theme(self, monkeypatch):
+        theme = copy.deepcopy(CURATED_THEMES["ocean"])
+        theme["label"] = "Zz New"
+        theme["terminal_palette"]["bg"] = "#fdf6e3"
+        theme["terminal_palette"]["fg"] = "#657b83"
+        monkeypatch.setitem(CURATED_THEMES, "zz-new", theme)
+        menu = [*MENU]
+        menu.insert([name for name, _ in menu].index("surprise"), ("zz-new", theme))
+        monkeypatch.setattr(catalog_module, "MENU", menu)
+        return theme
+
+    def test_new_menu_theme_is_listed_in_menu_order_before_default(self, new_cli_theme):
+        assert [e["id"] for e in build_catalog()] == [*CURATED_IDS, "zz-new", "default"]
+        assert _entry("zz-new")["label"] == "Zz New"
+
+    def test_new_menu_theme_meets_aa_and_is_accepted_as_active(self, new_cli_theme):
+        entry = _entry("zz-new")
+        bg = entry["roles"]["background"]
+        assert entry["appearance"] == "light"
+        for role, color in entry["roles"].items():
+            if role not in {"background", "surface"}:
+                assert _wcag_contrast(color, bg) >= 4.5, role
+        assert active_theme_id("zz-new") == "zz-new"
 
 
 class TestActiveThemeId:

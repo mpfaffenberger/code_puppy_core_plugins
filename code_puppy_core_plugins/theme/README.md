@@ -94,7 +94,7 @@ read in `read_active_theme_id()`.
 
 | Function | Purpose |
 |----------|---------|
-| `build_catalog()` | Returns 15 fresh wire dicts: 14 curated themes in menu order, then `default`. `surprise` is excluded. |
+| `build_catalog()` | Returns fresh wire dicts: curated themes in menu order, then `default`. `surprise` is excluded. |
 | `semantic_roles(palette)` | Maps a `bg`/`fg`/`ansi` palette to the semantic roles below. |
 | `appearance_for(bg_hex)` | Returns `dark` when the WCAG relative luminance of `bg` is below 0.179, else `light`. |
 | `active_theme_id(raw)` | Returns `raw` if it is a catalog id, else `None`. |
