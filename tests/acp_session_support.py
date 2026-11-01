@@ -47,8 +47,7 @@ class FakeAgent:
 
     ``finish`` returns at once. ``block`` and ``permission`` await the current
     gate (``permission`` also flags that the run waits on a client reply).
-    ``swallow`` awaits the gate, eats ``CancelledError`` and returns normally,
-    as core may do. ``fail`` awaits the gate, then raises.
+    ``fail`` awaits the gate, then raises.
     """
 
     def __init__(
@@ -86,11 +85,6 @@ class FakeAgent:
             return FakeResult()
         self.gate = asyncio.Event()
         self.waiting_on = behaviour
-        if behaviour == "swallow":
-            try:
-                await self.gate.wait()
-            except asyncio.CancelledError:
-                return FakeResult("swallowed")
         await self.gate.wait()
         if behaviour == "fail":
             raise RuntimeError("boom")

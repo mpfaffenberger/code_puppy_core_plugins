@@ -89,27 +89,31 @@ plugin's protocol layer changed.
 |----------|--------|
 | **Protocol layer** | **Official `acp` SDK.** We implement its `Agent` interface; `acp.run_agent` owns stdio + framing. |
 | **Who does I/O** | **Delegated to the client when the client supports it.** Workspace file reads/writes go through the client's `fs/read_text_file` / `fs/write_text_file` (edits land in the client's diff UI; reads see unsaved buffers), and shell commands run via the client's `terminal/*`. This rides two small, general **I/O-backend seams** in core (`code_puppy/tools/io_backends.py`): a sync `FileSystemBackend` and an async `CommandExecutor`, both `None` by default (local I/O) and installed by this plugin, capability-gated, after `initialize`. Internal writes (config, session state, agent metadata) deliberately stay local — only *workspace* edits reroute (via `common.write_project_file`). |
-| **Permissions** | **the client is the authority (non-yolo).** Every approval — file writes and shell commands — is surfaced in the client's own allow/deny dialog via `session/request_permission`. No yolo forcing, no terminal prompts. |
+| **Permissions** | **the client is the authority (non-yolo).** Core runs one approval path for file writes and shell commands; ACP supplies the backend that asks the client via `session/request_permission`. No yolo forcing, no terminal prompts. |
 | **Entry point** | A `--acp` CLI flag contributed via the `register_cli_args` hook; `handle_cli_args` boots the agent (on its own loop, in a thread) and short-circuits normal TUI startup. |
 | **Core footprint** | Small, general, additive core seams — **no monkeypatching**: (1) a pluggable *approval backend* (`common.set_approval_backend`), (2) a *workspace write* wrapper (`common.write_project_file`) + backend-aware `_read_file`, and (3) `FileSystemBackend` / `CommandExecutor` registries (`tools/io_backends.py`). Each is useful to any non-terminal embedder, not ACP-specific. Everything else is this plugin + existing public hooks + the SDK. |
 
 ### Permissions in non-yolo mode (the important part)
 
-Code Puppy has two approval edges. In a headless ACP server there is no TTY, so
-the built-in stdin prompt would **fail closed** (auto-deny every file op — a
-latent bug this integration also fixes). We route both edges to the client *without*
-forcing yolo and *without* patching tool logic:
+Headless ACP has no TTY, so the built-in stdin prompt would fail closed. Instead,
+the approval decision lives in core and ACP only supplies the prompting backend,
+*without* forcing yolo or patching tool logic:
 
-* **File operations** use the **approval-backend seam** in `tools.common`. Sync
-  file tools run in Code Puppy's tool threadpool, so the backend
-  (`permissions.py`) bridges to the ACP event loop with
-  `run_coroutine_threadsafe` to ask the client via the SDK's `request_permission`,
-  then blocks the worker thread for the answer. The loop is free to service the
-  round-trip → no deadlock (guarded against being called on the loop itself).
-* **Shell commands** use the async `run_shell_command` hook (it runs on the ACP
-  loop and can `await` the client directly).
-
-Both edges **fail closed** if the connection drops or the client errors.
+* **One shared path in core:** yolo check, then sub-agent check, then queueing.
+  Sub-agents never prompt.
+* **ACP's backend** (`permissions.py`) asks the client via the SDK's
+  `request_permission`. Sync file tools run in the tool threadpool, so that path
+  bridges to the ACP loop with `run_coroutine_threadsafe` and blocks the worker
+  for the answer; it refuses to run on the loop itself (deadlock guard). Shell
+  commands go through core's same gate, which calls this backend (from a worker
+  thread, so the same bridge applies).
+* **No timeout:** like the terminal, the request waits. It ends on the client's
+  answer, on `session/cancel`, or when the connection closes. Cancel and
+  disconnect deny (fail closed).
+* **`approval_mode` config option:** read-only, reports `ask` or `auto` from yolo
+  mode. `apply_config_option` never writes config; client writes are ignored.
+* **Older cores** without `can_prompt_for_approval` get a fallback shell hook in
+  the plugin.
 
 ---
 
@@ -129,9 +133,9 @@ Every file stays well under the 600-line cap and owns one concern.
 | `persistence.py` | Pickle each session's history under `AUTOSAVE_DIR/acp` keyed by session id, plus an ACP metadata sidecar (`cwd` + `additionalDirectories` + title). Rehydrate on `load`/`resume`/`fork`; enumerate for `session/list` (`list_persisted`); tombstone on `session/close` (`delete`). |
 | `replay.py` | On `load`/`resume`, stream the rehydrated history back to the client as ordered `session/update`s (user / agent text / thinking / past tool calls) so the client rebuilds the thread UI. |
 | `mcp_config.py` | Translate client-injected ACP MCP server specs → pydantic-ai servers on the session agent. |
-| `session_config.py` | Build the model list (surfaced as ACP *modes*) + safe config options; apply `set_mode` / `set_config_option`. |
+| `session_config.py` | Build the model list (surfaced as ACP *modes*) + safe config options (including the read-only `approval_mode`); apply `set_mode` / `set_config_option`. |
 | `bridge.py` | `EventBridge`: registers `stream_event` / `pre_tool_call` / `post_tool_call` hooks and translates them into SDK `session/update`s via `connection.session_update`. (Hooks, **not** MessageBus — see *Event source*.) |
-| `permissions.py` | Wires Code Puppy's two approval edges to the client via the SDK's `request_permission`: the `tools.common` approval backend (files, cross-thread) and the `run_shell_command` hook (shell). Fails closed. |
+| `permissions.py` | The ACP approval backend (`tools.common` seam, cross-thread bridge to `request_permission`) for file and shell approvals, `cancel_pending` for cancel/close, and a legacy `run_shell_command` fallback hook for cores without `can_prompt_for_approval`. No timeout; fails closed. |
 | `io_delegation.py` | `DelegatedFileSystemBackend` (sync, cross-thread) + `DelegatedCommandExecutor` (async terminal lifecycle) that plug into the core I/O seams, capability-gated. |
 | `state.py` | Process-wide run context: the SDK connection + its loop, the active session id, and the open-tool-call stack — so the permission/I/O seams (plain module functions) can reach the running connection and correlate events. |
 

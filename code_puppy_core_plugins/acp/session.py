@@ -7,10 +7,8 @@ opened the thread in, so tools resolve paths relative to the right project.
 
 Cancellation (``session/cancel``) is real: the prompt runs as an
 ``asyncio.Task`` we hold a handle to, so a cancel notification cancels that
-task. pydantic-ai usually surfaces the ``CancelledError``, which we translate
-into the ``cancelled`` stop reason for the in-flight ``session/prompt`` reply.
-Core may instead swallow the cancel and return normally, so ``cancel`` also sets
-``_cancel_requested``, which is the authoritative cancel signal for the turn.
+task. pydantic-ai surfaces the ``CancelledError``, which we translate into the
+``cancelled`` stop reason for the in-flight ``session/prompt`` reply.
 
 Each turn also reports token usage (mapped from the pydantic-ai run result)
 back on the ``PromptResponse`` so the client can show cost/usage.
@@ -110,7 +108,6 @@ class ACPSession:
         """Run one turn; the caller owns the ``_running`` flag."""
         from code_puppy.messaging import set_session_context
 
-        self._cancel_requested = False
         media_types = composer_ext.agent_binary_media_types(self.agent)
         parsed = content.parse_prompt(blocks, media_types)
         text = parsed.text
@@ -149,6 +146,7 @@ class ACPSession:
         state.begin_run(self.session_id)
         result: Any = None
         error: Optional[BaseException] = None
+        self._cancel_requested = False
         try:
             self._task = asyncio.ensure_future(
                 self.agent.run_with_mcp(
@@ -158,6 +156,11 @@ class ACPSession:
                 )
             )
             result = await self._task
+            # Core swallows cancellation, so the handler's own cancel would be lost;
+            # the SDK response send then hangs after the connection closes.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise asyncio.CancelledError
             self._absorb_history(result)
             stop_reason = STOP_CANCELLED if self._cancel_requested else STOP_END_TURN
         except asyncio.CancelledError:
@@ -232,7 +235,9 @@ class ACPSession:
 
         Besides cancelling the asyncio task, force-kill any local shell
         processes the run spawned so they don't orphan. (Shells delegated to
-        the client run client-side and are unaffected.)
+        the client run client-side and are unaffected.) Core may swallow the
+        cancel, so ``_cancel_requested`` is the authoritative signal that the
+        turn was cancelled.
 
         Only *requests* cancellation -- delivery happens at the task's next
         await point, whenever that is, not immediately. Callers that need

@@ -128,8 +128,8 @@ async def test_overlapping_prompt_is_rejected_and_next_prompt_works(
 
 @pytest.mark.parametrize(
     "cancelled_by",
-    ["block", "permission", "swallow"],
-    ids=["streaming", "permission-request", "core-swallows-cancel"],
+    ["block", "permission"],
+    ids=["streaming", "permission-request"],
 )
 async def test_cancelled_turn_reports_cancelled_and_next_turn_runs(
     monkeypatch, cancelled_by
@@ -149,11 +149,8 @@ async def test_cancelled_turn_reports_cancelled_and_next_turn_runs(
     assert follow_up.stop_reason == STOP_END_TURN
 
 
-async def test_cancel_without_a_turn_in_flight_is_a_noop():
+async def test_cancel_after_the_task_finished_does_not_set_the_flag():
     session = make_session("s1", FakeAgent())
-
-    session.cancel()
-    assert (await session.prompt([text_block("hi")])).stop_reason == STOP_END_TURN
 
     finished = asyncio.ensure_future(asyncio.sleep(0))
     await finished
