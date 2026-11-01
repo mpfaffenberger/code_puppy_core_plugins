@@ -110,7 +110,6 @@ async def test_hung_summarizer_leaves_entry_queued_and_later_entries_deliver(
 async def test_later_pass_retries_timed_out_entry(
     fast_timeout: None, summarizer: HungSummarizer
 ) -> None:
-    feedback.register_feedback_sink(HangingSink(hang_for=None))
     down_id = _enqueue_down()
     await _run_pass()
 
@@ -175,7 +174,6 @@ async def test_timeout_logs_only_exception_type_name(
         feedback.register_feedback_sink(sink)
         sink.hang_for = _enqueue_down()
     else:
-        feedback.register_feedback_sink(HangingSink(hang_for=None))
         _enqueue_down()
     await _run_pass()
 

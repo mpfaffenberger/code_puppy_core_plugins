@@ -286,9 +286,6 @@ def _enter_scopes(stack: contextlib.ExitStack, record: dict[str, Any]) -> None:
 async def _summarize_if_needed(record: dict[str, Any]) -> dict[str, Any] | None:
     if record.get("rating") != "down" or record.get("state") != STATE_QUEUED:
         return record
-    if not _snapshot(_sinks):
-        # Nothing consumes tags, so skip the paid summarization call.
-        return record
     summary = await _triage(record)
     if summary is None:
         if record.get("attempts", 0) < MAX_TRIAGE_ATTEMPTS:

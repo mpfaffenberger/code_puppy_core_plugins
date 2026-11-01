@@ -341,7 +341,7 @@ background task so startup is never blocked, and after each new accepted event.
 A failure keeps the entry in its current state.
 
 Summarizing is best effort. If it fails three times, the entry is delivered with
-`tags: []` and `reason: null`. With no sink registered, the summarizer is skipped.
+`tags: []` and `reason: null`.
 
 ### Summarizer
 

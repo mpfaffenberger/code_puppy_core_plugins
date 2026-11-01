@@ -279,12 +279,18 @@ async def test_triage_failure_is_capped_then_delivered_untagged(
     assert record["state"] == "summarized"
 
 
-async def test_no_sinks_skips_triage_call(summarizer: FakeSummarizer) -> None:
+async def test_no_sinks_registered_still_summarizes_down(
+    summarizer: FakeSummarizer,
+) -> None:
     feedback_id = (await _send())["feedbackId"]
     await feedback.drain()
 
-    assert summarizer.calls == []
-    assert _state(feedback_id)["state"] == "delivered"
+    assert summarizer.calls == [(SESSION, ["wrong"])]
+    final = _state(feedback_id)
+    assert final["state"] == "delivered"
+    assert final["tags"] == ["incorrect"]
+    assert final["reason"] == "generic cause"
+    assert final["attempts"] == 1
 
 
 @pytest.mark.parametrize(
