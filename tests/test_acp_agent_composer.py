@@ -389,6 +389,28 @@ async def test_close_session_releases_pause_and_subagent_state(
         assert spies.cleared == [session_id]
 
 
+@pytest.mark.parametrize("failing_step", ["persistence", "fallback_reset"])
+async def test_close_session_releases_core_state_when_a_step_raises(
+    agent, monkeypatch, failing_step
+):
+    spies = install_pause(monkeypatch)
+    session_id = (await agent.new_session(cwd="/w")).session_id
+
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk gone")
+
+    if failing_step == "persistence":
+        monkeypatch.setattr(persistence, "delete", boom)
+    else:
+        _install(monkeypatch, BUILDER, reset_model_fallback_warnings=boom)
+
+    with pytest.raises(OSError, match="disk gone"):
+        await agent.close_session(session_id)
+
+    assert spies.dropped == [session_id]
+    assert spies.cleared == [session_id]
+
+
 @pytest.mark.parametrize("field_meta", [None, {"codePuppy/interrupted": []}])
 async def test_prompt_response_carries_the_outcome_meta(agent, field_meta):
     async def prompt(blocks: list[Any]) -> SimpleNamespace:

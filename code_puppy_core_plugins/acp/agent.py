@@ -366,16 +366,21 @@ class CodePuppyAgent(Agent):
         write a fresh warning into this session's bucket a moment *after*
         the purge, leaking that one entry forever (nothing will call
         ``close_session`` for this id a second time).
+
+        Core's per-session pause/interrupted state is released even when an
+        earlier step raises, since no second close will come.
         """
         from code_puppy.agents._builder import reset_model_fallback_warnings
 
-        permissions.cancel_pending(session_id)
-        session = self._sessions.pop(session_id, None)
-        if session is not None:
-            await session.cancel_and_wait()
-        persistence.delete(session_id)
-        reset_model_fallback_warnings(scope=session_id)
-        composer_ext.release_session(session_id)
+        try:
+            permissions.cancel_pending(session_id)
+            session = self._sessions.pop(session_id, None)
+            if session is not None:
+                await session.cancel_and_wait()
+            persistence.delete(session_id)
+            reset_model_fallback_warnings(scope=session_id)
+        finally:
+            composer_ext.release_session(session_id)
         return CloseSessionResponse()
 
     # ---- Prompt turn ------------------------------------------------------
