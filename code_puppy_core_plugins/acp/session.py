@@ -23,7 +23,13 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 from acp.schema import Usage
 
-from code_puppy_core_plugins.acp import commands, content, persistence, state
+from code_puppy_core_plugins.acp import (
+    commands,
+    content,
+    persistence,
+    state,
+    turn_metadata,
+)
 
 if TYPE_CHECKING:
     from code_puppy.agents.base_agent import BaseAgent
@@ -42,6 +48,8 @@ class PromptResult:
 
     stop_reason: str
     usage: Optional[Usage] = None
+    # Raw collected values, not the ``_meta`` wire shape (see turn_metadata.turn_meta).
+    meta: Optional[dict[str, str]] = None
 
 
 class ACPSession:
@@ -65,6 +73,8 @@ class ACPSession:
         # Set while a ``session/prompt`` is in flight so ``cancel`` has a task
         # to cancel. ``None`` means idle.
         self._task: Optional["asyncio.Task[Any]"] = None
+        # Turn metadata collected after the agent run, reset per prompt().
+        self._turn_values: dict[str, str] = {}
 
     async def prompt(self, blocks: List[Any]) -> PromptResult:
         """Run the agent on a user turn and return the stop reason + usage.
@@ -118,11 +128,12 @@ class ACPSession:
         result: Any = None
         error: Optional[BaseException] = None
         try:
+            self._turn_values = {}
             self._task = asyncio.ensure_future(
-                self.agent.run_with_mcp(
+                self._run_agent(
                     text,
-                    attachments=parsed.attachments or None,
-                    link_attachments=parsed.link_attachments or None,
+                    parsed.attachments or None,
+                    parsed.link_attachments or None,
                 )
             )
             result = await self._task
@@ -167,7 +178,40 @@ class ACPSession:
             await self._send_final_result(result)
         elif stop_reason == STOP_REFUSAL:
             await self._send_error_notice(error)
-        return PromptResult(stop_reason, _to_acp_usage(result))
+        return PromptResult(
+            stop_reason,
+            _to_acp_usage(result),
+            meta=self._turn_values or None,
+        )
+
+    async def _run_agent(
+        self,
+        text: str,
+        attachments: Any,
+        link_attachments: Any,
+    ) -> Any:
+        """Run the agent and collect turn metadata in the same task.
+
+        ``ensure_future`` copies the context, so ContextVars set during the run
+        (e.g. the correlation ID) are only visible from inside this coroutine.
+        The ``finally`` awaits nothing, so cancellation semantics are unchanged.
+        """
+        try:
+            return await self.agent.run_with_mcp(
+                text,
+                attachments=attachments,
+                link_attachments=link_attachments,
+            )
+        finally:
+            self._turn_values = self._collect_turn_values()
+
+    def _collect_turn_values(self) -> dict[str, str]:
+        try:
+            return turn_metadata.collect_turn_metadata(self.agent, self.session_id)
+        except Exception as exc:  # noqa: BLE001
+            # Exception type only: messages may carry tokens or other secrets.
+            logger.debug("ACP: turn metadata collection failed: %s", type(exc).__name__)
+            return {}
 
     def _absorb_history(self, result: Any) -> None:
         """Fold a completed run's full message list back into the agent.
