@@ -11,6 +11,7 @@ place we decide "what does Code Puppy advertise" is obvious and reviewable.
 
 from __future__ import annotations
 
+import copy
 from typing import Tuple
 
 from acp.schema import (
@@ -54,8 +55,12 @@ def agent_capabilities() -> AgentCapabilities:
             resume=SessionResumeCapabilities(),
             additional_directories=SessionAdditionalDirectoriesCapabilities(),
         ),
+        field_meta=copy.deepcopy(BANNER_CAPABILITY_META),
     )
 
+
+# ACP-05 banner wire contract version; matched by ``_meta.code_puppy.banner`` on tool-call updates.
+BANNER_CAPABILITY_META = {"code_puppy": {"banners": {"v": 1}}}
 
 # ``clientCapabilities._meta`` key a client sets to show ``ask_user_question``
 # itself. Such a client renders the tool call's ``rawInput`` (the questions) as
