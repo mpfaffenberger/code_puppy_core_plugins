@@ -40,7 +40,22 @@ class _Connection:
         self.notifications.append((method, params))
 
 
+_FAKE_MODEL = "fake-model"
+_FAKE_AGENT_NAME = "fake-agent"
+
+
 class _FakeAgent:
+    """Just enough of ``BaseAgent`` for a session to be built on a pinned route."""
+
+    def get_model_name(self) -> str:
+        return _FAKE_MODEL
+
+    def set_runtime_model_name_override(self, model, **_) -> None:
+        pass
+
+    def reload_code_generation_agent(self) -> None:
+        pass
+
     def get_message_history(self) -> list:
         return []
 
@@ -59,7 +74,18 @@ def _restore_rich_state():
 def _restore_process_state(monkeypatch):
     previous = (state.get_connection(), state.get_loop())
     state.set_connection(None, None)
-    monkeypatch.setattr(CodePuppyAgent, "_new_agent", staticmethod(_FakeAgent))
+    # Patch the shared agent_manager/model-list seam, not CodePuppyAgent internals:
+    # it builds sessions both from ``_new_agent`` and from ``route_runtime`` (PR #84).
+    manager = "code_puppy.agents.agent_manager"
+    monkeypatch.setattr(f"{manager}.get_current_agent_name", lambda: _FAKE_AGENT_NAME)
+    monkeypatch.setattr(f"{manager}.load_agent", lambda name, **_: _FakeAgent())
+    monkeypatch.setattr(
+        f"{manager}.get_available_agents", lambda: {_FAKE_AGENT_NAME: _FAKE_AGENT_NAME}
+    )
+    monkeypatch.setattr(
+        "code_puppy.command_line.model_picker_completion.load_model_names",
+        lambda: [_FAKE_MODEL],
+    )
     yield
     state.set_connection(*previous)
     permissions.uninstall()
@@ -99,7 +125,8 @@ async def test_session_responses_carry_active_theme_meta(monkeypatch, method, ac
 
     response = await getattr(agent, method)(cwd="/work", session_id="sess_saved")
 
-    assert response.field_meta == {themes.META_KEY: {"active": active}}
+    # Other features (e.g. session routes, PR #84) add their own `_meta` keys.
+    assert response.field_meta[themes.META_KEY] == {"active": active}
 
 
 async def test_new_cli_theme_is_listed_and_reported_active_over_acp(monkeypatch):
@@ -117,7 +144,7 @@ async def test_new_cli_theme_is_listed_and_reported_active_over_acp(monkeypatch)
 
     assert listed == {"schemaVersion": 1, "active": "zz-new", "themes": build_catalog()}
     assert "zz-new" in [entry["id"] for entry in listed["themes"]]
-    assert response.field_meta == {themes.META_KEY: {"active": "zz-new"}}
+    assert response.field_meta[themes.META_KEY] == {"active": "zz-new"}
 
 
 async def test_on_connect_starts_watcher_and_shutdown_stops_it():
