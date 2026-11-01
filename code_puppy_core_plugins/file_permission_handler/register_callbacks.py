@@ -5,6 +5,7 @@ providing a consistent and extensible permission system.
 """
 
 import difflib
+import logging
 import os
 import threading
 from typing import Any
@@ -20,6 +21,7 @@ from code_puppy.tools.common import (
     get_user_approval,
     get_user_approval_async,
 )
+from code_puppy_core_plugins.file_permission_handler import folder_command  # noqa: F401
 
 try:
     # Preferred: the edit engine's own pure replacement function, so the
@@ -264,6 +266,22 @@ def _preview_delete_file(file_path: str) -> str | None:
         return None
 
 
+def _policy_gate(file_path: str, operation: str) -> bool | None:
+    """True = allow, False = force prompt, None = defer to yolo. Errors defer; never allow."""
+    try:
+        from code_puppy_core_plugins.file_permission_handler import folder_policy
+
+        is_delete = operation.strip().lower() == "delete"
+        decision = folder_policy.decide(file_path, is_delete=is_delete)
+        return {
+            folder_policy.Decision.ALLOW: True,
+            folder_policy.Decision.ASK: False,
+        }.get(decision)
+    except Exception:
+        logging.getLogger(__name__).debug("folder policy failed", exc_info=True)
+        return None
+
+
 def prompt_for_file_permission(
     file_path: str,
     operation: str,
@@ -285,10 +303,8 @@ def prompt_for_file_permission(
         - confirmed: True if permission is granted, False otherwise
         - user_feedback: Optional feedback message from user to send back to the model
     """
-    yolo_mode = get_yolo_mode()
-
-    # Skip confirmation only if in yolo mode (removed TTY check for better compatibility)
-    if yolo_mode:
+    gate = _policy_gate(file_path, operation)
+    if gate is True or (gate is None and get_yolo_mode()):
         return True, None
 
     # Build panel content
@@ -470,7 +486,9 @@ def get_permission_handler_help() -> str:
 - Thread-safe confirmation system
 - Consistent user experience across file operations
 - Detailed preview support with diff highlighting
-- Automatic preview generation from operation data"""
+- Automatic preview generation from operation data
+- Approved folders: edits inside them never prompt; protected paths always ask
+- Deletes outside approved folders always ask, even in YOLO mode; see /approved_folders"""
 
 
 def get_file_permission_prompt_additions() -> str:
@@ -500,7 +518,8 @@ async def prompt_for_file_permission_async(
     with the running asyncio loop instead of bailing out via
     ``arrow_select() called from async context``.
     """
-    if get_yolo_mode():
+    gate = _policy_gate(file_path, operation)
+    if gate is True or (gate is None and get_yolo_mode()):
         return True, None
 
     panel_content = RichText()

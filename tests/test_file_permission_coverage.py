@@ -217,7 +217,7 @@ class TestPromptForFilePermission:
             assert ok is True
             assert fb is None
 
-    def test_parallel_prompts_queue_instead_of_auto_rejecting(self):
+    def test_parallel_prompts_queue_instead_of_auto_rejecting(self, monkeypatch):
         """Parallel callers should queue (FIFO) -- not get silently rejected.
 
         Previously, a non-blocking ``threading.Lock`` in this plugin meant
@@ -227,8 +227,17 @@ class TestPromptForFilePermission:
         """
         import threading
 
+        from code_puppy_core_plugins.file_permission_handler import folder_policy
         from code_puppy_core_plugins.file_permission_handler.register_callbacks import (
             prompt_for_file_permission,
+        )
+
+        # Relative f{i}.txt resolves inside the approved cwd and would be
+        # auto-allowed; force the DEFAULT path so every call reaches the prompt.
+        monkeypatch.setattr(
+            folder_policy,
+            "decide",
+            lambda *args, **kwargs: folder_policy.Decision.DEFAULT,
         )
 
         concurrent = [0]
