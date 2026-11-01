@@ -268,10 +268,19 @@ class EventBridge:
                 ),
                 banner,
             )
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(self._send(session_id, update))
-            self._notice_tasks.add(task)
-            task.add_done_callback(self._notice_tasks.discard)
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is not None:
+                task = running.create_task(self._send(session_id, update))
+                self._notice_tasks.add(task)
+                task.add_done_callback(self._notice_tasks.discard)
+                return
+            # Worker threads have no running loop; hand the send to the ACP loop.
+            loop = state.get_loop()
+            if loop is not None and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(self._send(session_id, update), loop)
         except Exception:  # noqa: BLE001
             logger.debug("ACP: dropping plugin notice", exc_info=True)
 

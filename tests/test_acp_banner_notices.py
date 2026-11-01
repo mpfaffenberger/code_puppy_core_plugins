@@ -7,7 +7,10 @@ The path under test is ``callbacks.on_banner_notice`` (sync trigger) ->
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import re
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -111,6 +114,36 @@ def test_notice_without_running_loop_is_dropped(run):
 
     assert run.updates == []
     assert bridge._notice_tasks == set()
+
+
+def test_notice_from_worker_thread_is_sent_on_acp_loop(run, bridge):
+    loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+    loop_thread.start()
+    state.set_connection(run, loop)
+    banner = notice("kb.card", "KB", details="card x (2)", target="card-x")
+    try:
+        # Tool threads run in a copy of the prompt's context, which carries the session id.
+        worker = threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(bridge._on_banner_notice, banner.to_wire()),
+        )
+        worker.start()
+        worker.join()
+
+        deadline = time.monotonic() + 5
+        while not run.updates and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        loop_thread.join()
+        loop.close()
+
+    [(session_id, update)] = run.updates
+    wire = _wire(update)
+    assert session_id == "s1"
+    assert wire["sessionUpdate"] == "tool_call"
+    assert wire["_meta"] == {"code_puppy": {"banner": banner.to_wire()}}
 
 
 @pytest.mark.asyncio
