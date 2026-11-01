@@ -6,11 +6,11 @@ Nothing is created or written, so the path need not exist.
 """
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from code_puppy.tools.subagent_context import is_subagent, subagent_context
 from code_puppy_core_plugins.file_permission_handler import folder_policy
 from code_puppy_core_plugins.file_permission_handler import register_callbacks as rc
 
@@ -134,6 +134,34 @@ class TestGateMapping:
         assert seen["is_delete"] is expected_is_delete
 
 
+def _resolve(where, project, outside):
+    paths = {
+        "project_src": str(project / "src" / "app.py"),
+        "protected": str(project / ".env"),
+        "outside": outside,
+    }
+    return paths[where]
+
+
+def _run_as_subagent(mode, kind, file_path):
+    """Run the real edit/delete handler inside a sub-agent context."""
+    with subagent_context("sub-agent"):
+        assert is_subagent()
+        if kind == "delete":
+            if mode == "sync":
+                return rc.handle_delete_file_permission(None, file_path)
+            return asyncio.run(rc.handle_delete_file_permission_async(None, file_path))
+        if mode == "sync":
+            return rc.handle_edit_file_permission(
+                None, file_path, "write", {"content": "x"}
+            )
+        return asyncio.run(
+            rc.handle_edit_file_permission_async(
+                None, file_path, "write", {"content": "x"}
+            )
+        )
+
+
 class TestHandlersAndAgents:
     @pytest.mark.parametrize("mode", MODES)
     def test_delete_handler_prompts_even_in_yolo(self, mode, outside, prompts):
@@ -147,22 +175,26 @@ class TestHandlersAndAgents:
         assert len(prompts) == 1
 
     @pytest.mark.parametrize("mode", MODES)
-    def test_gate_ignores_agent_identity(self, mode, outside, prompts):
-        """Sub-agent context must not change the outcome; the gate is path-only."""
-        sub_agent = SimpleNamespace(agent_name="sub-agent")
-        results = []
-        for context in (None, sub_agent):
-            with patch.object(rc, "get_yolo_mode", return_value=True):
-                if mode == "sync":
-                    result = rc.handle_edit_file_permission(
-                        context, outside, "write", {"content": "x"}
-                    )
-                else:
-                    result = asyncio.run(
-                        rc.handle_edit_file_permission_async(
-                            context, outside, "write", {"content": "x"}
-                        )
-                    )
-            results.append(result)
-        assert results == [True, True]
-        assert prompts == []
+    @pytest.mark.parametrize("yolo", [True, False])
+    @pytest.mark.parametrize(
+        ("kind", "where", "prompt_rule"),
+        [
+            ("edit", "project_src", "never"),
+            ("edit", "protected", "always"),
+            ("edit", "outside", "unless_yolo"),
+            ("delete", "outside", "always"),
+        ],
+    )
+    def test_subagent_gets_same_folder_policy(
+        self, mode, yolo, kind, where, prompt_rule, project, outside, prompts
+    ):
+        file_path = _resolve(where, project, outside)
+        with patch.object(rc, "get_yolo_mode", return_value=yolo):
+            result = _run_as_subagent(mode, kind, file_path)
+        expected_prompts = {
+            "never": 0,
+            "always": 1,
+            "unless_yolo": 0 if yolo else 1,
+        }[prompt_rule]
+        assert len(prompts) == expected_prompts
+        assert result is (expected_prompts == 0)

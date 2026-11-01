@@ -289,6 +289,17 @@ The `initialize` response lists the methods under
 `agentCapabilities._meta.codePuppy.approvedFolders.methods`. Check this block
 before you call the methods.
 
+### Terminal command
+
+The terminal command `/approved_folders` manages the same list:
+
+- `/approved_folders` or `/approved_folders list`: show approved folders and protected paths.
+- `/approved_folders add <path>`: approve a folder. `~` expands; quote paths with spaces.
+- `/approved_folders remove <path>`: remove a folder from the approved list.
+- `/approved_folders protected`: show the protected paths.
+
+It uses the same policy code and the same `puppy.cfg` key as the ACP methods, so the two stay 1:1. Errors show the same wording as the ACP rejection reason.
+
 ### Policy rules
 
 - Edits and deletes inside the project folder, temp folders, or user folders
