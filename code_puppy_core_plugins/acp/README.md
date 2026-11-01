@@ -25,7 +25,7 @@ restarts), `session/set_mode`, `session/set_config_option`. Assistant text +
 > servers and multi-root `additionalDirectories` are honoured. Workspace file
 > I/O and shell delegate to the client (capability-gated), and **permissions**
 > for file writes and shell commands are surfaced in the client's own allow/deny
-> dialog in non-yolo mode.
+> dialog in non-yolo mode, and for file writes outside approved folders even in yolo mode.
 >
 > Not implemented: `elicitation/*` (the SDK's connection API exposes no
 > elicitation call in 0.10.1), `plan` updates (Code Puppy has no plan model),
@@ -305,8 +305,7 @@ It uses the same policy code and the same `puppy.cfg` key as the ACP methods, so
 - Edits and deletes inside the project folder, temp folders, or user folders
   run without a prompt. Protected paths are the exception.
 - Protected paths always ask, even in yolo mode and inside approved folders.
-- Edits outside approved folders follow the existing approval mode.
-- Deletes outside approved and temp folders always ask, even in yolo mode.
+- Edits and deletes outside approved and temp folders always ask, even in yolo mode.
 - Shell commands are not enforced by folder policy. Shell and network
   sandboxing are deferred.
 

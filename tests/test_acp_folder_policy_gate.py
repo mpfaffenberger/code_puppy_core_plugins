@@ -93,7 +93,7 @@ _GATE_CASES = [
     pytest.param("inside", "write", 0, 0, id="write-inside-project"),
     pytest.param("protected", "write", 1, 1, id="write-protected-in-project"),
     pytest.param("outside", "delete", 1, 1, id="delete-outside"),
-    pytest.param("outside", "write", 0, 1, id="write-outside"),
+    pytest.param("outside", "write", 1, 1, id="write-outside"),
 ]
 
 

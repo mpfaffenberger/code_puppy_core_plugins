@@ -50,7 +50,6 @@ _SYSTEM_TMP = "/tmp"
 class Decision(enum.Enum):
     ALLOW = "allow"
     ASK = "ask"
-    DEFAULT = "default"
 
 
 class PolicyError(ValueError):
@@ -159,15 +158,13 @@ def is_approved(path: str, cwd: str | None = None) -> bool:
     return any(_is_within(target, root) for root in _approved_roots(cwd))
 
 
-def decide(file_path: str, is_delete: bool = False, cwd: str | None = None) -> Decision:
+def decide(file_path: str, cwd: str | None = None) -> Decision:
     absolute = _absolute(file_path, cwd)
     if is_protected(absolute):
         return Decision.ASK
     if is_approved(absolute, cwd):
         return Decision.ALLOW
-    if is_delete:
-        return Decision.ASK
-    return Decision.DEFAULT
+    return Decision.ASK
 
 
 def add_user_folder(path: str) -> list[str]:

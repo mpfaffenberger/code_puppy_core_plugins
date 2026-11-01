@@ -79,10 +79,8 @@ class TestPromptGate:
         target = str(project / name)
         assert _prompted(mode, prompts, target, "write to", yolo)
 
-    def test_edit_outside_prompts_only_when_not_yolo(
-        self, mode, yolo, outside, prompts
-    ):
-        assert _prompted(mode, prompts, outside, "replace text in", yolo) is not yolo
+    def test_edit_outside_always_prompts(self, mode, yolo, outside, prompts):
+        assert _prompted(mode, prompts, outside, "replace text in", yolo)
 
     def test_delete_outside_always_prompts(self, mode, yolo, outside, prompts):
         assert _prompted(mode, prompts, outside, "delete", yolo)
@@ -91,9 +89,8 @@ class TestPromptGate:
         target = str(project / "old.txt")
         assert not _prompted(mode, prompts, target, "delete", yolo)
 
-    def test_delete_snippet_outside_is_an_edit(self, mode, yolo, outside, prompts):
-        prompted = _prompted(mode, prompts, outside, "delete snippet from", yolo)
-        assert prompted is not yolo
+    def test_delete_snippet_outside_always_prompts(self, mode, yolo, outside, prompts):
+        assert _prompted(mode, prompts, outside, "delete snippet from", yolo)
 
     def test_temp_dir_edit_never_prompts(self, mode, yolo, tmp_path, prompts):
         target = str(tmp_path / "scratch.txt")
@@ -112,26 +109,12 @@ class TestPromptGate:
 
 class TestGateMapping:
     @pytest.mark.parametrize(
-        ("operation", "expected_is_delete"),
-        [
-            ("delete", True),
-            ("  DELETE ", True),
-            ("delete snippet from", False),
-            ("write to", False),
-        ],
+        ("decision", "expected"),
+        [(folder_policy.Decision.ALLOW, True), (folder_policy.Decision.ASK, False)],
     )
-    def test_is_delete_only_for_exact_delete(
-        self, operation, expected_is_delete, monkeypatch
-    ):
-        seen = {}
-
-        def record(file_path, is_delete=False, cwd=None):
-            seen["is_delete"] = is_delete
-            return folder_policy.Decision.DEFAULT
-
-        monkeypatch.setattr(folder_policy, "decide", record)
-        assert rc._policy_gate("x.py", operation) is None
-        assert seen["is_delete"] is expected_is_delete
+    def test_policy_gate_maps_decision(self, decision, expected, monkeypatch):
+        monkeypatch.setattr(folder_policy, "decide", lambda *args, **kwargs: decision)
+        assert rc._policy_gate("x.py") is expected
 
 
 def _resolve(where, project, outside):
@@ -181,7 +164,7 @@ class TestHandlersAndAgents:
         [
             ("edit", "project_src", "never"),
             ("edit", "protected", "always"),
-            ("edit", "outside", "unless_yolo"),
+            ("edit", "outside", "always"),
             ("delete", "outside", "always"),
         ],
     )
@@ -191,10 +174,6 @@ class TestHandlersAndAgents:
         file_path = _resolve(where, project, outside)
         with patch.object(rc, "get_yolo_mode", return_value=yolo):
             result = _run_as_subagent(mode, kind, file_path)
-        expected_prompts = {
-            "never": 0,
-            "always": 1,
-            "unless_yolo": 0 if yolo else 1,
-        }[prompt_rule]
+        expected_prompts = {"never": 0, "always": 1}[prompt_rule]
         assert len(prompts) == expected_prompts
         assert result is (expected_prompts == 0)

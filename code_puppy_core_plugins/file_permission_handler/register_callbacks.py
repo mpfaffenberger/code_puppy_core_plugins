@@ -266,13 +266,12 @@ def _preview_delete_file(file_path: str) -> str | None:
         return None
 
 
-def _policy_gate(file_path: str, operation: str) -> bool | None:
-    """True = allow, False = force prompt, None = defer to yolo. Errors defer; never allow."""
+def _policy_gate(file_path: str) -> bool | None:
+    """True = allow, False = force prompt even in yolo, None = policy errored, defer to yolo."""
     try:
         from code_puppy_core_plugins.file_permission_handler import folder_policy
 
-        is_delete = operation.strip().lower() == "delete"
-        decision = folder_policy.decide(file_path, is_delete=is_delete)
+        decision = folder_policy.decide(file_path)
         return {
             folder_policy.Decision.ALLOW: True,
             folder_policy.Decision.ASK: False,
@@ -303,7 +302,7 @@ def prompt_for_file_permission(
         - confirmed: True if permission is granted, False otherwise
         - user_feedback: Optional feedback message from user to send back to the model
     """
-    gate = _policy_gate(file_path, operation)
+    gate = _policy_gate(file_path)
     if gate is True or (gate is None and get_yolo_mode()):
         return True, None
 
@@ -488,7 +487,7 @@ def get_permission_handler_help() -> str:
 - Detailed preview support with diff highlighting
 - Automatic preview generation from operation data
 - Approved folders: edits inside them never prompt; protected paths always ask
-- Deletes outside approved folders always ask, even in YOLO mode; see /approved_folders"""
+- Edits and deletes outside approved folders always ask, even in YOLO mode; see /approved_folders"""
 
 
 def get_file_permission_prompt_additions() -> str:
@@ -518,7 +517,7 @@ async def prompt_for_file_permission_async(
     with the running asyncio loop instead of bailing out via
     ``arrow_select() called from async context``.
     """
-    gate = _policy_gate(file_path, operation)
+    gate = _policy_gate(file_path)
     if gate is True or (gate is None and get_yolo_mode()):
         return True, None
 

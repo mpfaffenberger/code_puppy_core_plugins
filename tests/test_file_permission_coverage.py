@@ -233,11 +233,11 @@ class TestPromptForFilePermission:
         )
 
         # Relative f{i}.txt resolves inside the approved cwd and would be
-        # auto-allowed; force the DEFAULT path so every call reaches the prompt.
+        # auto-allowed; force the ASK path so every call reaches the prompt.
         monkeypatch.setattr(
             folder_policy,
             "decide",
-            lambda *args, **kwargs: folder_policy.Decision.DEFAULT,
+            lambda *args, **kwargs: folder_policy.Decision.ASK,
         )
 
         concurrent = [0]
