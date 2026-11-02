@@ -130,6 +130,7 @@ Every file stays well under the 600-line cap and owns one concern.
 | `permissions.py` | Wires Code Puppy's two approval edges to the client via the SDK's `request_permission`: the `tools.common` approval backend (files, cross-thread) and the `run_shell_command` hook (shell). Fails closed. |
 | `io_delegation.py` | `DelegatedFileSystemBackend` (sync, cross-thread) + `DelegatedCommandExecutor` (async terminal lifecycle) that plug into the core I/O seams, capability-gated. |
 | `state.py` | Process-wide run context: the SDK connection + its loop, the active session id, and the open-tool-call stack — so the permission/I/O seams (plain module functions) can reach the running connection and correlate events. |
+| `folder.py` | Per-session working-directory scope (`working_directory`) and `/cd` argument parsing (`cd_argument`). |
 
 ```
 Client ──stdin──▶ acp.run_agent ──▶ CodePuppyAgent.prompt ──▶ ACPSession ──▶ agent.run_with_mcp
@@ -226,6 +227,18 @@ family (`create`, `wait_for_exit`, `output`, `kill`, `release`).
 - Multi-turn is native: `_message_history` persists across `session/prompt`
   calls within the same session.
 - `cwd` from `session/new` anchors that session's tools.
+- Each chat keeps its own folder. The shell tool, project rules (`AGENTS.md`), and project agents use that chat's folder, not the folder the CLI process started in. The plugin builds each chat's agent inside that folder's scope for `session/new`, `session/load`, `session/resume`, `session/fork`, and model changes.
+
+### Change a chat's folder with `/cd`
+
+Run `/cd <folder>` in a chat to move only that chat. The command works as follows:
+
+- `/cd <folder>` resolves the folder against the chat's current folder.
+- A path that is not a directory fails without changing anything.
+- A valid folder is saved, so `session/list` and `session/resume` report it.
+- The plugin rebuilds only that chat's agent, so `AGENTS.md` is re-read.
+- `/cd` with no argument reports the chat's folder.
+- The process folder never changes. The plugin never calls `os.chdir`.
 
 ---
 

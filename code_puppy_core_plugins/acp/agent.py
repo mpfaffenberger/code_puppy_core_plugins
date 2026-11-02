@@ -41,6 +41,7 @@ from acp.schema import (
 
 from code_puppy_core_plugins.acp import (
     capabilities,
+    folder,
     io_delegation,
     mcp_config,
     permissions,
@@ -269,11 +270,12 @@ class CodePuppyAgent(Agent):
         if session is None:
             return
         try:
-            history = list(session.agent.get_message_history())
-            session.agent = self._new_agent()
-            session.agent.set_message_history(history)
-            if session.mcp_specs:
-                mcp_config.attach(session.agent, session.mcp_specs)
+            with folder.working_directory(session.cwd):
+                history = list(session.agent.get_message_history())
+                session.agent = self._new_agent()
+                session.agent.set_message_history(history)
+                if session.mcp_specs:
+                    mcp_config.attach(session.agent, session.mcp_specs)
         except Exception:  # noqa: BLE001
             logger.debug("ACP: model rebind failed", exc_info=True)
 
@@ -420,20 +422,24 @@ class CodePuppyAgent(Agent):
         ``scope=None`` bucket on every new/loaded/forked session avoids that
         without touching any other session's already-scoped sub-agent
         warnings.
+
+        Building inside the chat's folder matters because instructions are baked
+        at build time.
         """
         from code_puppy.agents._builder import reset_model_fallback_warnings
 
         reset_model_fallback_warnings(scope=None)
-        agent = self._new_agent()
-        if rehydrate:
-            history = persistence.load_history(session_id)
-            if history:
-                try:
-                    agent.set_message_history(history)
-                except Exception:  # noqa: BLE001
-                    logger.debug("ACP: history rehydrate failed", exc_info=True)
-        if mcp_servers:
-            mcp_config.attach(agent, mcp_servers)
+        with folder.working_directory(cwd):
+            agent = self._new_agent()
+            if rehydrate:
+                history = persistence.load_history(session_id)
+                if history:
+                    try:
+                        agent.set_message_history(history)
+                    except Exception:  # noqa: BLE001
+                        logger.debug("ACP: history rehydrate failed", exc_info=True)
+            if mcp_servers:
+                mcp_config.attach(agent, mcp_servers)
         session = ACPSession(
             session_id,
             agent,
