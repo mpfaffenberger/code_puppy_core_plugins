@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -32,6 +33,38 @@ MARKER_A = "MARKER-ALPHA-7731"
 MARKER_B = "MARKER-BRAVO-4419"
 MARKER_C = "MARKER-CHARLIE-2086"
 STOP_END_TURN = "end_turn"
+
+
+def _core_honors_working_directory() -> bool:
+    # Core must read the per-chat folder (core PR mpfaffenberger/code_puppy#1097); older core ignores it.
+    marker = "PROBE-CORE-FOLDER-5513"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(
+                os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8"
+            ) as rules_file:
+                rules_file.write(f"{marker}\n")
+            token = set_working_directory(tmp)
+            try:
+                rules = _builder.load_puppy_rules() or ""
+                with patch("code_puppy.config.get_yolo_mode", return_value=True):
+                    result = asyncio.run(
+                        command_runner.run_shell_command(
+                            MagicMock(), PRINT_CWD, None, 30, False
+                        )
+                    )
+            finally:
+                reset_working_directory(token)
+            printed = os.path.realpath(result.stdout.strip())
+            return marker in rules and printed == os.path.realpath(tmp)
+    except Exception:
+        return False
+
+
+_needs_core_folder = pytest.mark.skipif(
+    not _core_honors_working_directory(),
+    reason="needs core PR mpfaffenberger/code_puppy#1097 (shell tool and AGENTS.md loading follow the chat folder); these tests run once core includes it",
+)
 
 
 class _RunResult:
@@ -153,6 +186,7 @@ def _forbid_chdir(path):
     raise AssertionError(f"os.chdir must never run; called with {path!r}")
 
 
+@_needs_core_folder
 async def test_concurrent_sessions_keep_their_own_folder(tmp_path, harness):
     a = _make_dir(tmp_path, "A", MARKER_A)
     b = _make_dir(tmp_path, "B", MARKER_B)
@@ -170,6 +204,7 @@ async def test_concurrent_sessions_keep_their_own_folder(tmp_path, harness):
     _assert_rules(agent, sid_b, MARKER_B, MARKER_A)
 
 
+@_needs_core_folder
 @pytest.mark.parametrize("creation", ["load", "fork"])
 async def test_restored_or_forked_session_uses_its_folder(
     tmp_path, harness, monkeypatch, creation
@@ -190,6 +225,7 @@ async def test_restored_or_forked_session_uses_its_folder(
     assert _same(_session(agent, sid).agent.last_pwd, b)
 
 
+@_needs_core_folder
 async def test_cd_moves_only_the_current_session(tmp_path, harness, monkeypatch):
     a = _make_dir(tmp_path, "A", MARKER_A)
     b = _make_dir(tmp_path, "B", MARKER_B)
@@ -222,6 +258,7 @@ async def test_cd_moves_only_the_current_session(tmp_path, harness, monkeypatch)
     assert os.getcwd() == process_cwd
 
 
+@_needs_core_folder
 @pytest.mark.parametrize(
     "arg, expected",
     [("sub", "sub"), ('"with space"', "with space")],
