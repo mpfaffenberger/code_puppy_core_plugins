@@ -293,7 +293,7 @@ The result has this shape:
 }
 ```
 
-Themes appear in this order: 14 curated themes, then `default`. The `surprise`
+Themes appear in this order: curated themes in menu order, then `default`. The `surprise`
 theme is excluded. The `default` entry has `null` for `appearance`, `palette`,
 and `roles`, because it restores the terminal's own colors.
 
