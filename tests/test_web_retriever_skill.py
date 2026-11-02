@@ -24,7 +24,7 @@ def test_web_retriever_skill_registration_matches_frontmatter() -> None:
     metadata = parse_yaml_frontmatter(content)
 
     assert entry["name"] == metadata["name"] == "web-retriever"
-    assert "web scraping" in metadata["description"]
+    assert "website data extraction" in metadata["description"]
     assert 'invoke_agent(agent_name="web-retriever"' in content
 
 

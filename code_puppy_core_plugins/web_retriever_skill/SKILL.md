@@ -1,19 +1,20 @@
 ---
 name: web-retriever
-description: Use before handling web scraping, browser automation, crawling, structured data extraction, authenticated or interactive website workflows, monitoring pages for changes, or website screenshots. Delegates browser work to the web-retriever agent; not for test assertions or visual QA.
-version: "1.2"
+description: Use to delegate website data extraction (scraping, crawling, pagination, bulk lookups, page monitoring, bulk form filling, and saving results to files). Use qa-kitten instead to test or inspect how a trusted page works or looks, or when the user names qa-kitten.
+version: "1.3"
 author: code-puppy
 tags:
-  - web
+  - browser
   - scraping
-  - browser-automation
+  - crawling
   - extraction
+  - monitoring
 ---
 
 # Web Retriever Delegation
 
-Delegate browser-driven work to the specialized `web-retriever` agent instead
-of rebuilding browser automation in the calling agent.
+Delegate website data extraction to the specialized `web-retriever` agent
+instead of rebuilding browser automation in the calling agent.
 
 ## Delegate these tasks
 
@@ -21,11 +22,11 @@ Use `invoke_agent(agent_name="web-retriever", ...)` for:
 
 - scraping or crawling one or more pages;
 - extracting structured data from HTML or JavaScript-rendered applications;
-- navigating links, pagination, tabs, dialogs, or multi-step flows;
-- filling forms or working through authenticated sessions;
+- following links, pagination, or tabs to collect data;
+- bulk lookups, bulk form filling, and authenticated sessions that return data;
 - monitoring a page for changes;
-- capturing or analyzing website screenshots;
-- any workflow that needs browser rendering or interaction.
+- saving page content or screenshots to a file as data;
+- any other browser task whose result is data to extract or save.
 
 Give the sub-agent a concrete target, desired output, format, and constraints.
 Web Retriever no longer writes a file on its own initiative for open-ended
@@ -62,15 +63,20 @@ invoke_agent(
   prevents a URL beginning with `-` from becoming a command option. Use `wget`
   only after confirming it is installed and pass its equivalent end-of-options
   marker. Honor an explicit user request for a particular safe command.
-- **Testing and visual assertions:** use `qa-kitten` for browser test
-  assertions, regression checks, and visual QA. Web Retriever gathers and
-  interacts with web content; it is not the test runner.
+- **Testing, visual checks, and interactive inspection:** use `qa-kitten` to
+  verify a flow, rendering, or accessibility, or to explore a trusted app and
+  report what it shows. Web Retriever gathers data; it is not the test runner.
+  Honor an explicit request for either agent, and switch to the other when one
+  has failed on the task. A switch or explicit request never overrides QA
+  Kitten's safety boundaries: do not send authenticated, production, or
+  sensitive pages to QA Kitten. Report the blocker instead.
 - **Local image analysis:** use the image-analysis tool directly when the user
   already supplied an image and no website navigation is required.
 
 Escalate a simple fetch to Web Retriever only when it grows into parsing,
-extraction, navigation, interaction, authentication, crawling, monitoring, or
-browser rendering.
+extraction, crawling, monitoring, or authenticated retrieval. When the user
+wants a verdict on, or a description of, how a page works or looks, use
+`qa-kitten` instead.
 
 ## Stay platform-neutral
 
