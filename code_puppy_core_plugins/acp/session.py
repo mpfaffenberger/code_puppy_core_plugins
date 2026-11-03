@@ -23,7 +23,13 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 from acp.schema import Usage
 
-from code_puppy_core_plugins.acp import commands, content, persistence, state
+from code_puppy_core_plugins.acp import (
+    commands,
+    composer_ext,
+    content,
+    persistence,
+    state,
+)
 
 if TYPE_CHECKING:
     from code_puppy.agents.base_agent import BaseAgent
@@ -38,10 +44,12 @@ STOP_REFUSAL = "refusal"
 
 @dataclass
 class PromptResult:
-    """Outcome of one turn: an ACP stop reason plus optional token usage."""
+    """Outcome of one turn: an ACP stop reason plus optional usage and wire _meta."""
 
     stop_reason: str
     usage: Optional[Usage] = None
+    # Ready-to-send wire ``_meta``; set only for a cancelled turn.
+    field_meta: Optional[dict[str, Any]] = None
 
 
 class ACPSession:
@@ -65,6 +73,13 @@ class ACPSession:
         # Set while a ``session/prompt`` is in flight so ``cancel`` has a task
         # to cancel. ``None`` means idle.
         self._task: Optional["asyncio.Task[Any]"] = None
+        # True for the whole prompt (including slash commands); guards overlap.
+        self._running = False
+        # Set only when cancel() cancels a live task; see cancel().
+        self._cancel_requested = False
+        # Last available_commands_update sent for this session.
+        # Written by: agent.py :: _announce_commands()
+        self.commands_sent: Optional[list[Any]] = None
 
     async def prompt(self, blocks: List[Any]) -> PromptResult:
         """Run the agent on a user turn and return the stop reason + usage.
@@ -77,10 +92,25 @@ class ACPSession:
              stays on the agent instance, so the next turn continues.
           4. If nothing streamed (streaming disabled/empty), send the final
              result text as one ``agent_message_chunk`` so the client sees it.
+
+        Raises ``RequestError`` (prompt_in_flight) if this session already has a
+        prompt running; the in-flight turn is left untouched.
         """
+        if self._running:
+            raise composer_ext.prompt_in_flight_error(self.session_id)
+        self._running = True
+        try:
+            return await self._run_turn(blocks)
+        finally:
+            self._running = False
+
+    async def _run_turn(self, blocks: List[Any]) -> PromptResult:
+        """Run one turn; the caller owns the ``_running`` flag."""
         from code_puppy.messaging import set_session_context
 
-        parsed = content.parse_prompt(blocks)
+        self._cancel_requested = False
+        media_types = composer_ext.agent_binary_media_types(self.agent)
+        parsed = content.parse_prompt(blocks, media_types)
         text = parsed.text
         if not text.strip() and not parsed.attachments and not parsed.link_attachments:
             return PromptResult(STOP_END_TURN)
@@ -93,6 +123,8 @@ class ACPSession:
             and commands.is_command(text)
         ):
             expanded = await commands.run(self.session_id, text)
+            if self._cancel_requested:
+                return PromptResult(STOP_CANCELLED)
             if not expanded:
                 return PromptResult(STOP_END_TURN)
             text = expanded
@@ -126,8 +158,13 @@ class ACPSession:
                 )
             )
             result = await self._task
+            # Core swallows cancellation, so the handler's own cancel would be lost;
+            # the SDK response send then hangs after the connection closes.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise asyncio.CancelledError
             self._absorb_history(result)
-            stop_reason = STOP_END_TURN
+            stop_reason = STOP_CANCELLED if self._cancel_requested else STOP_END_TURN
         except asyncio.CancelledError:
             # Two ways here: our own cancel cancelled the inner task (report
             # ``cancelled``), or THIS coroutine was cancelled (SDK teardown) while the
@@ -167,7 +204,12 @@ class ACPSession:
             await self._send_final_result(result)
         elif stop_reason == STOP_REFUSAL:
             await self._send_error_notice(error)
-        return PromptResult(stop_reason, _to_acp_usage(result))
+        field_meta = (
+            composer_ext.interrupted_meta(self.session_id)
+            if stop_reason == STOP_CANCELLED
+            else None
+        )
+        return PromptResult(stop_reason, _to_acp_usage(result), field_meta)
 
     def _absorb_history(self, result: Any) -> None:
         """Fold a completed run's full message list back into the agent.
@@ -195,7 +237,9 @@ class ACPSession:
 
         Besides cancelling the asyncio task, force-kill any local shell
         processes the run spawned so they don't orphan. (Shells delegated to
-        the client run client-side and are unaffected.)
+        the client run client-side and are unaffected.) Core may swallow the
+        cancel, so ``_cancel_requested`` is the authoritative signal that the
+        turn was cancelled.
 
         Only *requests* cancellation -- delivery happens at the task's next
         await point, whenever that is, not immediately. Callers that need
@@ -203,6 +247,9 @@ class ACPSession:
         included) before they act should use :meth:`cancel_and_wait` instead.
         """
         task = self._task
+        if self._running:
+            # Turn-scoped (incl. slash-command phase); idle cancels stay no-ops.
+            self._cancel_requested = True
         if task is not None and not task.done():
             task.cancel()
         try:
@@ -243,6 +290,19 @@ class ACPSession:
             # prompt()'s own except block already logs/handles run failures;
             # a close shouldn't raise because the run it interrupted failed.
             logger.debug("ACP: cancel_and_wait observed run failure", exc_info=True)
+
+    def steer(self, blocks: List[Any]) -> dict[str, Any]:
+        """Queue a mid-run steer; ``not_running`` when no agent run is in flight.
+
+        Called by: composer_ext.py :: handle_ext_method()
+        """
+        text = composer_ext.extract_steer_text(blocks)
+        if text is None:
+            return {"accepted": False, "reason": "unsupported_content"}
+        if self._task is None:
+            return {"accepted": False, "reason": "not_running"}
+        composer_ext.steer_session(self.session_id, text)
+        return {"accepted": True}
 
     async def _send_error_notice(self, error: Optional[BaseException]) -> None:
         """Tell the client a turn failed, so it isn't a silent empty response.

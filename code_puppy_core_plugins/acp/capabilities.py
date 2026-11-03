@@ -25,6 +25,8 @@ from acp.schema import (
     SessionResumeCapabilities,
 )
 
+from code_puppy_core_plugins.acp import composer_ext
+
 
 def agent_capabilities() -> AgentCapabilities:
     """Describe what Code Puppy can do, for the ``initialize`` response.
@@ -41,6 +43,9 @@ def agent_capabilities() -> AgentCapabilities:
       (in-memory history duplication), ``resume`` (persisted rehydration), and
       ``additional_directories`` (multi-root), all advertised via the SDK's
       marker sub-models.
+    * ``_meta`` (``field_meta``) -- ``codePuppy/steer`` only when the core
+      supports per-session steering, and ``codePuppy/binaryMediaTypes`` for the
+      default model. Keys are omitted when the installed core lacks them.
     """
     return AgentCapabilities(
         prompt_capabilities=PromptCapabilities(
@@ -54,6 +59,7 @@ def agent_capabilities() -> AgentCapabilities:
             resume=SessionResumeCapabilities(),
             additional_directories=SessionAdditionalDirectoriesCapabilities(),
         ),
+        field_meta=composer_ext.capabilities_meta(),
     )
 
 

@@ -25,7 +25,6 @@ from acp import Agent
 from acp.schema import (
     AgentCapabilities,
     AuthenticateResponse,
-    AvailableCommand,
     AvailableCommandsUpdate,
     ClientCapabilities,
     CloseSessionResponse,
@@ -41,6 +40,7 @@ from acp.schema import (
 
 from code_puppy_core_plugins.acp import (
     capabilities,
+    composer_ext,
     io_delegation,
     mcp_config,
     permissions,
@@ -148,11 +148,14 @@ class CodePuppyAgent(Agent):
         the client injects are attached to the agent.
         """
         session_id = f"sess_{uuid.uuid4().hex[:16]}"
-        self._make_session(session_id, cwd, additional_directories, mcp_servers)
+        session = self._make_session(
+            session_id, cwd, additional_directories, mcp_servers
+        )
         self._announce_commands_soon(session_id)
         return NewSessionResponse(
             session_id=session_id,
             config_options=session_config.config_options() or None,
+            field_meta=composer_ext.session_meta(session),
         )
 
     async def load_session(
@@ -179,6 +182,7 @@ class CodePuppyAgent(Agent):
         self._announce_commands_soon(session_id)
         return LoadSessionResponse(
             config_options=session_config.config_options() or None,
+            field_meta=composer_ext.session_meta(session),
         )
 
     async def resume_session(
@@ -199,6 +203,7 @@ class CodePuppyAgent(Agent):
         self._announce_commands_soon(session_id)
         return ResumeSessionResponse(
             config_options=session_config.config_options() or None,
+            field_meta=composer_ext.session_meta(session),
         )
 
     async def fork_session(
@@ -291,7 +296,11 @@ class CodePuppyAgent(Agent):
         options = session_config.apply_config_option(config_id, value)
         if config_id == session_config.MODEL_OPTION_ID:
             self._rebind_session_model(session_id)
-        return SetSessionConfigOptionResponse(config_options=options or None)
+        self._refresh_commands()
+        return SetSessionConfigOptionResponse(
+            config_options=options or None,
+            field_meta=composer_ext.session_meta(self._sessions.get(session_id)),
+        )
 
     async def list_sessions(
         self, cursor: Optional[str] = None, cwd: Optional[str] = None, **kwargs: Any
@@ -357,14 +366,21 @@ class CodePuppyAgent(Agent):
         write a fresh warning into this session's bucket a moment *after*
         the purge, leaking that one entry forever (nothing will call
         ``close_session`` for this id a second time).
+
+        Core's per-session pause/interrupted state is released even when an
+        earlier step raises, since no second close will come.
         """
         from code_puppy.agents._builder import reset_model_fallback_warnings
 
-        session = self._sessions.pop(session_id, None)
-        if session is not None:
-            await session.cancel_and_wait()
-        persistence.delete(session_id)
-        reset_model_fallback_warnings(scope=session_id)
+        try:
+            permissions.cancel_pending(session_id)
+            session = self._sessions.pop(session_id, None)
+            if session is not None:
+                await session.cancel_and_wait()
+            persistence.delete(session_id)
+            reset_model_fallback_warnings(scope=session_id)
+        finally:
+            composer_ext.release_session(session_id)
         return CloseSessionResponse()
 
     # ---- Prompt turn ------------------------------------------------------
@@ -376,13 +392,22 @@ class CodePuppyAgent(Agent):
         if session is None:
             raise ValueError(f"unknown session: {session_id}")
         outcome = await session.prompt(prompt)
-        return PromptResponse(stop_reason=outcome.stop_reason, usage=outcome.usage)
+        return PromptResponse(
+            stop_reason=outcome.stop_reason,
+            usage=outcome.usage,
+            field_meta=outcome.field_meta,
+        )
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
-        """Cancel the in-flight run for a session (notification)."""
+        """Cancel the in-flight run and any pending approval (file or shell) for a session."""
+        permissions.cancel_pending(session_id)
         session = self._sessions.get(session_id)
         if session is not None:
             session.cancel()
+
+    async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Route ``_code_puppy/*`` extension requests (the SDK strips the ``_``)."""
+        return await composer_ext.handle_ext_method(method, params, self._sessions)
 
     # ---- Helpers ----------------------------------------------------------
     def _agent_capabilities(self) -> AgentCapabilities:
@@ -462,6 +487,11 @@ class CodePuppyAgent(Agent):
         if loop is not None:
             loop.create_task(self._announce_commands(session_id))
 
+    def _refresh_commands(self) -> None:
+        """Re-announce commands to every open session; unchanged lists are skipped."""
+        for sid in list(self._sessions):
+            self._announce_commands_soon(sid)
+
     async def _announce_commands(self, session_id: str) -> None:
         """Tell the client which slash commands Code Puppy exposes.
 
@@ -470,23 +500,27 @@ class CodePuppyAgent(Agent):
         serialized onto the wire. Without this the client can receive the
         notification before it knows the session id and drop it as "unknown
         session". 100ms is imperceptible and comfortably after the reply.
+
+        Resends only when the list differs from what this session last got, so
+        a fresh ``ACPSession`` (new or loaded) always receives it once.
         """
         await asyncio.sleep(0.1)
         connection = state.get_connection()
         if connection is None:
             return
+        session = self._sessions.get(session_id)
+        if session is None:
+            return
         try:
-            from code_puppy.command_line.command_registry import get_unique_commands
-
-            available = [
-                AvailableCommand(name=c.name, description=c.description)
-                for c in get_unique_commands()
-            ]
+            available = composer_ext.available_commands()
         except Exception:  # noqa: BLE001
             logger.debug("ACP: could not enumerate slash commands", exc_info=True)
             return
-        if not available:
+        if not available or available == session.commands_sent:
             return
+        # Mark before the await so an overlapping announce sees it and skips.
+        previous = session.commands_sent
+        session.commands_sent = available
         update = AvailableCommandsUpdate(
             session_update="available_commands_update",
             available_commands=available,
@@ -494,4 +528,5 @@ class CodePuppyAgent(Agent):
         try:
             await connection.session_update(session_id, update)
         except Exception:  # noqa: BLE001
+            session.commands_sent = previous
             logger.debug("ACP: available_commands_update failed", exc_info=True)
