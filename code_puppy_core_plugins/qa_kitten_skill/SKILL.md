@@ -1,6 +1,6 @@
 ---
 name: qa-kitten
-description: Use to delegate browser testing and interactive inspection of trusted local, test, or staging apps (verify flows, rendering, layout and accessibility, reproduce UI bugs, or explore and report what the page shows). Use web-retriever instead for bulk extraction, crawling, saving data files, or authenticated or sensitive pages, or when the user names web-retriever.
+description: Use to delegate browser testing and interactive inspection of trusted local, test, or staging apps (verify flows, rendering, layout and accessibility, reproduce UI bugs, or explore and report what the page shows). Use web-retriever instead for bulk extraction, crawling, saving data files, or production, public, authenticated, or sensitive pages, or when the user names web-retriever.
 version: 1.1.0
 author: Code Puppy
 tags:
@@ -58,9 +58,10 @@ and any defects.""",
 Pick by what the user wants back. QA Kitten returns a verdict on, or a
 description of, how a page works or looks. `web-retriever` returns extracted
 data. Honor an explicit user choice of either agent, and switch to the other
-when one has failed on the task. A switch or explicit choice never overrides the
-Safety and Access Boundaries below: do not send authenticated, production, or
-sensitive pages to QA Kitten. Report the blocker instead.
+once when one has failed on the task; if it also fails, report both failures.
+A switch or explicit choice never overrides the Safety and Access Boundaries
+below: do not send authenticated, production, or sensitive pages to QA Kitten.
+Report the blocker instead.
 
 ## Do Not Delegate
 

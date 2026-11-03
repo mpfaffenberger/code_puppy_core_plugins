@@ -1,6 +1,6 @@
 ---
 name: web-retriever
-description: Use to delegate website data extraction (scraping, crawling, pagination, bulk lookups, page monitoring, bulk form filling, and saving results to files). Use qa-kitten instead to test or inspect how a trusted page works or looks, or when the user names qa-kitten.
+description: Use to delegate website data extraction (scraping, crawling, pagination, bulk lookups, page monitoring, bulk form filling, and saving results to files) and to view or describe public, production, or authenticated pages. Use qa-kitten instead to test or inspect how a trusted page works or looks, or when the user names qa-kitten.
 version: "1.3"
 author: code-puppy
 tags:
@@ -26,6 +26,8 @@ Use `invoke_agent(agent_name="web-retriever", ...)` for:
 - bulk lookups, bulk form filling, and authenticated sessions that return data;
 - monitoring a page for changes;
 - saving page content or screenshots to a file as data;
+- viewing, describing, or screenshotting pages QA Kitten cannot open (public,
+  production, or authenticated sites);
 - any other browser task whose result is data to extract or save.
 
 Give the sub-agent a concrete target, desired output, format, and constraints.
@@ -66,17 +68,19 @@ invoke_agent(
 - **Testing, visual checks, and interactive inspection:** use `qa-kitten` to
   verify a flow, rendering, or accessibility, or to explore a trusted app and
   report what it shows. Web Retriever gathers data; it is not the test runner.
-  Honor an explicit request for either agent, and switch to the other when one
-  has failed on the task. A switch or explicit request never overrides QA
-  Kitten's safety boundaries: do not send authenticated, production, or
-  sensitive pages to QA Kitten. Report the blocker instead.
+  Honor an explicit request for either agent, and switch to the other once when
+  one has failed on the task; if it also fails, report both failures. A switch
+  or explicit request never overrides QA Kitten's safety boundaries: do not
+  send authenticated, production, or sensitive pages to QA Kitten. Report the
+  blocker instead.
 - **Local image analysis:** use the image-analysis tool directly when the user
   already supplied an image and no website navigation is required.
 
 Escalate a simple fetch to Web Retriever only when it grows into parsing,
 extraction, crawling, monitoring, or authenticated retrieval. When the user
-wants a verdict on, or a description of, how a page works or looks, use
-`qa-kitten` instead.
+wants a verdict on, or a description of, how a trusted local, test, or staging
+page works or looks, use `qa-kitten` instead. Keep public, production, or
+authenticated pages with Web Retriever.
 
 ## Stay platform-neutral
 

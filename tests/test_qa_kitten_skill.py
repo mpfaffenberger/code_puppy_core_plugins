@@ -67,15 +67,21 @@ def test_browser_skills_split_by_deliverable_within_safety_limits() -> None:
     assert "web-retriever" in qa.description
     assert "qa-kitten" in web.description
     assert "trusted local, test, or staging" in qa.description
+    assert "production" in qa.description
+    assert "public" in qa.description
 
     qa_body = " ".join(qa_path.read_text(encoding="utf-8").split())
     web_body = " ".join(web_path.read_text(encoding="utf-8").split())
     for body in (qa_body, web_body):
         assert "explicit" in body
         assert "has failed on the task" in body
+        assert "report both failures" in body
         assert (
             "do not send authenticated, production, or sensitive pages" in body.lower()
         )
+    assert (
+        "Keep public, production, or authenticated pages with Web Retriever" in web_body
+    )
     assert "any workflow that needs browser rendering" not in web_body
     assert "Delegate browser-driven work" not in web_body
 
