@@ -40,6 +40,7 @@ from acp.schema import (
 )
 
 from code_puppy_core_plugins.acp import (
+    auth_status,
     capabilities,
     io_delegation,
     mcp_config,
@@ -126,11 +127,16 @@ class CodePuppyAgent(Agent):
                 title="Code Puppy",
                 version=_code_puppy_version(),
             ),
+            auth_methods=auth_status.auth_methods(),
         )
 
     async def authenticate(self, method_id: str, **kwargs: Any) -> AuthenticateResponse:
-        """No auth flow — Code Puppy authenticates via its own model config."""
-        return AuthenticateResponse()
+        """Report the registered auth status for ``method_id``.
+        Never logs in, calls the network, or prompts."""
+        report = auth_status.auth_status_for(method_id)
+        if report is None:
+            return AuthenticateResponse()
+        return AuthenticateResponse(field_meta=auth_status.auth_status_meta(report))
 
     # ---- Session lifecycle ------------------------------------------------
     async def new_session(
