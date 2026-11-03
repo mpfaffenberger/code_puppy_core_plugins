@@ -273,6 +273,31 @@ class TestNameSession:
         assert changed is True
         assert (live["title"], live["tags"], live["ai_named_at"]) == ("Mine", ["ai"], 3)
 
+    def test_real_core_guard_keeps_rename_that_lands_before_the_write(self, tmp_path):
+        from code_puppy import session_storage
+        from code_puppy.command_line import session_browser_data
+
+        if not hasattr(session_storage, "set_user_title"):
+            pytest.skip("core predates the user-title guard")
+        real_merge = session_browser_data.merge_sidecar
+
+        def rename_then_merge(base_dir, session_name, updates):
+            session_storage.set_user_title(base_dir, session_name, "Mine")
+            return real_merge(base_dir, session_name, updates)
+
+        with patch(
+            "code_puppy.command_line.session_browser_data.merge_sidecar",
+            rename_then_merge,
+        ):
+            _, live, _ = self._run(
+                tmp_path,
+                {"message_count": 3},
+                json.dumps({"title": "AI pick", "tags": ["ai"]}),
+            )
+        stored = json.loads((tmp_path / "s1_meta.json").read_text())
+        assert (stored["title"], stored["title_source"]) == ("Mine", "user")
+        assert live["title"] == "Mine"
+
 
 class TestSubmit:
     def test_deduplicates_inflight_sessions(self, tmp_path):
