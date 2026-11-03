@@ -191,6 +191,55 @@ def list_persisted(base_dir: Optional[Path] = None) -> List[PersistedSession]:
     return records
 
 
+def read_title(
+    session_id: str, *, user_only: bool = False, base_dir: Optional[Path] = None
+) -> Optional[str]:
+    """Return the session's display title from core's ``_meta.json`` sidecar.
+
+    ``user_only`` limits it to titles the user set via ``/session rename``, so
+    an auto-generated title is never announced as a rename.
+
+    Called by: agent.py :: list_sessions(), commands.py :: run()
+    """
+    try:
+        from code_puppy.command_line.session_browser_data import _get_session_metadata
+
+        meta = _get_session_metadata(_resolve_base(base_dir), _safe_name(session_id))
+        title = meta.get("title")
+        if not isinstance(title, str) or not title:
+            return None
+        if user_only:
+            from code_puppy.session_storage import has_user_title
+
+            if not has_user_title(meta):
+                return None
+        return title
+    except Exception:  # noqa: BLE001
+        logger.debug("ACP: session title read failed", exc_info=True)
+        return None
+
+
+def rename_session(
+    session_id: str, command: str, base_dir: Optional[Path] = None
+) -> bool:
+    """Run a ``/session rename`` for this ACP session; False if not a rename.
+
+    ACP sessions are stored under their own stem in ``AUTOSAVE_DIR/acp``, not as
+    the CLI's current session, so core's generic handler would rename the wrong
+    one. Older cores lack ``rename_from_command``; callers then fall back.
+    """
+    try:
+        from code_puppy.command_line.session_commands import rename_from_command
+    except ImportError:
+        logger.debug("ACP: core has no rename_from_command", exc_info=True)
+        return False
+    return rename_from_command(
+        command,
+        session_name=_safe_name(session_id),
+        base_dir=_resolve_base(base_dir),
+    )
+
+
 def delete(session_id: str, base_dir: Optional[Path] = None) -> None:
     """Remove a persisted session's JSON/pickle files + sidecars (best-effort).
 
