@@ -241,6 +241,22 @@ async def test_rename_without_title_or_saved_session_changes_nothing(
 
 @needs_rename_core
 @pytest.mark.asyncio
+async def test_renaming_to_the_current_title_is_confirmed_but_not_announced(
+    root, connection
+):
+    _seed(root)
+    _write_core_meta(root, SID, {"title": "Mine", "title_source": "user"})
+
+    assert await commands.run(SID, "/session rename Mine") is None
+
+    assert persistence.read_title(SID, user_only=True) == "Mine"
+    [(_, message)] = connection.updates
+    assert message.session_update == "agent_message_chunk"
+    assert not any(_is_session_info(u) for _, u in connection.updates)
+
+
+@needs_rename_core
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "command, stub_result, expected_result, expected_texts",
     [
