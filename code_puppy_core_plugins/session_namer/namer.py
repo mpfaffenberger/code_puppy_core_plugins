@@ -7,6 +7,9 @@ plus ``ai_named_at`` (the message count at naming time) so re-naming is
 last naming are fed back to the model, letting the title evolve
 gracefully instead of being regenerated from scratch.
 
+Sessions the user titled with ``/session rename`` are never named: the
+check runs before the model call and again right before the write.
+
 Follows the ``btw`` side-query pattern: a throwaway history-free
 pydantic_ai Agent on a worker thread with its own event loop. All work
 funnels through a single-worker executor so a burst of autosaves can
@@ -54,8 +57,19 @@ _inflight: set[str] = set()
 _inflight_lock = threading.Lock()
 
 
+def _user_titled(meta: dict) -> bool:
+    """True when ``/session rename`` owns the title."""
+    try:
+        from code_puppy.session_storage import has_user_title
+    except ImportError:  # core predates /session rename; same on-disk contract
+        return meta.get("title_source") == "user"
+    return has_user_title(meta)
+
+
 def naming_needed(meta: dict) -> bool:
-    """True when a session has never been AI-named or grew enough since."""
+    """True when a session isn't user-titled and was never AI-named or grew enough since."""
+    if _user_titled(meta):
+        return False
     named_at = meta.get("ai_named_at")
     if not isinstance(named_at, int):
         return True
@@ -221,11 +235,16 @@ def name_session(
             logger.debug("session_namer: unparseable output for %s", session_name)
             return False
 
+        # A /session rename can land during the model call; the user's title wins.
+        if _user_titled(_get_session_metadata(base_dir, session_name)):
+            return False
         updates = {**naming, "ai_named_at": len(history)}
         if not merge_sidecar(base_dir, session_name, updates):
             return False
         if live_meta is not None:
-            live_meta.update(updates)
+            # Mirror disk, not ``updates``: core's merge guard may keep a user title.
+            stored = _get_session_metadata(base_dir, session_name)
+            live_meta.update({key: stored[key] for key in updates if key in stored})
         return True
     except Exception:
         logger.debug("session_namer: naming %s failed", session_name, exc_info=True)
