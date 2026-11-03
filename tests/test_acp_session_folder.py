@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import pytest_asyncio
 from acp.schema import TextContentBlock
+from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from code_puppy.agents import _builder
 from code_puppy.tools import command_runner
@@ -351,3 +352,30 @@ def test_working_directory_falsy_cwd_is_noop(tmp_path, cwd):
             assert get_working_directory() == str(outer)
     finally:
         reset_working_directory(token)
+
+
+_REAL_SAVE = persistence.save  # captured at import, before the harness installs its spy
+
+
+async def test_cd_persists_new_folder_for_list_and_resume(
+    tmp_path, harness, monkeypatch
+):
+    monkeypatch.setattr(persistence, "save", _REAL_SAVE)
+    monkeypatch.setattr(replay, "replay_history", _noop_replay)
+    x = _make_dir(tmp_path, "X")
+    y = _make_dir(tmp_path, "Y")
+    agent = CodePuppyAgent()
+    sid = await _new(agent, x)
+    _session(agent, sid).agent.set_message_history(
+        [ModelRequest(parts=[UserPromptPart(content="hi")])]
+    )
+
+    await _say(agent, sid, f"/cd {y}")
+
+    on_disk = {r.session_id: r.cwd for r in persistence.list_persisted()}
+    assert _same(on_disk[sid], y)
+    restarted = CodePuppyAgent()
+    listed = {s.session_id: s.cwd for s in (await restarted.list_sessions()).sessions}
+    assert _same(listed[sid], y)
+    await restarted.load_session(cwd=listed[sid], session_id=sid)
+    assert _same(_session(restarted, sid).cwd, y)
