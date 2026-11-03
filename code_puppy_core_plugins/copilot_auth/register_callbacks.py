@@ -13,6 +13,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from code_puppy.callbacks import register_callback
+from code_puppy.command_line.utils import safe_input
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
 
 from .config import COPILOT_AUTH_CONFIG
@@ -212,8 +213,9 @@ def _handle_copilot_login(command: str) -> None:
             "   Press Enter to use github.com."
         )
         try:
-            raw = input("GitHub host [github.com]: ").strip()
-            host = raw if raw else "github.com"
+            # safe_input, not input(): on Windows prompt_toolkit leaves the
+            # console in VT-input mode, so raw input() echoes escape codes.
+            host = safe_input("GitHub host [github.com]: ") or "github.com"
         except (EOFError, KeyboardInterrupt):
             emit_warning("Copilot login cancelled.")
             return
