@@ -4,10 +4,9 @@ Everything is delivered as ACP **config options** (``session/set_config_option``
 -- clients (Zed, opencode, oh-my-pi) bind each bottom-bar dropdown to a config
 option by its ``category``, so this is the shape that actually populates them:
 
-* **Model picker** — a ``select`` option tagged ``category="model"``:
-  ``{id: "model", category: "model", type: "select", ...}``. Backed by
-  ``model_picker_completion.load_model_names`` + ``config.get_global_model_name``
-  / ``set_model_name``. Changing it rebinds the live session's model.
+* **Model picker** — a session-owned ``select`` option tagged
+  ``category="model"``. The global model is read only for legacy callers that
+  do not provide a session route; changes never write terminal-global state.
 * **Mode picker** — a ``select`` option tagged ``category="mode"``. Code Puppy
   has exactly one operating mode, so this is a single "Default" entry; we still
   send it so the client's mode dropdown reads "Default" instead of an empty
@@ -32,12 +31,14 @@ from acp.schema import (
     SessionConfigOptionSelect,
     SessionConfigSelectOption,
 )
+from code_puppy_core_plugins.acp.route import SessionRoute
 
 logger = logging.getLogger(__name__)
 
 # Config-option ids. ``MODEL_OPTION_ID`` is public because ``agent.py`` keys
 # its "rebind the live model" behaviour off it.
 MODEL_OPTION_ID = "model"
+AGENT_OPTION_ID = "agent"
 MODE_OPTION_ID = "mode"
 _STREAMING_ID = "enable_streaming"
 _STREAMING_ON = "on"
@@ -71,28 +72,35 @@ def _mode_option() -> SessionConfigOptionSelect:
     )
 
 
-def _model_choices() -> Tuple[List[str], Optional[str]]:
+def _model_choices(
+    current_model: Optional[str] = None,
+) -> Tuple[List[str], Optional[str]]:
     """Return ``(available_model_names, current_selection)`` from config.
 
     ``current`` is coerced into the available list so a picker always has a
     valid selection. Returns ``([], None)`` when there are no models to offer.
     """
     from code_puppy.command_line.model_picker_completion import load_model_names
-    from code_puppy.config import get_global_model_name
 
     names = list(load_model_names() or [])
     if not names:
         return [], None
-    current = get_global_model_name()
+    if current_model is None:
+        from code_puppy.config import get_global_model_name
+
+        current_model = get_global_model_name()
+    current = current_model
     return names, (current if current in names else names[0])
 
 
-def _model_option() -> Optional[SessionConfigOptionSelect]:
+def _model_option(
+    current_model: Optional[str] = None,
+) -> Optional[SessionConfigOptionSelect]:
     """Build the model picker as a ``category="model"`` select option.
 
     Returns ``None`` when there are no models to offer.
     """
-    names, current = _model_choices()
+    names, current = _model_choices(current_model)
     if not names or current is None:
         return None
     return SessionConfigOptionSelect(
@@ -105,19 +113,31 @@ def _model_option() -> Optional[SessionConfigOptionSelect]:
     )
 
 
-def set_model(model_id: str) -> bool:
-    """Switch the active model. Returns ``True`` on success."""
-    try:
-        from code_puppy.config import set_model_name
+def _agent_option(current_agent: str) -> SessionConfigOptionSelect:
+    """Build the session-local persona picker without changing terminal state."""
+    from code_puppy.agents.agent_manager import get_available_agents
 
-        set_model_name(model_id)
-        return True
-    except Exception:  # noqa: BLE001
-        logger.debug("ACP: set_model failed", exc_info=True)
-        return False
+    names = sorted(get_available_agents())
+    if current_agent not in names:
+        names.append(current_agent)
+        names.sort()
+    return SessionConfigOptionSelect(
+        id=AGENT_OPTION_ID,
+        name="Agent",
+        category="other",
+        type="select",
+        current_value=current_agent,
+        options=[
+            SessionConfigSelectOption(
+                value=name, name=name.replace("-", " ").replace("_", " ").title()
+            )
+            for name in names
+        ],
+        description="Persona owned by this ACP session.",
+    )
 
 
-def config_options() -> List[Any]:
+def config_options(route: Optional[SessionRoute] = None) -> List[Any]:
     """Build the config-option list for a session (model picker + streaming).
 
     Order matters for presentation: the model picker leads. Either entry is
@@ -125,11 +145,16 @@ def config_options() -> List[Any]:
     """
     opts: List[Any] = []
     try:
-        model_opt = _model_option()
+        model_opt = _model_option(route.model_id if route else None)
         if model_opt is not None:
             opts.append(model_opt)
     except Exception:  # noqa: BLE001
         logger.debug("ACP: could not build model option", exc_info=True)
+    if route is not None:
+        try:
+            opts.append(_agent_option(route.agent_name))
+        except Exception:  # noqa: BLE001
+            logger.debug("ACP: could not build agent option", exc_info=True)
     try:
         opts.append(_mode_option())
     except Exception:  # noqa: BLE001
@@ -159,18 +184,20 @@ def config_options() -> List[Any]:
     return opts
 
 
-def apply_config_option(config_id: str, value: Any) -> List[Any]:
+def apply_config_option(
+    config_id: str, value: Any, route: Optional[SessionRoute] = None
+) -> List[Any]:
     """Apply a config-option change and return the refreshed option list."""
     try:
-        if config_id == MODEL_OPTION_ID:
-            set_model(str(value))
-        elif config_id == _STREAMING_ID:
+        if config_id in (MODEL_OPTION_ID, AGENT_OPTION_ID):
+            raise ValueError(f"{config_id} is owned by the ACP session route")
+        if config_id == _STREAMING_ID:
             from code_puppy.config import set_config_value
 
             set_config_value("enable_streaming", "true" if _as_bool(value) else "false")
     except Exception:  # noqa: BLE001
         logger.debug("ACP: apply_config_option failed", exc_info=True)
-    return config_options()
+    return config_options(route)
 
 
 def _as_bool(value: Any) -> bool:
