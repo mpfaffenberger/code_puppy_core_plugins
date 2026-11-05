@@ -30,6 +30,7 @@ grok_oauth
 herdr
 hook_creator
 hook_manager
+logfire_instrumentation
 logfire_oauth
 logfire_sessions
 mcp_binding_prompt

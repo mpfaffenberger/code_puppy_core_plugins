@@ -172,6 +172,7 @@ def test_mint_write_token_selects_project_and_persists(
         client_id="client",
     )
     client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.delenv("LOGFIRE_TOKEN", raising=False)
     project = oauth.mint_write_token(tokens, project="pydantic/puppy", client=client)
 
     assert project.token == "pylf-secret"
@@ -179,8 +180,46 @@ def test_mint_write_token_selects_project_and_persists(
     assert oauth.project_credential_path().stat().st_mode & 0o777 == 0o600
     assert requests[0].headers["authorization"] == "Bearer oauth-secret"
     assert requests[1].url.path.endswith("/pydantic/projects/puppy/write-tokens/")
-    assert oauth.os.environ["LOGFIRE_TOKEN"] == "pylf-secret"
-    monkeypatch.delenv("LOGFIRE_TOKEN")
+    assert "LOGFIRE_TOKEN" not in oauth.os.environ
+
+
+@pytest.mark.parametrize(
+    ("active", "expected_warning"), [(True, None), (False, "not active yet")]
+)
+def test_onboard_enables_instrumentation_through_the_plugin(
+    monkeypatch: pytest.MonkeyPatch, active: bool, expected_warning: str | None
+) -> None:
+    from code_puppy.config import get_value
+
+    from code_puppy_core_plugins.logfire_instrumentation import instrumentation
+
+    info, warning = Mock(), Mock()
+    configure = Mock(return_value=active)
+    monkeypatch.setattr(callbacks, "_authenticate", Mock(return_value=object()))
+    monkeypatch.setattr(
+        callbacks,
+        "mint_write_token",
+        Mock(
+            return_value=Mock(
+                token="pylf-new", project_name="puppy", project_url="https://x"
+            )
+        ),
+    )
+    monkeypatch.setattr(callbacks, "emit_success", Mock())
+    monkeypatch.setattr(callbacks, "emit_info", info)
+    monkeypatch.setattr(callbacks, "emit_warning", warning)
+    monkeypatch.setattr(instrumentation, "configure", configure)
+
+    callbacks._onboard(None, "pydantic/puppy")
+
+    assert get_value("enable_logfire") == "true"
+    configure.assert_called_once_with(token="pylf-new")
+    enabled = any("is enabled" in str(call) for call in info.call_args_list)
+    assert enabled is active
+    if expected_warning:
+        assert expected_warning in warning.call_args.args[0]
+    else:
+        warning.assert_not_called()
 
 
 def test_mint_write_token_requires_selection_for_multiple_projects() -> None:

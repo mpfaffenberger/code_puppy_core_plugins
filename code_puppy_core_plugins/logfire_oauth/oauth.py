@@ -309,7 +309,6 @@ def mint_write_token(
             response.json(), base_url=tokens.base_url
         )
         save_project_credentials(credentials)
-        os.environ["LOGFIRE_TOKEN"] = credentials.token
         return credentials
     except httpx.HTTPError as exc:
         raise OAuthError(
