@@ -25,6 +25,8 @@ from acp.schema import (
     SessionResumeCapabilities,
 )
 
+from code_puppy_core_plugins.acp import folders
+
 
 def agent_capabilities() -> AgentCapabilities:
     """Describe what Code Puppy can do, for the ``initialize`` response.
@@ -41,8 +43,17 @@ def agent_capabilities() -> AgentCapabilities:
       (in-memory history duplication), ``resume`` (persisted rehydration), and
       ``additional_directories`` (multi-root), all advertised via the SDK's
       marker sub-models.
+    * ``_meta.codePuppy.approvedFolders`` — the extension methods in
+      ``folders.py``, so clients can detect them before calling.
     """
     return AgentCapabilities(
+        field_meta={
+            "codePuppy": {
+                "approvedFolders": {
+                    "methods": [f"_{name}" for name in folders.METHOD_NAMES]
+                }
+            }
+        },
         prompt_capabilities=PromptCapabilities(
             image=True, audio=False, embedded_context=True
         ),

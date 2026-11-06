@@ -25,7 +25,7 @@ restarts), `session/set_mode`, `session/set_config_option`. Assistant text +
 > servers and multi-root `additionalDirectories` are honoured. Workspace file
 > I/O and shell delegate to the client (capability-gated), and **permissions**
 > for file writes and shell commands are surfaced in the client's own allow/deny
-> dialog in non-yolo mode.
+> dialog in non-yolo mode, and for file writes outside approved folders even in yolo mode.
 >
 > Not implemented: `elicitation/*` (the SDK's connection API exposes no
 > elicitation call in 0.10.1), `plan` updates (Code Puppy has no plan model),
@@ -133,6 +133,7 @@ Every file stays well under the 600-line cap and owns one concern.
 | `session_config.py` | Build the model list (surfaced as ACP *modes*) + safe config options (including the read-only `approval_mode`); apply `set_mode` / `set_config_option`. |
 | `bridge.py` | `EventBridge`: registers `stream_event` / `pre_tool_call` / `post_tool_call` hooks and translates them into SDK `session/update`s via `connection.session_update`. (Hooks, **not** MessageBus — see *Event source*.) |
 | `permissions.py` | The ACP approval backend (`tools.common` seam, cross-thread bridge to `request_permission`) for file and shell approvals, `cancel_pending` for cancel/close, and a legacy `run_shell_command` fallback hook for cores without `can_prompt_for_approval`. No timeout; fails closed. |
+| `folders.py` | Extension methods `_code_puppy/approved_folders/{get,add,remove}` that read and edit the user's approved folders via `file_permission_handler/folder_policy.py`. |
 | `io_delegation.py` | `DelegatedFileSystemBackend` (sync, cross-thread) + `DelegatedCommandExecutor` (async terminal lifecycle) that plug into the core I/O seams, capability-gated. |
 | `themes.py` | Read-only theme catalog: the `_code_puppy/themes/list` ext method, the `codePuppy/theme` session `_meta`, and the `_code_puppy/themes/changed` poll (`ThemeWatcher`). |
 | `state.py` | Process-wide run context: the SDK connection + its loop, the active session id, and the open-tool-call stack — so the permission/I/O seams (plain module functions) can reach the running connection and correlate events. |
@@ -292,6 +293,99 @@ family (`create`, `wait_for_exit`, `output`, `kill`, `release`).
 - Multi-turn is native: `_message_history` persists across `session/prompt`
   calls within the same session.
 - `cwd` from `session/new` anchors that session's tools.
+
+---
+
+## Approved folders
+
+Code Puppy trusts some folders without asking. Clients read and change the
+user's folder list with three extension methods. The leading underscore marks
+each name as an extension, so the SDK routes it to `ext_method`.
+
+| Method | Params | Result |
+|--------|--------|--------|
+| `_code_puppy/approved_folders/get` | `sessionId` (optional) | The folder lists. |
+| `_code_puppy/approved_folders/add` | `path` (required), `sessionId` (optional) | The updated lists. |
+| `_code_puppy/approved_folders/remove` | `path` (required), `sessionId` (optional) | The updated lists. |
+
+With `sessionId`, the project folder is that session's `cwd`. Without it, the
+project folder is the process working folder.
+
+Every method returns the same shape:
+
+```json
+{
+  "projectFolder": "/home/example/project",
+  "tempFolders": ["/tmp"],
+  "userFolders": ["/home/example/shared-libs"],
+  "protectedPaths": [".git/", ".env", ".env.*", "*.pem"]
+}
+```
+
+The `protectedPaths` value in this example is abbreviated. See
+[Protected paths](#protected-paths) for the full list.
+
+For example, add a folder:
+
+```json
+{"jsonrpc": "2.0", "id": 7, "method": "_code_puppy/approved_folders/add",
+ "params": {"sessionId": "sess_example", "path": "/home/example/shared-libs"}}
+```
+
+A rejected path returns a JSON-RPC `-32602` (invalid params) error. The
+`message` field and `data.reason` both carry the policy's explanation:
+
+```json
+{"jsonrpc": "2.0", "id": 7, "error": {"code": -32602,
+ "message": "Folder does not exist: /home/example/missing",
+ "data": {"message": "Folder does not exist: /home/example/missing",
+         "reason": "Folder does not exist: /home/example/missing"}}}
+```
+
+An unknown extension name returns `-32601` (method not found). A missing or
+non-string `path`, or an unknown `sessionId`, returns `-32602`.
+
+### Advertisement
+
+The `initialize` response lists the methods under
+`agentCapabilities._meta.codePuppy.approvedFolders.methods`. Check this block
+before you call the methods.
+
+### Terminal command
+
+The terminal command `/approved_folders` manages the same list:
+
+- `/approved_folders` or `/approved_folders list`: show approved folders and protected paths.
+- `/approved_folders add <path>`: approve a folder. `~` expands; quote paths with spaces.
+- `/approved_folders remove <path>`: remove a folder from the approved list.
+- `/approved_folders protected`: show the protected paths.
+
+It uses the same policy code and the same `puppy.cfg` key as the ACP methods, so the two stay 1:1. Errors show the same wording as the ACP rejection reason.
+
+### Policy rules
+
+- Edits and deletes inside the project folder, temp folders, or user folders
+  run without a prompt. Protected paths are the exception.
+- Protected paths always ask, even in yolo mode and inside approved folders.
+- Edits and deletes outside approved and temp folders always ask, even in yolo mode.
+- Shell commands are not enforced by folder policy. Shell and network
+  sandboxing are deferred.
+
+### Protected paths
+
+Protected paths match by name, case-insensitively on macOS and Windows:
+
+- Directories: `.git/` (including a worktree's gitdir), `.agents/`, `.codex/`,
+  `.aws/`, `.code_puppy/`, `.ssh/`, `.gnupg/`.
+- Files: `.env`, `.env.*`, `.npmrc`, `.pypirc`, `.netrc`, `id_rsa*`,
+  `id_ed25519*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `*.cer`,
+  `*.keystore`, `*.jks`.
+
+### Persistence
+
+User folders persist under the `approved_folders` key in the `[puppy]` section of
+the CLI's `puppy.cfg`, as a JSON array of absolute paths. Only the CLI writes
+this key. Clients use the methods and never write config.
 
 ---
 

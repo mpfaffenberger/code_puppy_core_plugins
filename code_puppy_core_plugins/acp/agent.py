@@ -42,6 +42,7 @@ from acp.schema import (
 from code_puppy_core_plugins.acp import (
     auth_status,
     capabilities,
+    folders,
     io_delegation,
     mcp_config,
     permissions,
@@ -406,6 +407,10 @@ class CodePuppyAgent(Agent):
         session = self._sessions.get(session_id)
         if session is not None:
             session.cancel()
+
+    async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Serve Code Puppy's ``_code_puppy/...`` extension methods (see ``folders.py``)."""
+        return folders.handle(method, params, self._sessions)
 
     # ---- Helpers ----------------------------------------------------------
     def _agent_capabilities(self) -> AgentCapabilities:
