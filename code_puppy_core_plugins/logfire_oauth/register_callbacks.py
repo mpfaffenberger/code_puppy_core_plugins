@@ -67,17 +67,24 @@ def _onboard(region: str | None, project: str | None) -> None:
         emit_error(str(exc))
         return
     from code_puppy.config import set_value
-    from code_puppy.observability import configure_logfire
 
-    set_value("enable_logfire", "true")
-    configure_logfire()
+    from ..logfire_instrumentation.instrumentation import ENABLE_KEY, configure
+
+    set_value(ENABLE_KEY, "true")
     emit_success(
         f"Minted a write token for Logfire project {credentials.project_name}."
     )
     emit_info(f"Project: {credentials.project_url}")
-    emit_info(
-        "Logfire observability is enabled; the token is saved for future Code Puppy runs."
-    )
+    if configure(token=credentials.token):
+        emit_info(
+            "Logfire observability is enabled; the token is saved for future "
+            "Code Puppy runs."
+        )
+    else:
+        emit_warning(
+            "The token is saved, but Logfire observability is not active yet; "
+            "see the warning above."
+        )
 
 
 def _status() -> None:
@@ -97,15 +104,6 @@ def _status() -> None:
         emit_info(f"Project URL: {credentials.project_url}")
     else:
         emit_warning("Write token: not configured; run /logfire onboard")
-
-
-def _startup() -> None:
-    """Make a previously minted write token available to Logfire configuration."""
-    import os
-
-    credentials = load_project_credentials()
-    if credentials and "LOGFIRE_TOKEN" not in os.environ:
-        os.environ["LOGFIRE_TOKEN"] = credentials.token
 
 
 def _handle(command: str, name: str) -> bool | None:
@@ -156,10 +154,6 @@ def _handle(command: str, name: str) -> bool | None:
     return True
 
 
-# Plugin modules load before core observability is configured. Restore the token
-# immediately; the startup callback remains as a defensive idempotent fallback.
-_startup()
-register_callback("startup", _startup)
 register_callback("custom_command_help", _help)
 register_callback("custom_command", _handle)
 register_callback("register_tools", _register_tools)

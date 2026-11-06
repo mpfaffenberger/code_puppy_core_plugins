@@ -1,7 +1,7 @@
 """Run context for the active ACP connection.
 
-Code Puppy's approval and I/O seams live at its *edges* (the
-``run_shell_command`` hook, the ``tools.common`` approval backend, and the
+Code Puppy's approval and I/O seams live at its *edges* (the ``tools.common`` approval
+backend, the legacy ``run_shell_command`` hook on older cores, and the
 ``tools.io_backends`` filesystem/command backends). Those are plain module
 functions with no reference to the live ACP connection, so this module is the
 small, explicit bridge between them and the running agent.

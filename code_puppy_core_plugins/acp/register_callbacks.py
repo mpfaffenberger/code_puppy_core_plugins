@@ -94,6 +94,7 @@ async def _serve() -> int:
         await run_agent(agent)
     finally:
         agent.shutdown()
+        permissions.cancel_pending()
         permissions.uninstall()
         io_delegation.uninstall()
         state.set_connection(None, None)

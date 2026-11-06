@@ -21,6 +21,7 @@ from pydantic_ai import BinaryContent, RunContext
 from pydantic_ai.messages import UserPromptPart
 
 from code_puppy import config
+from code_puppy.error_logging import log_error
 
 TOOL_NAME = "save_attachments_as_references"
 
@@ -117,6 +118,7 @@ def register_save_attachments_as_references(agent: Any) -> None:
         try:
             paths = await asyncio.to_thread(_save_reference_images, images)
         except OSError as exc:
+            log_error(exc, context="save_attachments_as_references failed")
             return {
                 "success": False,
                 "error": f"Could not save reference images: {exc}",

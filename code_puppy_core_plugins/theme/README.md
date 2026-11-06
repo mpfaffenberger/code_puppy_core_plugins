@@ -73,6 +73,7 @@ Green Screen ports the canonical phosphor colors from [vybestack/llxprt-code](ht
 | `osc_palette.py` | OSC escape sequences for terminal-wide bg/fg/ANSI palette (Level 3) |
 | `picker.py` | prompt_toolkit split-panel TUI with live preview |
 | `register_callbacks.py` | `/theme` command handler, glue only |
+| `catalog.py` | Pure, read-only catalog for ACP clients (wire dicts, semantic roles, active-theme read) |
 | `__init__.py` | Re-applies persisted (L1 + L2 + L3) on plugin load |
 
 ## How each level works (the spicy bits)
@@ -84,3 +85,38 @@ Green Screen ports the canonical phosphor colors from [vybestack/llxprt-code](ht
 **Level 3** — fires xterm OSC sequences (`\\033]10;#fg\\007`, `\\033]11;#bg\\007`, `\\033]4;N;#hex\\007`) which modern terminals honor terminal-wide. Auto-resets on exit via `atexit`. Persists across restarts via JSON in `puppy.cfg`. Supported in iTerm2, Terminal.app, Alacritty, kitty, ode, GNOME Terminal, Windows Terminal. Unsupported terminals silently ignore.
 
 Plays nice with `/colors` — same color pool, same config keys for banners.
+
+## Theme catalog
+
+`catalog.py` is a pure, read-only catalog for ACP clients. It never applies a
+palette, emits OSC sequences, or writes config. Its only config access is the
+read in `read_active_theme_id()`.
+
+| Function | Purpose |
+|----------|---------|
+| `build_catalog()` | Returns fresh wire dicts: curated themes in menu order, then `default`. `surprise` is excluded. |
+| `semantic_roles(palette)` | Maps a `bg`/`fg`/`ansi` palette to the semantic roles below. |
+| `appearance_for(bg_hex)` | Returns `dark` when the WCAG relative luminance of `bg` is below 0.179, else `light`. |
+| `active_theme_id(raw)` | Returns `raw` if it is a catalog id, else `None`. |
+| `read_active_theme_id()` | Reads `ACTIVE_THEME_CONFIG_KEY` and returns `active_theme_id(...)`. Never raises. |
+
+### Role mapping
+
+| Role | Source | AA adjustment |
+|------|--------|---------------|
+| `background` | `bg` | None (base color) |
+| `surface` | `bg` blended 8% toward `fg` | None (exempt) |
+| `text` | `fg` | Yes |
+| `mutedText` | `ansi[8]` | Yes |
+| `accent` | `ansi[4]` | Yes |
+| `success` | `ansi[2]` | Yes |
+| `error` | `ansi[1]` | Yes |
+| `warning` | `ansi[3]` | Yes |
+| `running` | `ansi[6]` | Yes |
+| `diffAdd` | `ansi[2]` | Yes |
+| `diffRemove` | `ansi[1]` | Yes |
+
+AA adjustment: if a role has less than 4.5:1 contrast against `background`, it
+is blended toward `#ffffff` on dark themes or `#000000` on light themes in 5%
+steps. The first step that reaches 4.5:1 is used. The input palette is never
+modified, and output values are lowercase `#rrggbb`.
