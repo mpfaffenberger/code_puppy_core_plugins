@@ -6,7 +6,8 @@ Three namespaces, all stored in the same shared kennel:
 * ``agent:<name>``  — per-agent diary, private by convention
 * ``user:default``  — cross-cutting user preferences
 
-Keep this module dependency-free; both recorder and retriever import it.
+Both recorder and retriever import this module, so keep imports minimal;
+``detect_cwd()`` deliberately lazy-imports core to follow the chat's folder.
 """
 
 from __future__ import annotations

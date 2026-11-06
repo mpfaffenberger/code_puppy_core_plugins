@@ -38,28 +38,25 @@ STOP_END_TURN = "end_turn"
 
 def _core_honors_working_directory() -> bool:
     # Core must read the per-chat folder (core PR mpfaffenberger/code_puppy#1097); older core ignores it.
+    # Only a missing marker or a pwd mismatch means "older core"; real errors (renamed or
+    # crashing core helpers) are left to surface so they fail the suite instead of skipping it.
     marker = "PROBE-CORE-FOLDER-5513"
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            with open(
-                os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8"
-            ) as rules_file:
-                rules_file.write(f"{marker}\n")
-            token = set_working_directory(tmp)
-            try:
-                rules = _builder.load_puppy_rules() or ""
-                with patch("code_puppy.config.get_yolo_mode", return_value=True):
-                    result = asyncio.run(
-                        command_runner.run_shell_command(
-                            MagicMock(), PRINT_CWD, None, 30, False
-                        )
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "AGENTS.md"), "w", encoding="utf-8") as rules_file:
+            rules_file.write(f"{marker}\n")
+        token = set_working_directory(tmp)
+        try:
+            rules = _builder.load_puppy_rules() or ""
+            with patch("code_puppy.config.get_yolo_mode", return_value=True):
+                result = asyncio.run(
+                    command_runner.run_shell_command(
+                        MagicMock(), PRINT_CWD, None, 30, False
                     )
-            finally:
-                reset_working_directory(token)
-            printed = os.path.realpath(result.stdout.strip())
-            return marker in rules and printed == os.path.realpath(tmp)
-    except Exception:
-        return False
+                )
+        finally:
+            reset_working_directory(token)
+        printed = os.path.realpath(result.stdout.strip())
+        return marker in rules and printed == os.path.realpath(tmp)
 
 
 _needs_core_folder = pytest.mark.skipif(

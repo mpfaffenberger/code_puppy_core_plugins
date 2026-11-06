@@ -95,7 +95,9 @@ class ACPSession:
         ):
             cd_arg = folder.cd_argument(text)
             if cd_arg is not None:
-                await commands.emit(self.session_id, self.change_directory(cd_arg))
+                await commands.emit(
+                    self.session_id, await self.change_directory(cd_arg)
+                )
                 return PromptResult(STOP_END_TURN)
             with folder.working_directory(self.cwd):
                 expanded = await commands.run(self.session_id, text)
@@ -189,7 +191,7 @@ class ACPSession:
         if messages:
             self.agent.set_message_history(list(messages))
 
-    def change_directory(self, arg: str) -> str:
+    async def change_directory(self, arg: str) -> str:
         """Move only this chat's folder and return the text to show the client.
 
         Core's ``/cd`` calls ``os.chdir``, which would move every chat in the
@@ -206,8 +208,14 @@ class ACPSession:
         if not os.path.isdir(target):
             return t("cmd.cd.not_a_dir", path=arg)
         self.cwd = target
-        persistence.save(
-            self.session_id, self.agent, self.cwd, self.additional_directories
+        # Persist off the event loop (same reason as prompt()); no
+        # working_directory scope may be open across this await.
+        await asyncio.to_thread(
+            persistence.save,
+            self.session_id,
+            self.agent,
+            self.cwd,
+            self.additional_directories,
         )
         lines = [t("cmd.cd.success", path=target)]
         with folder.working_directory(target):
