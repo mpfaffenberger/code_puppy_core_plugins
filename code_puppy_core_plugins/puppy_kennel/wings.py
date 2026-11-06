@@ -11,10 +11,12 @@ Keep this module dependency-free; both recorder and retriever import it.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
 USER_WING = "user:default"
+UNKNOWN_ROOM = "session-unknown"
 
 
 def _resolve_worktree_root(git_path: Path) -> Path | None:
@@ -108,3 +110,34 @@ def detect_cwd() -> Path:
         return Path(os.getcwd())
     except OSError:
         return Path.home()
+
+
+def conversation_session_name() -> str:
+    """Stable conversation id for this window (not the per-run group_id).
+
+    Returns ``""`` when unavailable. Recorder (write) and packer (read) must
+    agree on this value, so failures are surfaced on the debug bus.
+    """
+    # Lazy imports keep this module free of import-time dependencies.
+    try:
+        from code_puppy.config import get_current_session_name
+
+        return (get_current_session_name() or "").strip()
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        from code_puppy.messaging.bus import emit_debug
+
+        emit_debug(f"[puppy_kennel] session name unavailable: {exc!r}")
+        return ""
+
+
+def room_name(conversation_id: str) -> str:
+    """Legacy-shaped ``session-<8 hex>`` room label keyed by conversation.
+
+    Same format as historical per-run labels, but hashed from the stable
+    conversation name so multi-turn dialogue in one window shares a room.
+    """
+    raw = conversation_id.strip()
+    if not raw:
+        return UNKNOWN_ROOM
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return f"session-{digest}"
