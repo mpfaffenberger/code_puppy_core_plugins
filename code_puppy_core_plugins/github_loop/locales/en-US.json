@@ -1,0 +1,4 @@
+{
+  "github_loop.help": "Run the inspect, patch, test, lint, diff, and GitHub PR workflow.",
+  "github_loop.usage": "Usage: /github-loop <task>\nExample: /github-loop Reproduce and fix issue #123, then open a PR"
+}
