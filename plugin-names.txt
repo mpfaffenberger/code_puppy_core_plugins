@@ -10,6 +10,7 @@ chatgpt_oauth
 claude_code_hooks
 claude_code_oauth
 code_puppy_agent
+codex_endpoint
 computer_use
 completion_notification
 context_indicator
