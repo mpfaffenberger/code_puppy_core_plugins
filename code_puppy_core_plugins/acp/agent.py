@@ -334,6 +334,7 @@ class CodePuppyAgent(Agent):
                     session_id=s.session_id,
                     cwd=s.cwd or cwd or "",
                     additional_directories=s.additional_directories or None,
+                    title=persistence.read_title(s.session_id),
                 )
             )
         for record in persistence.list_persisted():
@@ -347,6 +348,7 @@ class CodePuppyAgent(Agent):
                     session_id=record.session_id,
                     cwd=record.cwd or cwd or "",
                     additional_directories=record.additional_directories or None,
+                    title=persistence.read_title(record.session_id),
                 )
             )
         return ListSessionsResponse(sessions=infos, next_cursor=None)

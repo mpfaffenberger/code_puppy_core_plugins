@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
-from code_puppy_core_plugins.acp import state
+from code_puppy_core_plugins.acp import persistence, state
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,6 @@ async def run(session_id: str, command: str) -> Optional[str]:
     Internal ``__SENTINEL__`` strings (e.g. ``__AUTOSAVE_LOAD__``) are TUI-only
     affordances with no ACP meaning, so they are treated as handled, not modelled.
     """
-    from code_puppy.command_line.command_handler import handle_command
     from code_puppy.messaging.message_queue import get_global_queue
 
     queue = get_global_queue()
@@ -53,8 +52,11 @@ async def run(session_id: str, command: str) -> Optional[str]:
 
     queue.add_listener(_listener)
     result: Any = None
+    new_title: Optional[str] = None
     try:
-        result = await asyncio.to_thread(handle_command, command.strip())
+        result, new_title = await asyncio.to_thread(
+            _dispatch, session_id, command.strip()
+        )
     except Exception:  # noqa: BLE001
         logger.debug("ACP: slash command failed", exc_info=True)
     finally:
@@ -75,7 +77,23 @@ async def run(session_id: str, command: str) -> Optional[str]:
             await emit(session_id, text)
         return result.strip()
     await emit(session_id, text or f"Ran `{command.strip()}`.")
+    if new_title:
+        await _announce_title(session_id, new_title)
     return None
+
+
+def _dispatch(session_id: str, command: str) -> Tuple[Any, Optional[str]]:
+    """(handler result, user title this command newly set or None).
+
+    ACP sessions need their own rename target; see persistence.rename_session.
+    """
+    from code_puppy.command_line.command_handler import handle_command
+
+    before = persistence.read_title(session_id, user_only=True)
+    if persistence.rename_session(session_id, command):
+        after = persistence.read_title(session_id, user_only=True)
+        return None, after if after != before else None
+    return handle_command(command), None
 
 
 def _is_prompt_expansion(result: Any) -> bool:
@@ -102,6 +120,20 @@ def _render(messages: List[Any]) -> str:
             continue
         out.append(content if isinstance(content, str) else str(content))
     return "\n".join(s for s in out if s).strip()
+
+
+async def _announce_title(session_id: str, title: str) -> None:
+    """Tell the client the session's new title so an open session list updates."""
+    connection = state.get_connection()
+    if connection is None:
+        return
+    try:
+        from acp.schema import SessionInfoUpdate
+
+        update = SessionInfoUpdate(session_update="session_info_update", title=title)
+        await connection.session_update(session_id, update)
+    except Exception:  # noqa: BLE001
+        logger.debug("ACP: session title update failed", exc_info=True)
 
 
 async def emit(session_id: str, text: str) -> None:
