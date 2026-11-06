@@ -49,6 +49,7 @@ from code_puppy_core_plugins.acp import (
     replay,
     session_config,
     state,
+    themes,
 )
 from code_puppy_core_plugins.acp.bridge import EventBridge
 from code_puppy_core_plugins.acp.session import ACPSession
@@ -77,6 +78,7 @@ class CodePuppyAgent(Agent):
         self._sessions: Dict[str, ACPSession] = {}
         self._bridge = EventBridge()
         self._client_caps: Optional[ClientCapabilities] = None
+        self._theme_watcher = themes.ThemeWatcher()
 
     # ---- Connection lifecycle ---------------------------------------------
     def on_connect(self, conn: Any) -> None:
@@ -89,6 +91,11 @@ class CodePuppyAgent(Agent):
         state.set_connection(conn, asyncio.get_running_loop())
         self._bridge.register()
         permissions.install()
+        try:
+            self._theme_watcher.start()
+        except Exception as error:  # noqa: BLE001
+            # Startup must never fail on the theme watcher; log the class only.
+            logger.debug("ACP theme watcher not started: %s", type(error).__name__)
 
     def shutdown(self) -> None:
         """Unwire this agent's event hooks. Call once the connection ends.
@@ -98,6 +105,7 @@ class CodePuppyAgent(Agent):
         connection leaves the global callback registry clean.
         """
         self._bridge.unregister()
+        self._theme_watcher.stop()
 
     # ---- Handshake --------------------------------------------------------
     async def initialize(
@@ -159,6 +167,7 @@ class CodePuppyAgent(Agent):
         return NewSessionResponse(
             session_id=session_id,
             config_options=session_config.config_options() or None,
+            field_meta=themes.session_meta(),
         )
 
     async def load_session(
@@ -185,6 +194,7 @@ class CodePuppyAgent(Agent):
         self._announce_commands_soon(session_id)
         return LoadSessionResponse(
             config_options=session_config.config_options() or None,
+            field_meta=themes.session_meta(),
         )
 
     async def resume_session(
@@ -205,6 +215,7 @@ class CodePuppyAgent(Agent):
         self._announce_commands_soon(session_id)
         return ResumeSessionResponse(
             config_options=session_config.config_options() or None,
+            field_meta=themes.session_meta(),
         )
 
     async def fork_session(
@@ -372,6 +383,10 @@ class CodePuppyAgent(Agent):
         persistence.delete(session_id)
         reset_model_fallback_warnings(scope=session_id)
         return CloseSessionResponse()
+
+    async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Route ext requests (currently only themes) to the theme catalog."""
+        return await themes.handle_ext_method(method, params)
 
     # ---- Prompt turn ------------------------------------------------------
     async def prompt(

@@ -130,6 +130,7 @@ Every file stays well under the 600-line cap and owns one concern.
 | `bridge.py` | `EventBridge`: registers `stream_event` / `pre_tool_call` / `post_tool_call` hooks and translates them into SDK `session/update`s via `connection.session_update`. (Hooks, **not** MessageBus — see *Event source*.) |
 | `permissions.py` | Wires Code Puppy's two approval edges to the client via the SDK's `request_permission`: the `tools.common` approval backend (files, cross-thread) and the `run_shell_command` hook (shell). Fails closed. |
 | `io_delegation.py` | `DelegatedFileSystemBackend` (sync, cross-thread) + `DelegatedCommandExecutor` (async terminal lifecycle) that plug into the core I/O seams, capability-gated. |
+| `themes.py` | Read-only theme catalog: the `_code_puppy/themes/list` ext method, the `codePuppy/theme` session `_meta`, and the `_code_puppy/themes/changed` poll (`ThemeWatcher`). |
 | `state.py` | Process-wide run context: the SDK connection + its loop, the active session id, and the open-tool-call stack — so the permission/I/O seams (plain module functions) can reach the running connection and correlate events. |
 
 ```
@@ -316,6 +317,73 @@ model a `tool_result` (core's `pre_tool_call` handled-result contract) telling
 it to end the turn and wait. The client renders the questions and sends the
 answers as the user's next prompt. Clients that don't set the flag see no
 change.
+
+---
+
+## Theme catalog (`_code_puppy/themes/*`)
+
+You can list Code Puppy's color themes and track the active one without reading
+its config. The catalog is read-only: there is no setter.
+
+### `_code_puppy/themes/list`
+
+Send this request before or after `session/new`. It needs no session. Send
+`{}` or omit `params`; extra keys are ignored.
+
+The result has this shape:
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "active": "ocean",          // or null
+  "themes": [
+    {
+      "id": "ocean",
+      "label": "Ocean",
+      "icon": "...",
+      "blurb": "...",
+      "appearance": "dark",   // "dark" or "light"
+      "palette": { "bg": "#rrggbb", "fg": "#rrggbb", "ansi": ["#rrggbb", "...16 entries"] },
+      "roles": { "background": "#rrggbb", "surface": "#rrggbb", "text": "#rrggbb",
+                 "mutedText": "#rrggbb", "accent": "#rrggbb", "success": "#rrggbb",
+                 "error": "#rrggbb", "warning": "#rrggbb", "running": "#rrggbb",
+                 "diffAdd": "#rrggbb", "diffRemove": "#rrggbb" }
+    }
+    // ...more themes
+  ]
+}
+```
+
+Themes appear in this order: curated themes in menu order, then `default`. The `surprise`
+theme is excluded. The `default` entry has `null` for `appearance`, `palette`,
+and `roles`, because it restores the terminal's own colors.
+
+`active` is the ID of the catalog theme stored in the `theme_active_theme`
+config key. It is `null` when the key is unset, and also when the key holds
+`legacy-custom` or `surprise`.
+
+For the mapping from palette to roles, see
+[`theme/README.md`](../theme/README.md). This page does not repeat it.
+
+### `_meta` on session responses
+
+`session/new`, `session/load`, and `session/resume` results include
+`_meta["codePuppy/theme"] = {"active": <id or null>}`. Use it to paint the first
+frame without waiting for the list request.
+
+### `_code_puppy/themes/changed`
+
+When the active theme changes, the agent sends this notification with params
+`{"active": <id or null>}`. It sends one notification per change. The agent
+reads the config value every 2 seconds from the moment the client connects.
+The first reading is a baseline, so no notification is sent for it.
+
+### Unknown methods and older CLIs
+
+Any other `_code_puppy/*` method, such as `_code_puppy/themes/set`, returns
+JSON-RPC error `-32601` (method not found). Older Code Puppy CLIs omit the
+`_meta` key and return `-32601` for the list request. Clients should fall back
+to a bundled copy of the catalog when either happens.
 
 ---
 
