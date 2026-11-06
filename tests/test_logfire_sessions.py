@@ -186,6 +186,7 @@ def test_command_routing(tmp_path, isolated, monkeypatch):
 
     assert register_callbacks._handle("/other thing", "other") is None
 
+    monkeypatch.setattr(register_callbacks, "sdk_available", lambda: True)
     calls = {}
     monkeypatch.setattr(
         "code_puppy.config.set_value",
@@ -222,3 +223,47 @@ def test_post_autosave_swallows_errors(monkeypatch):
         "code_puppy_core_plugins.logfire_sessions.mirror.mirror_session", boom
     )
     register_callbacks._on_post_autosave(SimpleNamespace())  # must not raise
+
+
+def test_on_refuses_without_sdk(monkeypatch):
+    warning, set_value = MagicMock(), MagicMock()
+    monkeypatch.setattr(register_callbacks, "sdk_available", lambda: False)
+    monkeypatch.setattr(register_callbacks, "emit_warning", warning)
+    monkeypatch.setattr(register_callbacks, "emit_success", MagicMock())
+    monkeypatch.setattr("code_puppy.config.set_value", set_value)
+
+    assert (
+        register_callbacks._handle("/logfire-sessions on", "logfire-sessions") is True
+    )
+    set_value.assert_not_called()
+    warning.assert_called_once_with(register_callbacks.MISSING_SDK_HINT)
+
+
+def test_post_autosave_without_sdk_warns_once(monkeypatch):
+    warning, mirror_session = MagicMock(), MagicMock()
+    monkeypatch.setattr(register_callbacks, "_missing_sdk_warned", False)
+    monkeypatch.setattr(register_callbacks, "sdk_available", lambda: False)
+    monkeypatch.setattr(register_callbacks, "emit_warning", warning)
+    monkeypatch.setattr(
+        "code_puppy.config.get_value",
+        lambda key: "true" if key == "enable_logfire_sessions" else None,
+    )
+    monkeypatch.setattr(
+        "code_puppy_core_plugins.logfire_sessions.mirror.mirror_session",
+        mirror_session,
+    )
+
+    register_callbacks._on_post_autosave(SimpleNamespace())
+    register_callbacks._on_post_autosave(SimpleNamespace())
+
+    warning.assert_called_once_with(register_callbacks.MISSING_SDK_HINT)
+    mirror_session.assert_not_called()
+
+
+def test_post_autosave_is_dormant_when_disabled(monkeypatch):
+    sdk_check = MagicMock()
+    monkeypatch.setattr(register_callbacks, "sdk_available", sdk_check)
+    monkeypatch.setattr("code_puppy.config.get_value", lambda key: None)
+
+    register_callbacks._on_post_autosave(SimpleNamespace())
+    sdk_check.assert_not_called()

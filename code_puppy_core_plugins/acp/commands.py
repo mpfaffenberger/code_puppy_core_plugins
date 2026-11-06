@@ -72,9 +72,9 @@ async def run(session_id: str, command: str) -> Optional[str]:
         # output first, then hand the prompt back to the caller to run through the
         # agent (not display it as a canned answer).
         if text:
-            await _emit(session_id, text)
+            await emit(session_id, text)
         return result.strip()
-    await _emit(session_id, text or f"Ran `{command.strip()}`.")
+    await emit(session_id, text or f"Ran `{command.strip()}`.")
     return None
 
 
@@ -104,7 +104,7 @@ def _render(messages: List[Any]) -> str:
     return "\n".join(s for s in out if s).strip()
 
 
-async def _emit(session_id: str, text: str) -> None:
+async def emit(session_id: str, text: str) -> None:
     from acp.helpers import update_agent_message_text
 
     connection = state.get_connection()

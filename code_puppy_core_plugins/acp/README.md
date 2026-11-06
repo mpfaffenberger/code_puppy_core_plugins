@@ -86,27 +86,31 @@ plugin's protocol layer changed.
 |----------|--------|
 | **Protocol layer** | **Official `acp` SDK.** We implement its `Agent` interface; `acp.run_agent` owns stdio + framing. |
 | **Who does I/O** | **Delegated to the client when the client supports it.** Workspace file reads/writes go through the client's `fs/read_text_file` / `fs/write_text_file` (edits land in the client's diff UI; reads see unsaved buffers), and shell commands run via the client's `terminal/*`. This rides two small, general **I/O-backend seams** in core (`code_puppy/tools/io_backends.py`): a sync `FileSystemBackend` and an async `CommandExecutor`, both `None` by default (local I/O) and installed by this plugin, capability-gated, after `initialize`. Internal writes (config, session state, agent metadata) deliberately stay local — only *workspace* edits reroute (via `common.write_project_file`). |
-| **Permissions** | **the client is the authority (non-yolo).** Every approval — file writes and shell commands — is surfaced in the client's own allow/deny dialog via `session/request_permission`. No yolo forcing, no terminal prompts. |
+| **Permissions** | **the client is the authority (non-yolo).** Core runs one approval path for file writes and shell commands; ACP supplies the backend that asks the client via `session/request_permission`. No yolo forcing, no terminal prompts. |
 | **Entry point** | A `--acp` CLI flag contributed via the `register_cli_args` hook; `handle_cli_args` boots the agent (on its own loop, in a thread) and short-circuits normal TUI startup. |
 | **Core footprint** | Small, general, additive core seams — **no monkeypatching**: (1) a pluggable *approval backend* (`common.set_approval_backend`), (2) a *workspace write* wrapper (`common.write_project_file`) + backend-aware `_read_file`, and (3) `FileSystemBackend` / `CommandExecutor` registries (`tools/io_backends.py`). Each is useful to any non-terminal embedder, not ACP-specific. Everything else is this plugin + existing public hooks + the SDK. |
 
 ### Permissions in non-yolo mode (the important part)
 
-Code Puppy has two approval edges. In a headless ACP server there is no TTY, so
-the built-in stdin prompt would **fail closed** (auto-deny every file op — a
-latent bug this integration also fixes). We route both edges to the client *without*
-forcing yolo and *without* patching tool logic:
+Headless ACP has no TTY, so the built-in stdin prompt would fail closed. Instead,
+the approval decision lives in core and ACP only supplies the prompting backend,
+*without* forcing yolo or patching tool logic:
 
-* **File operations** use the **approval-backend seam** in `tools.common`. Sync
-  file tools run in Code Puppy's tool threadpool, so the backend
-  (`permissions.py`) bridges to the ACP event loop with
-  `run_coroutine_threadsafe` to ask the client via the SDK's `request_permission`,
-  then blocks the worker thread for the answer. The loop is free to service the
-  round-trip → no deadlock (guarded against being called on the loop itself).
-* **Shell commands** use the async `run_shell_command` hook (it runs on the ACP
-  loop and can `await` the client directly).
-
-Both edges **fail closed** if the connection drops or the client errors.
+* **One shared path in core:** yolo check, then sub-agent check, then queueing.
+  Sub-agents never prompt.
+* **ACP's backend** (`permissions.py`) asks the client via the SDK's
+  `request_permission`. Sync file tools run in the tool threadpool, so that path
+  bridges to the ACP loop with `run_coroutine_threadsafe` and blocks the worker
+  for the answer; it refuses to run on the loop itself (deadlock guard). Shell
+  commands go through core's same gate, which calls this backend (from a worker
+  thread, so the same bridge applies).
+* **No timeout:** like the terminal, the request waits. It ends on the client's
+  answer, on `session/cancel`, or when the connection closes. Cancel and
+  disconnect deny (fail closed).
+* **`approval_mode` config option:** read-only, reports `ask` or `auto` from yolo
+  mode. `apply_config_option` never writes config; client writes are ignored.
+* **Older cores** without `can_prompt_for_approval` get a fallback shell hook in
+  the plugin.
 
 ---
 
@@ -119,17 +123,20 @@ Every file stays well under the 600-line cap and owns one concern.
 | `register_callbacks.py` | Register the `--acp` flag; when present, redirect the console to stderr, run `acp.run_agent(CodePuppyAgent())` on its own loop in a thread, and return `{"handled": True}` so the TUI never starts. |
 | `agent.py` | `CodePuppyAgent(acp.Agent)` — the SDK agent implementation: initialize, new/load/resume/fork/list/close session, prompt, cancel, set_session_mode/model, set_config_option, authenticate, plus `on_connect` (stashes the client handle + installs approvals). |
 | `capabilities.py` | Declarative capability negotiation in SDK models: our `AgentCapabilities`, and parsing the client's `ClientCapabilities` into `(fs_read, fs_write, terminal)`. |
+| `auth_status.py` | Neutral provider registry that lets any plugin report sign-in state; read-only snapshots feed `authMethods` and `authenticate`. |
 | `content.py` | Parse ACP prompt content blocks → text + multimodal attachments (`BinaryContent` / `ImageUrl`), honouring `embeddedContext` + `image`. |
 | `session.py` | `ACPSession`: one ACP session ⇄ one `BaseAgent` + its `_message_history`. Runs each turn as a cancellable `asyncio.Task`; persists history after each turn; owns the final-result fallback. |
 | `commands.py` | Execute client-typed `/slash` commands via `command_handler`, capturing MessageBus output and forwarding it (never touches stdin). |
 | `persistence.py` | Pickle each session's history under `AUTOSAVE_DIR/acp` keyed by session id, plus an ACP metadata sidecar (`cwd` + `additionalDirectories` + title). Rehydrate on `load`/`resume`/`fork`; enumerate for `session/list` (`list_persisted`); tombstone on `session/close` (`delete`). |
 | `replay.py` | On `load`/`resume`, stream the rehydrated history back to the client as ordered `session/update`s (user / agent text / thinking / past tool calls) so the client rebuilds the thread UI. |
 | `mcp_config.py` | Translate client-injected ACP MCP server specs → pydantic-ai servers on the session agent. |
-| `session_config.py` | Build the model list (surfaced as ACP *modes*) + safe config options; apply `set_mode` / `set_config_option`. |
+| `session_config.py` | Build the model list (surfaced as ACP *modes*) + safe config options (including the read-only `approval_mode`); apply `set_mode` / `set_config_option`. |
 | `bridge.py` | `EventBridge`: registers `stream_event` / `pre_tool_call` / `post_tool_call` hooks and translates them into SDK `session/update`s via `connection.session_update`. (Hooks, **not** MessageBus — see *Event source*.) |
-| `permissions.py` | Wires Code Puppy's two approval edges to the client via the SDK's `request_permission`: the `tools.common` approval backend (files, cross-thread) and the `run_shell_command` hook (shell). Fails closed. |
+| `permissions.py` | The ACP approval backend (`tools.common` seam, cross-thread bridge to `request_permission`) for file and shell approvals, `cancel_pending` for cancel/close, and a legacy `run_shell_command` fallback hook for cores without `can_prompt_for_approval`. No timeout; fails closed. |
 | `io_delegation.py` | `DelegatedFileSystemBackend` (sync, cross-thread) + `DelegatedCommandExecutor` (async terminal lifecycle) that plug into the core I/O seams, capability-gated. |
+| `themes.py` | Read-only theme catalog: the `_code_puppy/themes/list` ext method, the `codePuppy/theme` session `_meta`, and the `_code_puppy/themes/changed` poll (`ThemeWatcher`). |
 | `state.py` | Process-wide run context: the SDK connection + its loop, the active session id, and the open-tool-call stack — so the permission/I/O seams (plain module functions) can reach the running connection and correlate events. |
+| `folder.py` | Per-session working-directory scope (`working_directory`) and `/cd` argument parsing (`cd_argument`). |
 
 ```
 Client ──stdin──▶ acp.run_agent ──▶ CodePuppyAgent.prompt ──▶ ACPSession ──▶ agent.run_with_mcp
@@ -186,7 +193,7 @@ double-send.
 | Method | Behaviour |
 |--------|-----------|
 | `initialize` | Negotiate version + capabilities; install capability-gated I/O delegation. |
-| `authenticate` / `logout` | No-op (auth is via Code Puppy's own model config/env). |
+| `authenticate` / `logout` | `authenticate` reports (read-only) the registered auth status for a known method id as `_meta.codePuppy.authStatus`, and succeeds even when that status is `missing` or `expired`; clients must read `status`, not infer from success. An unknown method id gets an empty response. `logout` is a no-op. |
 | `session/new` | Create an `ACPSession` (fresh `BaseAgent`) from `cwd` + `additionalDirectories`; attach client `mcpServers`; return models + config options; schedule `available_commands_update`. |
 | `session/load` | Re-open a thread: **replay persisted history into the agent AND stream it back to the client** as `session/update`s so the client rebuilds the thread UI. |
 | `session/resume` | Rehydrate + replay a session across a restart from persisted history. |
@@ -203,6 +210,66 @@ call in 0.10.1), `plan` updates (no native plan model), and the unstable
 `document/*` / `nes/*` / `providers/*` surface. The SDK router resolves any
 unimplemented method to a clean "method not found", so we advertise honestly
 and stub nothing.
+
+### Reporting sign-in state
+
+`auth_status.py` is a neutral registry: any plugin can register a provider that
+reports its sign-in state, and ACP clients see it in `initialize` (`authMethods`)
+and `authenticate`. Providers must be fast and synchronous; a provider that raises
+or returns a report with wrong-typed fields is skipped. If two providers report the
+same `method_id`, the first registered wins, so the outcome depends on plugin load order.
+
+```python
+from datetime import datetime, timezone
+
+from code_puppy_core_plugins.acp.auth_status import (
+    AuthStatusReport,
+    register_auth_status_provider,
+)
+
+
+def example_auth_status() -> AuthStatusReport | None:
+    session = _load_session()
+    if session is None:
+        return AuthStatusReport("example-login", "Example Login", "missing")
+    return AuthStatusReport(
+        "example-login",
+        "Example Login",
+        "signed_in",
+        expires_at=datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        user_id=session.user_name,
+    )
+
+
+register_auth_status_provider(example_auth_status)
+```
+
+`expires_at` is serialized as ISO-8601 UTC (`...Z`); a naive value is treated as UTC,
+and an aware value is converted to UTC. `user_id` is a display string (trimmed, max 128 chars).
+
+Wire shape in the `initialize` result (`authMethods` is omitted when no provider is registered):
+
+```json
+{
+  "authMethods": [
+    {
+      "id": "example-login",
+      "name": "Example Login",
+      "_meta": {
+        "codePuppy": {
+          "authStatus": { "status": "signed_in", "expiresAt": "2030-01-02T03:04:05Z", "userId": "jdoe" }
+        }
+      }
+    }
+  ]
+}
+```
+
+Readers must never trigger login, network or prompts. `id`, `name` and `description`
+are provider-supplied display strings and must never contain secrets; only the contents of
+`_meta.codePuppy.authStatus` are allow-listed to `status`, `expiresAt` and `userId`.
+A `status` of `not_applicable` means the method does not apply to this
+install, so clients should hide any sign-in UI for it.
 
 ### Outbound notifications (us → the client) — `session/update`
 
@@ -226,6 +293,18 @@ family (`create`, `wait_for_exit`, `output`, `kill`, `release`).
 - Multi-turn is native: `_message_history` persists across `session/prompt`
   calls within the same session.
 - `cwd` from `session/new` anchors that session's tools.
+- Each chat keeps its own folder. The shell tool, project rules (`AGENTS.md`), and project agents use that chat's folder, not the folder the CLI process started in. The plugin builds each chat's agent inside that folder's scope for `session/new`, `session/load`, `session/resume`, `session/fork`, and model changes.
+
+### Change a chat's folder with `/cd`
+
+Run `/cd <folder>` in a chat to move only that chat. The command works as follows:
+
+- `/cd <folder>` resolves the folder against the chat's current folder.
+- A path that is not a directory fails without changing anything.
+- A valid folder is saved, so `session/list` and `session/resume` report it.
+- The plugin rebuilds only that chat's agent, so `AGENTS.md` is re-read.
+- `/cd` with no argument reports the chat's folder.
+- The process folder never changes. The plugin never calls `os.chdir`.
 
 ---
 
@@ -407,6 +486,73 @@ register_turn_metadata_provider(example_correlation)
 register_feedback_sink(example_sink)
 register_feedback_scope(example_scope)
 ```
+
+---
+
+## Theme catalog (`_code_puppy/themes/*`)
+
+You can list Code Puppy's color themes and track the active one without reading
+its config. The catalog is read-only: there is no setter.
+
+### `_code_puppy/themes/list`
+
+Send this request before or after `session/new`. It needs no session. Send
+`{}` or omit `params`; extra keys are ignored.
+
+The result has this shape:
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "active": "ocean",          // or null
+  "themes": [
+    {
+      "id": "ocean",
+      "label": "Ocean",
+      "icon": "...",
+      "blurb": "...",
+      "appearance": "dark",   // "dark" or "light"
+      "palette": { "bg": "#rrggbb", "fg": "#rrggbb", "ansi": ["#rrggbb", "...16 entries"] },
+      "roles": { "background": "#rrggbb", "surface": "#rrggbb", "text": "#rrggbb",
+                 "mutedText": "#rrggbb", "accent": "#rrggbb", "success": "#rrggbb",
+                 "error": "#rrggbb", "warning": "#rrggbb", "running": "#rrggbb",
+                 "diffAdd": "#rrggbb", "diffRemove": "#rrggbb" }
+    }
+    // ...more themes
+  ]
+}
+```
+
+Themes appear in this order: curated themes in menu order, then `default`. The `surprise`
+theme is excluded. The `default` entry has `null` for `appearance`, `palette`,
+and `roles`, because it restores the terminal's own colors.
+
+`active` is the ID of the catalog theme stored in the `theme_active_theme`
+config key. It is `null` when the key is unset, and also when the key holds
+`legacy-custom` or `surprise`.
+
+For the mapping from palette to roles, see
+[`theme/README.md`](../theme/README.md). This page does not repeat it.
+
+### `_meta` on session responses
+
+`session/new`, `session/load`, and `session/resume` results include
+`_meta["codePuppy/theme"] = {"active": <id or null>}`. Use it to paint the first
+frame without waiting for the list request.
+
+### `_code_puppy/themes/changed`
+
+When the active theme changes, the agent sends this notification with params
+`{"active": <id or null>}`. It sends one notification per change. The agent
+reads the config value every 2 seconds from the moment the client connects.
+The first reading is a baseline, so no notification is sent for it.
+
+### Unknown methods and older CLIs
+
+Any other `_code_puppy/*` method, such as `_code_puppy/themes/set`, returns
+JSON-RPC error `-32601` (method not found). Older Code Puppy CLIs omit the
+`_meta` key and return `-32601` for the list request. Clients should fall back
+to a bundled copy of the catalog when either happens.
 
 ---
 

@@ -20,7 +20,7 @@ def test_terminal_cancel_during_goal_judging(tmp_path, persistent, cancel_key):
         import asyncio
         import signal
         from types import SimpleNamespace
-        from code_puppy.cli_runner import _interactive_sigint_guard
+        from code_puppy.interactive_support import _interactive_sigint_guard
         from code_puppy.config import set_value
         from code_puppy.messaging import run_ui
         from code_puppy.messaging.pause_controller import get_pause_controller

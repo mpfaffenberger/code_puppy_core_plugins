@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, List, Optional
 
@@ -26,6 +27,7 @@ from acp.schema import Usage
 from code_puppy_core_plugins.acp import (
     commands,
     content,
+    folder,
     persistence,
     state,
     turn_metadata,
@@ -77,6 +79,8 @@ class ACPSession:
         self._turn_values: dict[str, str] = {}
         # Model that answered the last finished turn; survives agent rebinds.
         self.last_turn_model: Optional[str] = None
+        # Set only when cancel() cancels a live task; see cancel().
+        self._cancel_requested = False
 
     async def prompt(self, blocks: List[Any]) -> PromptResult:
         """Run the agent on a user turn and return the stop reason + usage.
@@ -104,22 +108,22 @@ class ACPSession:
             and not parsed.link_attachments
             and commands.is_command(text)
         ):
-            expanded = await commands.run(self.session_id, text)
+            cd_arg = folder.cd_argument(text)
+            if cd_arg is not None:
+                await commands.emit(
+                    self.session_id, await self.change_directory(cd_arg)
+                )
+                return PromptResult(STOP_END_TURN)
+            with folder.working_directory(self.cwd):
+                expanded = await commands.run(self.session_id, text)
             if not expanded:
                 return PromptResult(STOP_END_TURN)
             text = expanded
-        # Resolve relative paths against this session's own cwd -- no process-global
-        # os.chdir (would corrupt the SDK's I/O + any concurrent session).
-        from code_puppy.tools.common import (
-            reset_working_directory,
-            set_working_directory,
-        )
         from code_puppy.tools.subagent_context import (
             reset_conversation_root_id,
             set_conversation_root_id,
         )
 
-        cwd_token = set_working_directory(self.cwd) if self.cwd else None
         # ContextVar, not set_session_context: conversation_scope reads it and needs
         # real per-task isolation across concurrent ACP sessions, which the shared
         # mutable attribute can't provide.
@@ -129,39 +133,47 @@ class ACPSession:
         state.begin_run(self.session_id)
         result: Any = None
         error: Optional[BaseException] = None
-        try:
-            self._turn_values = {}
-            self._task = asyncio.ensure_future(
-                self._run_agent(
-                    text,
-                    parsed.attachments or None,
-                    parsed.link_attachments or None,
+        # The task is created inside the scope so the agent sees this chat's folder.
+        self._cancel_requested = False
+        self._turn_values = {}
+        with folder.working_directory(self.cwd):
+            try:
+                self._task = asyncio.ensure_future(
+                    self._run_agent(
+                        text,
+                        parsed.attachments or None,
+                        parsed.link_attachments or None,
+                    )
                 )
-            )
-            result = await self._task
-            self._absorb_history(result)
-            stop_reason = STOP_END_TURN
-        except asyncio.CancelledError:
-            # Two ways here: our own cancel cancelled the inner task (report
-            # ``cancelled``), or THIS coroutine was cancelled (SDK teardown) while the
-            # task lives on -> cancel it so it can't outlive us, and propagate.
-            task = self._task
-            if task is not None and not task.cancelled():
-                task.cancel()
-                raise
-            stop_reason = STOP_CANCELLED
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("ACP: agent run failed")
-            error = exc
-            stop_reason = STOP_REFUSAL
-        finally:
-            streamed = state.streamed_text()
-            self._task = None
-            state.end_run()
-            set_session_context(None)
-            reset_conversation_root_id(root_id_token)
-            if cwd_token is not None:
-                reset_working_directory(cwd_token)
+                result = await self._task
+                # Core swallows cancellation, so the handler's own cancel would be lost;
+                # the SDK response send then hangs after the connection closes.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    raise asyncio.CancelledError
+                self._absorb_history(result)
+                stop_reason = (
+                    STOP_CANCELLED if self._cancel_requested else STOP_END_TURN
+                )
+            except asyncio.CancelledError:
+                # Two ways here: our own cancel cancelled the inner task (report
+                # ``cancelled``), or THIS coroutine was cancelled (SDK teardown) while the
+                # task lives on -> cancel it so it can't outlive us, and propagate.
+                task = self._task
+                if task is not None and not task.cancelled():
+                    task.cancel()
+                    raise
+                stop_reason = STOP_CANCELLED
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("ACP: agent run failed")
+                error = exc
+                stop_reason = STOP_REFUSAL
+            finally:
+                streamed = state.streamed_text()
+                self._task = None
+                state.end_run()
+                set_session_context(None)
+                reset_conversation_root_id(root_id_token)
 
         # Persist off the event loop so pickling a large history can't stall other
         # sessions' streaming. Best-effort; never fails the turn.
@@ -238,12 +250,50 @@ class ACPSession:
         if messages:
             self.agent.set_message_history(list(messages))
 
+    async def change_directory(self, arg: str) -> str:
+        """Move only this chat's folder and return the text to show the client.
+
+        Core's ``/cd`` calls ``os.chdir``, which would move every chat in the
+        process, so ``/cd`` is intercepted here. Never ``os.chdir`` in this path.
+        """
+        from code_puppy.i18n import t
+        from code_puppy.tools.common import get_working_directory, resolve_path
+
+        with folder.working_directory(self.cwd):
+            current = get_working_directory()
+            if arg == "":
+                return current
+            target = resolve_path(arg)
+        if not os.path.isdir(target):
+            return t("cmd.cd.not_a_dir", path=arg)
+        self.cwd = target
+        # Persist off the event loop (same reason as prompt()); no
+        # working_directory scope may be open across this await.
+        await asyncio.to_thread(
+            persistence.save,
+            self.session_id,
+            self.agent,
+            self.cwd,
+            self.additional_directories,
+        )
+        lines = [t("cmd.cd.success", path=target)]
+        with folder.working_directory(target):
+            try:
+                self.agent.reload_code_generation_agent()
+                lines.append(t("cmd.cd.agent_updated"))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("ACP: agent reload after /cd failed", exc_info=True)
+                lines.append(t("cmd.cd.reload_error", error=exc))
+        return "\n".join(lines)
+
     def cancel(self) -> None:
         """Cancel the in-flight run, if any. No-op when idle.
 
         Besides cancelling the asyncio task, force-kill any local shell
         processes the run spawned so they don't orphan. (Shells delegated to
-        the client run client-side and are unaffected.)
+        the client run client-side and are unaffected.) Core may swallow the
+        cancel, so ``_cancel_requested`` is the authoritative signal that the
+        turn was cancelled.
 
         Only *requests* cancellation -- delivery happens at the task's next
         await point, whenever that is, not immediately. Callers that need
@@ -252,6 +302,8 @@ class ACPSession:
         """
         task = self._task
         if task is not None and not task.done():
+            # Live-task only, so an idle cancel can't mark the next turn cancelled.
+            self._cancel_requested = True
             task.cancel()
         try:
             from code_puppy.tools.command_runner import (
