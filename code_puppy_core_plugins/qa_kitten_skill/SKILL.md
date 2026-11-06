@@ -1,25 +1,28 @@
 ---
 name: qa-kitten
-description: Use before testing a web application's behavior, accessibility, responsive layout, or visual rendering in a real browser. Delegates browser assertions and visual QA to qa-kitten; not for scraping, crawling, or general web retrieval.
-version: 1.0.0
+description: Use to delegate browser testing and interactive inspection of trusted local, test, or staging apps (verify flows, rendering, layout and accessibility, reproduce UI bugs, or explore and report what the page shows). Use web-retriever instead for bulk extraction, crawling, saving data files, or production, public, authenticated, or sensitive pages, or when the user names web-retriever.
+version: 1.1.0
 author: Code Puppy
 tags:
-  - browser-testing
-  - playwright
-  - accessibility
+  - browser
+  - testing
   - visual-qa
+  - accessibility
+  - playwright
 ---
 
 # QA Kitten Delegation
 
-Use `qa-kitten` for browser-based **testing and assertions**. It is a meticulous
-Playwright QA agent, not a general-purpose web retriever.
+Use `qa-kitten` for browser **testing and interactive inspection**, where the
+result is a verdict or a description. It is a meticulous Playwright QA agent,
+not a general-purpose web retriever.
 
 ## Delegate to QA Kitten
 
 Use `invoke_agent(agent_name="qa-kitten", ...)` for:
 
 - Verifying an application's user flows and expected outcomes in a browser.
+- Exploring a trusted app interactively and reporting what each page shows.
 - Reproducing UI bugs and collecting deterministic evidence.
 - Checking form behavior, navigation, validation messages, and state changes.
 - Accessibility checks using semantic roles, labels, keyboard behavior, and
@@ -50,12 +53,22 @@ and any defects.""",
 )
 ```
 
+## Choose between QA Kitten and Web Retriever
+
+Pick by what the user wants back. QA Kitten returns a verdict on, or a
+description of, how a page works or looks. `web-retriever` returns extracted
+data. Honor an explicit user choice of either agent, and switch to the other
+once when one has failed on the task; if it also fails, report both failures.
+A switch or explicit choice never overrides the Safety and Access Boundaries
+below: do not send authenticated, production, or sensitive pages to QA Kitten.
+Report the blocker instead.
+
 ## Do Not Delegate
 
-- **Scraping, crawling, monitoring, data extraction, authenticated retrieval, or
-  general website screenshots:** invoke the built-in `web-retriever` agent
-  directly (and activate its companion skill first when that separately shipped
-  skill is installed). This routing does not depend on the companion skill.
+- **Bulk extraction, crawling, monitoring, saving data to files, or authenticated
+  retrieval:** invoke the built-in `web-retriever` agent directly (and activate
+  its companion skill first when that separately shipped skill is installed).
+  This routing does not depend on the companion skill.
 - **A raw one-shot HTTP response:** use an appropriate HTTP client directly.
 - **Unit, API, or non-browser integration tests:** run the project's normal test
   tooling directly.

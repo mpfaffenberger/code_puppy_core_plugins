@@ -28,16 +28,62 @@ def test_registration_matches_frontmatter() -> None:
     metadata = parse_yaml_frontmatter(_skill_content())
 
     assert entry["name"] == metadata["name"] == "qa-kitten"
-    assert "visual QA" in metadata["description"]
+    assert "interactive inspection" in metadata["description"]
+    assert "web-retriever" in metadata["description"]
     parsed = parse_skill_metadata(Path(entry["skill_md_path"]).parent)
     assert parsed is not None
     assert parsed.tags == [
-        "browser-testing",
-        "playwright",
-        "accessibility",
+        "browser",
+        "testing",
         "visual-qa",
+        "accessibility",
+        "playwright",
     ]
     assert 'invoke_agent(agent_name="qa-kitten"' in _skill_content()
+
+
+def test_browser_skills_split_by_deliverable_within_safety_limits() -> None:
+    """Both skills share a namespace (the first tag) and route by deliverable.
+
+    Regression guard for over-selecting web-retriever: the removed catch-all
+    wording must stay gone, an explicit choice and a failed other agent must
+    allow a switch, and no switch may send sensitive pages to QA Kitten.
+    """
+    from code_puppy_core_plugins.web_retriever_skill.register_callbacks import (
+        _register_web_retriever_skill,
+    )
+
+    qa_path = Path(_register_qa_kitten_skill()[0]["skill_md_path"])
+    web_path = Path(_register_web_retriever_skill()[0]["skill_md_path"])
+    qa = parse_skill_metadata(qa_path.parent)
+    web = parse_skill_metadata(web_path.parent)
+    assert qa is not None and web is not None
+    assert web.tags == ["browser", "scraping", "crawling", "extraction", "monitoring"]
+    assert qa.tags[0] == web.tags[0] == "browser"
+
+    # An unquoted ": " makes the frontmatter invalid for strict YAML loaders.
+    assert ": " not in qa.description
+    assert ": " not in web.description
+    assert "web-retriever" in qa.description
+    assert "qa-kitten" in web.description
+    assert "trusted local, test, or staging" in qa.description
+    assert "production" in qa.description
+    assert "public" in qa.description
+
+    qa_body = " ".join(qa_path.read_text(encoding="utf-8").split())
+    web_body = " ".join(web_path.read_text(encoding="utf-8").split())
+    for body in (qa_body, web_body):
+        assert "explicit" in body
+        assert "has failed on the task" in body
+        assert "report both failures" in body
+        assert (
+            "do not send authenticated, production, or sensitive pages" in body.lower()
+        )
+    assert (
+        "Keep public, production, or authenticated pages with Web Retriever" in web_body
+    )
+    assert "any workflow that needs browser rendering" not in web_body
+    assert "Delegate browser-driven work" not in web_body
 
 
 def test_delegation_and_safety_boundaries_are_documented() -> None:
