@@ -24,13 +24,14 @@ from typing import TYPE_CHECKING
 
 from code_puppy.callbacks import register_callback
 
+from .catalog import ACTIVE_THEME_CONFIG_KEY
+
 # NOTE: Keep heavy theme/TUI imports inside callers so plugin discovery stays
 # fast; the deferred style import saves startup time. Caveat: theme/__init__.py
 # still eagerly imports style modules/reapplies config, so prompt_toolkit remains
 # on the startup path until that sweep is deferred too.
 
 _INTERACTIVE_TIMEOUT_SECONDS = 300  # 5 min — generous; user is browsing
-_ACTIVE_THEME_CONFIG_KEY = "theme_active_theme"
 _DEFAULT_THEME_NAME = "tokyo-night"
 _LEGACY_THEME_NAME = "legacy-custom"
 
@@ -118,7 +119,7 @@ def _apply_theme(theme_name: str, *, announce: bool = True) -> None:
         if terminal_palette:
             osc.apply_palette(terminal_palette)
 
-    set_config_value(_ACTIVE_THEME_CONFIG_KEY, theme_name)
+    set_config_value(ACTIVE_THEME_CONFIG_KEY, theme_name)
     if announce:
         _announce_applied(theme_name)
 
@@ -129,7 +130,7 @@ def _active_terminal_palette() -> tuple[str, dict] | None:
 
     from . import osc_palette as osc
 
-    active_theme = get_value(_ACTIVE_THEME_CONFIG_KEY)
+    active_theme = get_value(ACTIVE_THEME_CONFIG_KEY)
     if not active_theme or active_theme in {"default", _LEGACY_THEME_NAME}:
         return None
     palette = osc.get_saved_palette()
@@ -272,7 +273,7 @@ def _apply_default_theme_on_first_run() -> None:
     """Apply Tokyo Night once, preserving explicit and legacy theme choices."""
     from code_puppy.config import get_value
 
-    if get_value(_ACTIVE_THEME_CONFIG_KEY):
+    if get_value(ACTIVE_THEME_CONFIG_KEY):
         return
 
     from code_puppy.config import set_config_value
@@ -282,7 +283,7 @@ def _apply_default_theme_on_first_run() -> None:
     if osc.get_saved_palette():
         # Theme persistence predates the active-theme marker. Treat an existing
         # palette as an intentional choice and migrate without changing it.
-        set_config_value(_ACTIVE_THEME_CONFIG_KEY, _LEGACY_THEME_NAME)
+        set_config_value(ACTIVE_THEME_CONFIG_KEY, _LEGACY_THEME_NAME)
         return
 
     _apply_theme(_DEFAULT_THEME_NAME, announce=False)

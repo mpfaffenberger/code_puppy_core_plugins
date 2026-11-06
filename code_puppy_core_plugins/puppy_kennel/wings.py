@@ -6,12 +6,12 @@ Three namespaces, all stored in the same shared kennel:
 * ``agent:<name>``  — per-agent diary, private by convention
 * ``user:default``  — cross-cutting user preferences
 
-Keep this module dependency-free; both recorder and retriever import it.
+Both recorder and retriever import this module, so keep imports minimal;
+``detect_cwd()`` deliberately lazy-imports core to follow the chat's folder.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 USER_WING = "user:default"
@@ -99,12 +99,15 @@ def default_recall_scope(agent_name: str, cwd: Path | str | None = None) -> list
 
 
 def detect_cwd() -> Path:
-    """Best-effort current working directory.
+    """Best-effort working directory for the current chat.
 
-    Falls back to ``$HOME`` if cwd is somehow unavailable (rare but possible
+    Follows the chat's working-directory override, else the process cwd.
+    Falls back to ``$HOME`` if that is somehow unavailable (rare but possible
     in some test environments).
     """
+    from code_puppy.tools.common import get_working_directory
+
     try:
-        return Path(os.getcwd())
+        return Path(get_working_directory())
     except OSError:
         return Path.home()

@@ -74,9 +74,9 @@ async def run(session_id: str, command: str) -> Optional[str]:
         # output first, then hand the prompt back to the caller to run through the
         # agent (not display it as a canned answer).
         if text:
-            await _emit(session_id, text)
+            await emit(session_id, text)
         return result.strip()
-    await _emit(session_id, text or f"Ran `{command.strip()}`.")
+    await emit(session_id, text or f"Ran `{command.strip()}`.")
     if new_title:
         await _announce_title(session_id, new_title)
     return None
@@ -136,7 +136,7 @@ async def _announce_title(session_id: str, title: str) -> None:
         logger.debug("ACP: session title update failed", exc_info=True)
 
 
-async def _emit(session_id: str, text: str) -> None:
+async def emit(session_id: str, text: str) -> None:
     from acp.helpers import update_agent_message_text
 
     connection = state.get_connection()
