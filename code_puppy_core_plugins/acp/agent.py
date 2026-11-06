@@ -377,6 +377,7 @@ class CodePuppyAgent(Agent):
         """
         from code_puppy.agents._builder import reset_model_fallback_warnings
 
+        permissions.cancel_pending(session_id)
         session = self._sessions.pop(session_id, None)
         if session is not None:
             await session.cancel_and_wait()
@@ -400,7 +401,8 @@ class CodePuppyAgent(Agent):
         return PromptResponse(stop_reason=outcome.stop_reason, usage=outcome.usage)
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
-        """Cancel the in-flight run for a session (notification)."""
+        """Cancel the in-flight run and any pending approval (file or shell) for a session."""
+        permissions.cancel_pending(session_id)
         session = self._sessions.get(session_id)
         if session is not None:
             session.cancel()
