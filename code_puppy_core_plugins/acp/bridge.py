@@ -11,9 +11,12 @@ We use hooks rather than consuming the ``MessageBus`` because the bus is
 single-consumer and buffers until a renderer attaches, and agent text does not
 arrive there as clean deltas. See ``README.md`` → *Event source*.
 
-Tool calls get human-friendly titles ("Edit foo.py", "Run: pytest"), a ``kind``
-so the client picks the right icon, file ``locations``, and — on completion —
-the unified diff as inline content so edits are visible in the client's UI.
+Tool-call titles and ``kind`` come from the shared banner contract
+(``code_puppy.banners``), so ACP clients show the same labels as the terminal.
+Each call also carries file ``locations`` and, on completion, the result text and
+unified diff as inline content so edits are visible in the client's UI.
+Plugin notices (``banner_notice`` phase) are forwarded as finished ``tool_call``
+rows carrying ``_meta.code_puppy.banner``.
 
 Routing/run-context (which session is active, whether text streamed, the
 open-tool-call stack) lives in ``state`` so the permission and I/O backends can
@@ -22,8 +25,8 @@ share it. This bridge is pure translation.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -37,41 +40,17 @@ from acp.helpers import (
 )
 from acp.schema import ToolCallLocation
 
+from code_puppy.banners import (
+    Banner,
+    banner_for_call,
+    banner_for_result,
+    result_text,
+)
 from code_puppy.callbacks import register_callback, unregister_callback
 from code_puppy_core_plugins.acp import state
 from code_puppy.tools.common import resolve_path
 
 logger = logging.getLogger(__name__)
-
-# Map Code Puppy tool names to ACP tool-call ``kind`` values so the client
-# picks the right icon/affordance. Unknown tools fall back to "other".
-_TOOL_KINDS = {
-    "read_file": "read",
-    "list_files": "read",
-    "grep": "search",
-    "edit_file": "edit",
-    "create_file": "edit",
-    "replace_in_file": "edit",
-    "delete_snippet": "edit",
-    "delete_file": "delete",
-    "shell": "execute",
-    "agent_share_your_reasoning": "think",
-}
-
-# Human-readable verbs for building tool-call titles like "Edit foo.py".
-_TOOL_VERBS = {
-    "read_file": "Read",
-    "list_files": "List",
-    "grep": "Search",
-    "edit_file": "Edit",
-    "create_file": "Create",
-    "replace_in_file": "Edit",
-    "delete_snippet": "Edit",
-    "delete_file": "Delete",
-}
-
-# Tool-arg keys that commonly carry the target file path, in priority order.
-_PATH_ARG_KEYS = ("file_path", "path", "target_file", "filename")
 
 # Cap on inline diff/output content so a huge edit never floods the client.
 _MAX_DIFF_CHARS = 8000
@@ -106,11 +85,16 @@ class EventBridge:
     #: ``ask_user_question`` itself.
     question_cards_enabled = False
 
+    def __init__(self) -> None:
+        # Strong refs so scheduled notice sends are not garbage-collected mid-flight.
+        self._notice_tasks: set[asyncio.Task] = set()
+
     def register(self) -> None:
         """Register the runtime hooks. Call once when the connection opens."""
         register_callback("stream_event", self._on_stream_event)
         register_callback("pre_tool_call", self._on_pre_tool_call)
         register_callback("post_tool_call", self._on_post_tool_call)
+        register_callback("banner_notice", self._on_banner_notice)
 
     def unregister(self) -> None:
         """Remove the runtime hooks. Call on teardown so no callbacks leak.
@@ -123,6 +107,7 @@ class EventBridge:
             ("stream_event", self._on_stream_event),
             ("pre_tool_call", self._on_pre_tool_call),
             ("post_tool_call", self._on_post_tool_call),
+            ("banner_notice", self._on_banner_notice),
         ):
             try:
                 unregister_callback(phase, handler)
@@ -198,15 +183,16 @@ class EventBridge:
         if tool_name in _INTERACTIVE_TOOLS:
             return dict(_INTERACTIVE_BLOCK)
         tool_call_id = state.push_tool_call(tool_name)
+        banner = banner_for_call(tool_name, tool_args)
         update = start_tool_call(
             tool_call_id,
-            self._title_for(tool_name, tool_args),
-            kind=_TOOL_KINDS.get(tool_name, "other"),
+            banner.title,
+            kind=banner.kind,
             status="in_progress",
-            locations=self._locations_for(tool_args) or None,
+            locations=self._locations_for(banner),
             raw_input=tool_args if isinstance(tool_args, dict) else {},
         )
-        await self._send(session_id, update)
+        await self._send(session_id, self._with_banner(update, banner.to_wire()))
 
     async def _present_question(
         self, session_id: str, tool_args: Dict[str, Any]
@@ -250,54 +236,72 @@ class EventBridge:
         tool_call_id = state.pop_tool_call(tool_name)
         if tool_call_id is None:
             return
-        status = "completed" if self._is_success(result) else "failed"
+        banner = banner_for_result(tool_name, tool_args, result, duration_ms)
+        content = []
+        text = result_text(result)
+        if text:
+            content.append(tool_content(text_block(text)))
+        content.extend(self._content_for(result))
         update = update_tool_call(
             tool_call_id,
-            status=status,
-            content=self._content_for(result) or None,
+            status=banner.status,
+            title=banner.title,
+            content=content or None,
             raw_output=self._summarize(result),
         )
-        await self._send(session_id, update)
+        await self._send(session_id, self._with_banner(update, banner.to_wire()))
+
+    def _on_banner_notice(self, banner: Dict[str, Any]) -> None:
+        """Forward a plugin notice as a finished ``tool_call`` row (never reply text)."""
+        # Sync hook: ``_trigger_callbacks_sync`` may run inside a live loop, so the
+        # async send is scheduled, and the session id is read before scheduling.
+        session_id = state.get_active_session_id()
+        if session_id is None:
+            return
+        try:
+            update = self._with_banner(
+                start_tool_call(
+                    f"notice-{uuid.uuid4().hex}",
+                    banner["title"],
+                    kind="other",
+                    status="completed",
+                ),
+                banner,
+            )
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is not None:
+                task = running.create_task(self._send(session_id, update))
+                self._notice_tasks.add(task)
+                task.add_done_callback(self._notice_tasks.discard)
+                return
+            # Worker threads have no running loop; hand the send to the ACP loop.
+            loop = state.get_loop()
+            if loop is not None and not loop.is_closed():
+                asyncio.run_coroutine_threadsafe(self._send(session_id, update), loop)
+        except Exception:  # noqa: BLE001
+            logger.debug("ACP: dropping plugin notice", exc_info=True)
 
     # ---- Helpers ----------------------------------------------------------
     @staticmethod
-    def _title_for(tool_name: str, tool_args: Any) -> str:
-        """Build a human-friendly tool-call title (e.g. ``Edit foo.py``)."""
-        if tool_name == "shell" and isinstance(tool_args, dict):
-            command = str(tool_args.get("command", "")).strip()
-            if command:
-                short = command if len(command) <= 60 else command[:57] + "..."
-                return f"Run: {short}"
-        verb = _TOOL_VERBS.get(tool_name)
-        path = EventBridge._first_path(tool_args)
-        if verb and path:
-            return f"{verb} {os.path.basename(path)}"
-        return tool_name
+    def _locations_for(banner: Banner) -> Optional[List[ToolCallLocation]]:
+        """Return the banner's file as an ACP location, resolved against the session cwd.
 
-    @staticmethod
-    def _first_path(tool_args: Any) -> Optional[str]:
-        if not isinstance(tool_args, dict):
-            return None
-        for key in _PATH_ARG_KEYS:
-            value = tool_args.get(key)
-            if isinstance(value, str) and value:
-                return value
+        ``resolve_path`` (not ``os.path.abspath``) matches the tools' own base;
+        the ACP process cwd would point the client at the wrong file.
+        """
+        if banner.target_type == "path" and banner.target:
+            return [ToolCallLocation(path=resolve_path(banner.target))]
         return None
 
     @staticmethod
-    def _locations_for(tool_args: Any) -> List[ToolCallLocation]:
-        """Extract ACP ``locations`` (files this tool touches) from its args.
-
-        Lets the client highlight the affected file in the agent panel.
-        Best-effort: empty list when no recognizable path arg is present.
-
-        Uses ``resolve_path`` (not ``os.path.abspath``) so a relative tool-arg
-        path is absolutized against the *session's* cwd -- the same base the
-        tools themselves resolve against -- rather than the ACP process cwd,
-        which would point the client at the wrong file.
-        """
-        path = EventBridge._first_path(tool_args)
-        return [ToolCallLocation(path=resolve_path(path))] if path else []
+    def _with_banner(update: Any, banner: Dict[str, Any]) -> Any:
+        """Attach the banner wire dict as ``_meta``; ACP helpers don't expose ``field_meta``."""
+        return update.model_copy(
+            update={"field_meta": {"code_puppy": {"banner": banner}}}
+        )
 
     @staticmethod
     def _content_for(result: Any) -> list:
@@ -330,16 +334,6 @@ class EventBridge:
             await connection.session_update(session_id, update)
         except Exception:  # noqa: BLE001
             logger.exception("Failed to emit session/update")
-
-    @staticmethod
-    def _is_success(result: Any) -> bool:
-        """Best-effort success check mirroring frontend_emitter's heuristic."""
-        if isinstance(result, dict):
-            if result.get("error"):
-                return False
-            if result.get("success") is False:
-                return False
-        return True
 
     @staticmethod
     def _summarize(result: Any) -> Any:
