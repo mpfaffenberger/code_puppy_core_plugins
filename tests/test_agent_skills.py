@@ -721,6 +721,12 @@ class TestMetadataParsing:
         assert parsed["description"] == "|2-"
         assert parsed["tags"] == ["a"]
 
+    def test_parse_yaml_frontmatter_underscored_key(self):
+        """Frontmatter keys with underscores are parsed correctly."""
+        content = "---\nname: test\ndisable_model_invocation: true\n---\n# Content"
+        parsed = parse_yaml_frontmatter(content)
+        assert parsed["disable_model_invocation"] == "true"
+
     def test_parse_skill_metadata_valid(self, valid_skill_dir):
         """Test parsing valid skill metadata."""
         metadata = parse_skill_metadata(valid_skill_dir)
@@ -731,6 +737,7 @@ class TestMetadataParsing:
         assert metadata.version is None
         assert metadata.author is None
         assert metadata.tags == []
+        assert metadata.disable_model_invocation is False
 
     def test_parse_skill_metadata_full(self, skill_with_metadata):
         """Test parsing skill metadata with all fields."""
@@ -751,6 +758,38 @@ class TestMetadataParsing:
         assert metadata.name == "string-tags-skill"
         assert metadata.description == "A test skill with string tags"
         assert metadata.tags == ["a", "b", "c"]
+
+    def test_parse_skill_metadata_disable_model_invocation_true(self, tmp_path):
+        """disable_model_invocation: true sets the flag on SkillMetadata."""
+        skill_dir = tmp_path / "hidden-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: hidden-skill\n"
+            "description: Hidden from model\n"
+            "disable_model_invocation: true\n"
+            "---\n"
+            "# Content\n"
+        )
+        metadata = parse_skill_metadata(skill_dir)
+        assert metadata is not None
+        assert metadata.disable_model_invocation is True
+
+    def test_parse_skill_metadata_disable_model_invocation_false(self, tmp_path):
+        """disable_model_invocation: false keeps the flag off."""
+        skill_dir = tmp_path / "visible-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: visible-skill\n"
+            "description: Visible to model\n"
+            "disable_model_invocation: false\n"
+            "---\n"
+            "# Content\n"
+        )
+        metadata = parse_skill_metadata(skill_dir)
+        assert metadata is not None
+        assert metadata.disable_model_invocation is False
 
     def test_parse_skill_metadata_missing_required_fields(self, empty_skill_dir):
         """Test parsing skill metadata when required fields are missing."""
@@ -919,6 +958,37 @@ class TestPromptBuilder:
         )
         block = build_available_skills_block([skill])
         assert "Tom & Jerry say: 'Use < & >'" in block
+
+    def test_build_available_skills_block_hides_disabled_model_invocation(self):
+        """Skills with disable_model_invocation=True are excluded."""
+        skills = [
+            SkillMetadata(
+                name="visible",
+                description="Shown to model",
+                path=Path("/a"),
+            ),
+            SkillMetadata(
+                name="hidden",
+                description="Not shown",
+                path=Path("/b"),
+                disable_model_invocation=True,
+            ),
+        ]
+        block = build_available_skills_block(skills)
+        assert "visible" in block
+        assert "hidden" not in block
+
+    def test_build_available_skills_block_all_hidden(self):
+        """When every skill is hidden, the block is empty."""
+        skills = [
+            SkillMetadata(
+                name="hidden",
+                description="Not shown",
+                path=Path("/a"),
+                disable_model_invocation=True,
+            ),
+        ]
+        assert build_available_skills_block(skills) == ""
 
     def test_build_skills_guidance(self):
         """Guidance mentions the two tools the agent actually needs."""
