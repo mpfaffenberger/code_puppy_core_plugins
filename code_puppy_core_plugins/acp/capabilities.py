@@ -26,8 +26,17 @@ from acp.schema import (
 )
 
 
+# Extension method a client calls to send reply feedback. Depends on:
+# feedback.py :: EXT_NAME derives the routed name from this constant.
+FEEDBACK_METHOD = "_code_puppy/feedback"
+FEEDBACK_VERSION = 1
+
+
 def agent_capabilities() -> AgentCapabilities:
     """Describe what Code Puppy can do, for the ``initialize`` response.
+
+    * ``field_meta`` (``_meta``) — advertises ``FEEDBACK_METHOD`` under
+      ``codePuppy.feedback``. Built fresh per call so callers can't share state.
 
     * ``prompt_capabilities.embedded_context`` — we splice embedded text
       resources into the prompt (see ``content.py``), so this is honestly
@@ -54,6 +63,11 @@ def agent_capabilities() -> AgentCapabilities:
             resume=SessionResumeCapabilities(),
             additional_directories=SessionAdditionalDirectoriesCapabilities(),
         ),
+        field_meta={
+            "codePuppy": {
+                "feedback": {"method": FEEDBACK_METHOD, "version": FEEDBACK_VERSION}
+            }
+        },
     )
 
 

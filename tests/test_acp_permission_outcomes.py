@@ -1,8 +1,8 @@
 """ACP permission outcomes: only a person's Reject is reported as a rejection.
 
-A cancelled, failed or timed-out permission request still denies the
-operation (fail closed), but it is reported as ``PermissionNotDecided`` so the
-model is not told the user rejected something they never saw or answered.
+A cancelled or failed permission request still denies the operation (fail
+closed), but it is reported as ``PermissionNotDecided`` so the model is not told
+the user rejected something they never saw or answered.
 """
 
 from __future__ import annotations
@@ -75,17 +75,6 @@ async def test_denials_nobody_chose_are_not_decided(connect, conn):
 
 
 @pytest.mark.asyncio
-async def test_unanswered_request_times_out_as_not_decided(connect, monkeypatch):
-    monkeypatch.setattr(permissions, "_PERMISSION_TIMEOUT_S", 0.01)
-    connect(_Connection(None))
-
-    allowed, not_decided = await permissions._ask_client_outcome("s1", "t")
-
-    assert allowed is False
-    assert "timed out" in not_decided
-
-
-@pytest.mark.asyncio
 async def test_no_connection_is_not_decided():
     allowed, not_decided = await permissions._ask_client_outcome("s1", "t")
 
@@ -135,12 +124,12 @@ async def test_shell_hook_distinguishes_reject_from_no_decision(connect, monkeyp
     monkeypatch.setattr("code_puppy.config.get_yolo_mode", lambda: False)
 
     connect(_Connection(_selected("reject_once")))
-    rejected = await permissions._on_run_shell_command(None, "rm x", None, 60)
+    rejected = await permissions._legacy_shell_hook(None, "rm x", None, 60)
     assert rejected["blocked"] is True
     assert rejected["error_message"] == "Command rejected in the client"
 
     connect(_Connection(DeniedOutcome(outcome="cancelled")))
-    undecided = await permissions._on_run_shell_command(None, "rm x", None, 60)
+    undecided = await permissions._legacy_shell_hook(None, "rm x", None, 60)
     assert undecided["blocked"] is True
     assert undecided["error_message"] == "Permission not granted"
     assert "did not reject" in undecided["reasoning"]
@@ -152,7 +141,7 @@ async def test_shell_hook_fails_closed_when_the_connection_is_gone(monkeypatch):
     monkeypatch.setattr("code_puppy.config.get_yolo_mode", lambda: False)
     state.begin_run("s1")
     try:
-        result = await permissions._on_run_shell_command(None, "rm x", None, 60)
+        result = await permissions._legacy_shell_hook(None, "rm x", None, 60)
     finally:
         state.end_run()
 
@@ -162,4 +151,4 @@ async def test_shell_hook_fails_closed_when_the_connection_is_gone(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_shell_hook_is_inert_outside_an_acp_run():
-    assert await permissions._on_run_shell_command(None, "ls", None, 60) is None
+    assert await permissions._legacy_shell_hook(None, "ls", None, 60) is None

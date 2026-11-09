@@ -42,7 +42,7 @@ async def _call(func: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any):
 
 
 def register_get_app_state(agent):
-    @agent.tool
+    @agent.tool(metadata={"code_mode_native": True})
     async def computer_get_app_state(
         context: RunContext,
         app_name: str,
@@ -64,7 +64,7 @@ def register_get_app_state(agent):
 
 
 def register_snapshot(agent):
-    @agent.tool
+    @agent.tool(metadata={"code_mode_native": True})
     async def computer_snapshot(
         context: RunContext,
         app_name: str | None = None,
@@ -257,7 +257,7 @@ def register_drag(agent):
 
 
 def register_screenshot(agent):
-    @agent.tool
+    @agent.tool(metadata={"code_mode_native": True})
     async def computer_screenshot(
         context: RunContext,
         path: str | None = None,
@@ -279,7 +279,7 @@ def register_screenshot(agent):
 
 
 def register_batch(agent):
-    @agent.tool
+    @agent.tool(metadata={"code_mode_native": True})
     async def computer_use_batch(
         context: RunContext,
         state_revision: str,

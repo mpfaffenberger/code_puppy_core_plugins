@@ -1,0 +1,12 @@
+{
+  "plugin.meta-oauth.plan.tier": "Muse Code plan: {tier}",
+  "plugin.meta-oauth.plan.active": "Subscription: active",
+  "plugin.meta-oauth.plan.inactive": "Subscription: inactive",
+  "plugin.meta-oauth.plan.usage": "{window} usage at login: {used}%",
+  "plugin.meta-oauth.plan.usage_reset": "{window} usage at login: {used}% (resets {reset})",
+  "plugin.meta-oauth.plan.window": "Rolling window",
+  "plugin.meta-oauth.plan.window_hours": "{hours}h window",
+  "plugin.meta-oauth.plan.window_minutes": "{minutes}m window",
+  "plugin.meta-oauth.plan.weekly": "Weekly",
+  "plugin.meta-oauth.plan.upgrade": "A plan upgrade is available at https://accountscenter.meta.com/muse_code/"
+}

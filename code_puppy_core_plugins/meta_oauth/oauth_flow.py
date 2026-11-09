@@ -11,6 +11,7 @@ from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warni
 from code_puppy.tools.common import should_suppress_browser
 
 from .config import META_OAUTH_CONFIG
+from .plan import describe_plan
 from .utils import (
     discover_models,
     load_credentials,
@@ -106,4 +107,6 @@ def run_oauth_flow() -> bool:
         return False
 
     emit_success(t("oauth.meta.auth.success"))
+    for line in describe_plan(credentials):
+        emit_info(line)
     return True

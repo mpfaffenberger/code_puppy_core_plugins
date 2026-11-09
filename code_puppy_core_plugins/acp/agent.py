@@ -40,7 +40,10 @@ from acp.schema import (
 )
 
 from code_puppy_core_plugins.acp import (
+    auth_status,
     capabilities,
+    feedback,
+    folder,
     io_delegation,
     mcp_config,
     permissions,
@@ -48,6 +51,8 @@ from code_puppy_core_plugins.acp import (
     replay,
     session_config,
     state,
+    themes,
+    turn_metadata,
 )
 from code_puppy_core_plugins.acp.bridge import EventBridge
 from code_puppy_core_plugins.acp.session import ACPSession
@@ -70,16 +75,21 @@ def _code_puppy_version() -> str:
 
 
 class CodePuppyAgent(Agent):
-    """One ACP connection's worth of Code Puppy, spread across client threads."""
+    """One ACP connection's worth of Code Puppy, spread across client threads.
+
+    Turn ``_meta`` (model, correlationId) is attached in ``prompt``; extension
+    methods (``_code_puppy/*``, e.g. feedback) route through ``ext_method``.
+    """
 
     def __init__(self) -> None:
         self._sessions: Dict[str, ACPSession] = {}
         self._bridge = EventBridge()
         self._client_caps: Optional[ClientCapabilities] = None
+        self._theme_watcher = themes.ThemeWatcher()
 
     # ---- Connection lifecycle ---------------------------------------------
     def on_connect(self, conn: Any) -> None:
-        """Store the client handle + loop, wire events, install approvals.
+        """Store the client handle + loop, wire events, install approvals, retry feedback.
 
         Called synchronously by the SDK from inside ``run_agent`` — already on
         the running event loop — so ``get_running_loop`` returns the loop our
@@ -88,6 +98,16 @@ class CodePuppyAgent(Agent):
         state.set_connection(conn, asyncio.get_running_loop())
         self._bridge.register()
         permissions.install()
+        # Retries feedback left unfinished by a previous run; schedules a task, never blocks startup.
+        try:
+            feedback.schedule_processing()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("ACP: feedback scheduling failed: %s", type(exc).__name__)
+        try:
+            self._theme_watcher.start()
+        except Exception as error:  # noqa: BLE001
+            # Startup must never fail on the theme watcher; log the class only.
+            logger.debug("ACP theme watcher not started: %s", type(error).__name__)
 
     def shutdown(self) -> None:
         """Unwire this agent's event hooks. Call once the connection ends.
@@ -97,6 +117,7 @@ class CodePuppyAgent(Agent):
         connection leaves the global callback registry clean.
         """
         self._bridge.unregister()
+        self._theme_watcher.stop()
 
     # ---- Handshake --------------------------------------------------------
     async def initialize(
@@ -126,11 +147,16 @@ class CodePuppyAgent(Agent):
                 title="Code Puppy",
                 version=_code_puppy_version(),
             ),
+            auth_methods=auth_status.auth_methods(),
         )
 
     async def authenticate(self, method_id: str, **kwargs: Any) -> AuthenticateResponse:
-        """No auth flow — Code Puppy authenticates via its own model config."""
-        return AuthenticateResponse()
+        """Report the registered auth status for ``method_id``.
+        Never logs in, calls the network, or prompts."""
+        report = auth_status.auth_status_for(method_id)
+        if report is None:
+            return AuthenticateResponse()
+        return AuthenticateResponse(field_meta=auth_status.auth_status_meta(report))
 
     # ---- Session lifecycle ------------------------------------------------
     async def new_session(
@@ -153,6 +179,7 @@ class CodePuppyAgent(Agent):
         return NewSessionResponse(
             session_id=session_id,
             config_options=session_config.config_options() or None,
+            field_meta=themes.session_meta(),
         )
 
     async def load_session(
@@ -179,6 +206,7 @@ class CodePuppyAgent(Agent):
         self._announce_commands_soon(session_id)
         return LoadSessionResponse(
             config_options=session_config.config_options() or None,
+            field_meta=themes.session_meta(),
         )
 
     async def resume_session(
@@ -199,6 +227,7 @@ class CodePuppyAgent(Agent):
         self._announce_commands_soon(session_id)
         return ResumeSessionResponse(
             config_options=session_config.config_options() or None,
+            field_meta=themes.session_meta(),
         )
 
     async def fork_session(
@@ -269,11 +298,12 @@ class CodePuppyAgent(Agent):
         if session is None:
             return
         try:
-            history = list(session.agent.get_message_history())
-            session.agent = self._new_agent()
-            session.agent.set_message_history(history)
-            if session.mcp_specs:
-                mcp_config.attach(session.agent, session.mcp_specs)
+            with folder.working_directory(session.cwd):
+                history = list(session.agent.get_message_history())
+                session.agent = self._new_agent()
+                session.agent.set_message_history(history)
+                if session.mcp_specs:
+                    mcp_config.attach(session.agent, session.mcp_specs)
         except Exception:  # noqa: BLE001
             logger.debug("ACP: model rebind failed", exc_info=True)
 
@@ -360,6 +390,7 @@ class CodePuppyAgent(Agent):
         """
         from code_puppy.agents._builder import reset_model_fallback_warnings
 
+        permissions.cancel_pending(session_id)
         session = self._sessions.pop(session_id, None)
         if session is not None:
             await session.cancel_and_wait()
@@ -371,18 +402,44 @@ class CodePuppyAgent(Agent):
     async def prompt(
         self, prompt: List[Any], session_id: str, **kwargs: Any
     ) -> PromptResponse:
-        """Run the agent on a user prompt, streaming updates via the bridge."""
+        """Run the agent on a user prompt, streaming updates; returns turn ``_meta``."""
         session = self._sessions.get(session_id)
         if session is None:
             raise ValueError(f"unknown session: {session_id}")
         outcome = await session.prompt(prompt)
-        return PromptResponse(stop_reason=outcome.stop_reason, usage=outcome.usage)
+        return PromptResponse(
+            stop_reason=outcome.stop_reason,
+            usage=outcome.usage,
+            field_meta=turn_metadata.turn_meta(outcome.meta),
+        )
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
-        """Cancel the in-flight run for a session (notification)."""
+        """Cancel the in-flight run and any pending approval (file or shell) for a session."""
+        permissions.cancel_pending(session_id)
         session = self._sessions.get(session_id)
         if session is not None:
             session.cancel()
+
+    async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Route ``_code_puppy/*`` extension requests: theme catalog or reply feedback.
+
+        Unknown sessions are accepted: feedback may outlive the live session it names.
+        Any other method gets ``-32601`` from the feedback handler.
+        """
+        if method == themes.EXT_LIST:
+            return await themes.handle_ext_method(method, params)
+        return await feedback.handle_ext_method(
+            method, params, model_for_session=self._model_for_session
+        )
+
+    def _model_for_session(self, session_id: str) -> Optional[str]:
+        """Prefer the model that answered the last finished turn; never raises."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        if isinstance(session.last_turn_model, str) and session.last_turn_model:
+            return session.last_turn_model
+        return turn_metadata.model_name(session.agent)
 
     # ---- Helpers ----------------------------------------------------------
     def _agent_capabilities(self) -> AgentCapabilities:
@@ -420,20 +477,24 @@ class CodePuppyAgent(Agent):
         ``scope=None`` bucket on every new/loaded/forked session avoids that
         without touching any other session's already-scoped sub-agent
         warnings.
+
+        Building inside the chat's folder matters because instructions are baked
+        at build time.
         """
         from code_puppy.agents._builder import reset_model_fallback_warnings
 
         reset_model_fallback_warnings(scope=None)
-        agent = self._new_agent()
-        if rehydrate:
-            history = persistence.load_history(session_id)
-            if history:
-                try:
-                    agent.set_message_history(history)
-                except Exception:  # noqa: BLE001
-                    logger.debug("ACP: history rehydrate failed", exc_info=True)
-        if mcp_servers:
-            mcp_config.attach(agent, mcp_servers)
+        with folder.working_directory(cwd):
+            agent = self._new_agent()
+            if rehydrate:
+                history = persistence.load_history(session_id)
+                if history:
+                    try:
+                        agent.set_message_history(history)
+                    except Exception:  # noqa: BLE001
+                        logger.debug("ACP: history rehydrate failed", exc_info=True)
+            if mcp_servers:
+                mcp_config.attach(agent, mcp_servers)
         session = ACPSession(
             session_id,
             agent,

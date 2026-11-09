@@ -443,20 +443,15 @@ def test_build_jev_model_is_a_real_typesafe_model():
     assert model.model_name == "jev-1.13.0"
 
 
-async def test_tool_success_path_emits_summary_and_registers(
-    monkeypatch, tmp_path, smart_grep_on
-):
+async def test_tool_success_path_registers(monkeypatch, tmp_path, smart_grep_on):
     from pydantic_ai import Agent
 
     monkeypatch.setenv(config.API_KEY_NAME, "k")
     monkeypatch.setattr(tool, "build_jev_model", lambda name, key: FakeJev("expired"))
-    emitted: list[str] = []
-    monkeypatch.setattr(tool, "emit_info", emitted.append)
     (tmp_path / "auth.py").write_text(PY_SOURCE)
 
     out = await tool.run_smart_grep("reject expired sessions", str(tmp_path))
     assert out.error is None and out.matches
-    assert emitted and "smart_grep" in str(emitted[0])
 
     agent = Agent(FakeJev("x"))
     tool.register_smart_grep(agent)

@@ -521,6 +521,34 @@ class TestOscPalette:
             reset_palette(persist=False)
         assert mock_emit.call_count == 3  # ansi + bg + fg
 
+    @pytest.mark.parametrize("stream_kind", ["tty", "pipe", "closed", "none"])
+    def test_emit_writes_only_to_tty_and_never_raises(self, monkeypatch, stream_kind):
+        import io
+
+        class _Tty(io.StringIO):
+            def isatty(self):
+                return True
+
+        stream = {"tty": _Tty(), "pipe": io.StringIO(), "closed": io.StringIO()}.get(
+            stream_kind
+        )
+        if stream_kind == "closed":
+            stream.close()
+        monkeypatch.setattr("sys.stdout", stream)
+        persisted = MagicMock()
+        monkeypatch.setattr(
+            "code_puppy_core_plugins.theme.osc_palette.set_config_value", persisted
+        )
+
+        apply_palette({"bg": "#000", "fg": "#fff"}, persist=True, register_reset=False)
+
+        expected = f"{ESC}]11;#000{BEL}{ESC}]10;#fff{BEL}"
+        if stream_kind == "tty":
+            assert stream.getvalue() == expected
+        elif stream_kind == "pipe":
+            assert stream.getvalue() == ""
+        persisted.assert_called_once()
+
     def test_get_saved_palette_returns_none_when_empty(self):
         with patch(
             "code_puppy_core_plugins.theme.osc_palette.get_value", return_value=None

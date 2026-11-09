@@ -37,7 +37,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from code_puppy.callbacks import register_callback
-from code_puppy.http_utils import create_async_client
+from code_puppy.httpx2_utils import create_async_client
 from code_puppy.model_factory import get_custom_config
 
 if TYPE_CHECKING:

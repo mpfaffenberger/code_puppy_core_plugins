@@ -129,6 +129,32 @@ def test_tool_reports_when_no_images_present(tmp_path, monkeypatch):
     }
 
 
+def test_tool_logs_save_failure_to_errors_log(tmp_path, monkeypatch):
+    import code_puppy.error_logging as error_logging
+
+    def _raise(images):
+        raise OSError("disk full")
+
+    log_file = tmp_path / "errors.log"
+    monkeypatch.setattr(error_logging, "LOGS_DIR", str(tmp_path))
+    monkeypatch.setattr(error_logging, "ERROR_LOG_FILE", str(log_file))
+    monkeypatch.setattr(attachment_tool, "_save_reference_images", _raise)
+    save = _register_tool()
+    context = SimpleNamespace(
+        messages=[ModelRequest(parts=[UserPromptPart(content=[_png(b"z")])])]
+    )
+
+    result = asyncio.run(save(context))
+
+    assert result == {
+        "success": False,
+        "error": "Could not save reference images: disk full",
+    }
+    logged = log_file.read_text(encoding="utf-8")
+    assert logged.count("save_attachments_as_references failed") == 1
+    assert "OSError: disk full" in logged
+
+
 def test_registration_contract():
     tools = register_callbacks._register_tools()
     assert tools == [

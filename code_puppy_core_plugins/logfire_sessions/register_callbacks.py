@@ -17,6 +17,8 @@ from typing import Any
 from code_puppy.callbacks import register_callback
 from code_puppy.messaging import emit_error, emit_info, emit_success, emit_warning
 
+from ..logfire_instrumentation.sdk import MISSING_SDK_HINT, sdk_available
+
 COMMAND_NAMES = {"logfire-sessions"}
 
 _PULL_STUB = (
@@ -26,6 +28,8 @@ _PULL_STUB = (
     "extend ONBOARD_SCOPES with read-token minting permission, then pull via "
     "POST /v2/query and rebuild the envelope locally."
 )
+
+_missing_sdk_warned = False
 
 
 def _enabled() -> bool:
@@ -41,8 +45,14 @@ def _enabled() -> bool:
 
 def _on_post_autosave(metadata: Any) -> None:
     """Mirror the just-saved session into Logfire. Never raises."""
+    global _missing_sdk_warned
     try:
         if not _enabled():
+            return
+        if not sdk_available():
+            if not _missing_sdk_warned:
+                _missing_sdk_warned = True
+                emit_warning(MISSING_SDK_HINT)
             return
         from .mirror import mirror_session
 
@@ -107,6 +117,9 @@ def _handle(command: str, name: str) -> bool | None:
     args = parts[1:]
 
     if action == "on":
+        if not sdk_available():
+            emit_warning(MISSING_SDK_HINT)
+            return True
         set_value("enable_logfire_sessions", "true")
         emit_success("Logfire session mirroring enabled.")
     elif action == "off":

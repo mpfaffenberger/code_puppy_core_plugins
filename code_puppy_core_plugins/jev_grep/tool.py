@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic_ai import RunContext
 
-from code_puppy.i18n import add_catalog_dir, t
-from code_puppy.messaging import emit_info
 from code_puppy.tools.common import resolve_path
 
 from .config import (
@@ -21,8 +17,6 @@ from .config import (
 )
 from .judge import build_jev_model
 from .search import DEFAULT_CANDIDATES, SemanticGrepOutput, semantic_search
-
-add_catalog_dir(Path(__file__).parent / "locales")
 
 TOOL_NAME = "smart_grep"
 
@@ -71,16 +65,6 @@ async def run_smart_grep(
         return SemanticGrepOutput(
             error=f"smart_grep failed: {type(err).__name__}: {err}"
         )
-    emit_info(
-        t(
-            "smart_grep.summary",
-            query=query,
-            directory=directory,
-            matches=len(result.matches),
-            evaluated=result.coverage.evaluated,
-            snippets=result.coverage.snippets,
-        )
-    )
     return result
 
 

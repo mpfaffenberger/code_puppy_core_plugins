@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+from importlib.resources import files
 from typing import Any
 
 from code_puppy.callbacks import register_callback
-from code_puppy.i18n import t
+from code_puppy.i18n import register_plugin_catalog, t
 from code_puppy.messaging import emit_info, emit_success, emit_warning
 from code_puppy.model_switching import set_model_and_reload_agent
 
-from .config import FALLBACK_MODELS, META_OAUTH_CONFIG, get_token_storage_path
+from .config import (
+    FALLBACK_MODELS,
+    META_OAUTH_CONFIG,
+    get_token_storage_path,
+    reasoning_spec,
+)
 from .oauth_flow import run_oauth_flow
+from .plan import describe_plan
 from .utils import discover_models, load_credentials
+
+register_plugin_catalog(files(__package__).joinpath("locales"))
 
 _PREFIX = str(META_OAUTH_CONFIG["prefix"])
 _DEFAULT_MODEL = f"{_PREFIX}{META_OAUTH_CONFIG['default_model']}"
@@ -63,7 +72,14 @@ def _load_meta_models() -> dict[str, Any]:
             "provider": "meta",
             "name": model_id,
             "context_length": int(spec.get("context_length") or 128_000),
-            "supported_settings": list(spec.get("supported_settings") or []),
+            # specs may come from stored credentials persisted before
+            # setting_choices/setting_defaults existed; recompute them
+            # from the model id instead of trusting the stale spec.
+            **(
+                reasoning_spec(model_id)
+                if spec.get("supported_settings")
+                else {"supported_settings": []}
+            ),
             "oauth_source": "meta-oauth-plugin",
         }
         for model_id, spec in _get_model_specs(credentials).items()
@@ -80,6 +96,8 @@ def _handle_meta_status() -> None:
     emit_info(
         t("oauth.meta.status.source", source=credentials.get("_source", "unknown"))
     )
+    for line in describe_plan(credentials):
+        emit_info(line)
     emit_info(
         t("oauth.meta.status.models", models=", ".join(_meta_model_names(credentials)))
     )
@@ -119,9 +137,13 @@ def _create_meta_oauth_model(
 ) -> Any:
     """Create a Muse model using Meta's OpenAI Responses-compatible API."""
     del config
-    from pydantic_ai.models.openai import OpenAIResponsesModel
+    from pydantic_ai.models.openai import (
+        OpenAIResponsesModel,
+        OpenAIResponsesModelSettings,
+    )
+    from pydantic_ai.profiles.openai import OpenAIModelProfile
 
-    from code_puppy.http_utils import create_async_client
+    from code_puppy.httpx2_utils import create_async_client
     from code_puppy.provider_identity import make_openai_provider
 
     credentials = load_credentials()
@@ -141,7 +163,40 @@ def _create_meta_oauth_model(
         base_url=credentials["api_base_url"],
         http_client=client,
     )
-    return OpenAIResponsesModel(model_name=model_config["name"], provider=provider)
+    # Meta's Responses API supports reasoning and encrypted reasoning
+    # replay. Without openai_supports_encrypted_reasoning_content,
+    # pydantic-ai never sends include=["reasoning.encrypted_content"]
+    # and drops thinking blocks when replaying prior turns. Reasoning
+    # cannot be disabled on Muse Wonder/Spark ("none" -> HTTP 400),
+    # but "minimal" (the shortest pass) is supported.
+    #
+    # Muse labels progress preambles with phase="commentary" (codex style).
+    # Without openai_supports_phase, replayed preambles lose that label and
+    # read as final answers; over a long session Muse then starts emitting
+    # preambles in the final channel with no tool call, ending the run
+    # mid-task. Meta accepts phase on input (live-verified 2026-10-12).
+    profile = OpenAIModelProfile(
+        openai_supports_reasoning=True,
+        openai_reasoning_enabled_by_default=True,
+        openai_supports_encrypted_reasoning_content=True,
+        openai_supports_reasoning_effort_none=False,
+        openai_supports_minimal_reasoning_effort=True,
+        openai_supports_phase=True,
+    )
+    # Meta buffers tool-call arguments server-side (one JSON field per
+    # delta, after generation) on both Responses and Chat Completions, and
+    # no header or request option in the official Muse CLI changes that.
+    # What we can fix is the silent reasoning phase: without a requested
+    # summary Meta emits no reasoning events until the item completes;
+    # with one, summaries stream within seconds. Model-level settings are
+    # defaults, so per-request settings still win.
+    settings = OpenAIResponsesModelSettings(openai_reasoning_summary="auto")
+    return OpenAIResponsesModel(
+        model_name=model_config["name"],
+        provider=provider,
+        profile=profile,
+        settings=settings,
+    )
 
 
 def _register_model_types() -> list[dict[str, Any]]:

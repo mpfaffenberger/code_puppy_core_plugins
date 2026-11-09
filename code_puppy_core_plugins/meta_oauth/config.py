@@ -26,6 +26,38 @@ META_OAUTH_CONFIG: dict[str, Any] = {
     "default_model": "muse-spark-1.2-contributor",
 }
 
+# Meta Muse ``reasoning_effort`` scale (from Meta's docs): "none" disables
+# reasoning but is NOT supported by Muse Wonder or Muse Spark (HTTP 400),
+# so it is deliberately absent; core clamps a stored "none" to "minimal".
+# "max" is supported by muse-wonder-1.0 and muse-spark-1.3 but NOT by
+# muse-spark-1.3-contributor. Contributors get the same conservative scale.
+_FULL_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
+_CONTRIBUTOR_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+
+# Default effort for Meta models: deep enough to be useful out of the box,
+# overridable per model via /model_settings.
+DEFAULT_REASONING_EFFORT = "high"
+
+
+def reasoning_effort_choices(model_id: str) -> list[str]:
+    """Return the documented ``reasoning_effort`` values for a Muse model."""
+    efforts = (
+        _CONTRIBUTOR_REASONING_EFFORTS
+        if model_id.endswith("-contributor")
+        else _FULL_REASONING_EFFORTS
+    )
+    return list(efforts)
+
+
+def reasoning_spec(model_id: str) -> dict[str, Any]:
+    """Catalog entries advertising this model's effort scale and default."""
+    return {
+        "supported_settings": ["reasoning_effort"],
+        "setting_choices": {"reasoning_effort": reasoning_effort_choices(model_id)},
+        "setting_defaults": {"reasoning_effort": DEFAULT_REASONING_EFFORT},
+    }
+
+
 # Used when Meta's richer model catalogue is temporarily unavailable.
 FALLBACK_MODELS: dict[str, dict[str, Any]] = {
     "muse-spark-1.2-contributor": {

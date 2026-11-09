@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -17,6 +18,7 @@ from .config import (
     META_OAUTH_CONFIG,
     get_muse_auth_path,
     get_token_storage_path,
+    reasoning_spec,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,7 +100,12 @@ def load_credentials() -> dict[str, Any] | None:
 
 
 def save_credentials(credentials: dict[str, Any]) -> bool:
-    """Atomically save private Meta credentials with mode 0600."""
+    """Atomically save private Meta credentials.
+
+    ``mkstemp`` already creates the file owner-only (0600 on POSIX), and
+    ``os.replace`` keeps that mode, so no extra chmod is needed. That matters
+    because ``os.fchmod`` doesn't exist on Windows.
+    """
     if not credentials.get("api_key"):
         raise ValueError("Meta credentials require an api_key")
     destination = get_token_storage_path()
@@ -108,17 +115,20 @@ def save_credentials(credentials: dict[str, Any]) -> bool:
         fd, temporary_path = tempfile.mkstemp(
             prefix=".meta_oauth.", dir=destination.parent
         )
-        os.fchmod(fd, 0o600)
+        # Hand the fd to fdopen immediately so it is always closed; an open
+        # handle makes the cleanup unlink below fail on Windows (WinError 32).
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
             handle.write("\n")
         os.replace(temporary_path, destination)
-        destination.chmod(0o600)
         return True
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to save Meta OAuth credentials: %s", exc)
         if temporary_path:
-            Path(temporary_path).unlink(missing_ok=True)
+            try:
+                Path(temporary_path).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove temp file %s", temporary_path)
         return False
 
 
@@ -188,9 +198,14 @@ def poll_device_token(device_code: str) -> tuple[str, dict[str, Any]]:
 
 
 def mint_api_credentials(access_token: str) -> dict[str, Any]:
-    """Exchange a Meta account token for a Model API credential."""
+    """Exchange a Meta account token for a Model API credential.
+
+    The mint endpoint rejects a body-less POST with "Request body is required
+    but was empty or null", so always send an (empty) JSON object.
+    """
     response = requests.post(
         _validate_url(str(META_OAUTH_CONFIG["mint_url"]), "api.meta.ai"),
+        json={},
         headers={
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}",
@@ -205,13 +220,26 @@ def mint_api_credentials(access_token: str) -> dict[str, Any]:
             _problem(response, f"Meta key mint failed ({response.status_code})")
         )
     payload = response.json()
-    if not isinstance(payload, dict) or not payload.get("api_key"):
-        raise RuntimeError("Meta key mint returned no API key")
+    if not isinstance(payload, dict):
+        raise RuntimeError("Meta key mint returned invalid JSON")
+    if not payload.get("api_key"):
+        raise RuntimeError(_mint_refusal(payload))
     payload["api_base_url"] = validate_api_base_url(
         str(payload.get("base_url") or payload.get("api_base_url") or "")
     )
     payload.pop("base_url", None)
     return payload
+
+
+def _mint_refusal(payload: Mapping[str, object]) -> str:
+    """Explain a key-less mint, e.g. a Muse Code plan that needs payment."""
+    reason = str(
+        payload.get("detail")
+        or payload.get("title")
+        or "Meta key mint returned no API key"
+    )
+    action_url = payload.get("action_url")
+    return f"{reason} ({action_url})" if action_url else reason
 
 
 def discover_models(credentials: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -245,8 +273,10 @@ def discover_models(credentials: dict[str, Any]) -> dict[str, dict[str, Any]]:
         limits = raw_limits if isinstance(raw_limits, dict) else {}
         models[row["id"]] = {
             "context_length": int(limits.get("context") or 128_000),
-            "supported_settings": ["reasoning_effort"]
-            if details.get("reasoning")
-            else [],
+            **(
+                reasoning_spec(row["id"])
+                if details.get("reasoning")
+                else {"supported_settings": []}
+            ),
         }
     return models or dict(FALLBACK_MODELS)

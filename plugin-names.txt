@@ -20,6 +20,7 @@ destructive_command_guard
 emoji_filter
 empty_html_comment_filter
 example_custom_command
+execution_environment
 file_permission_handler
 flux_bootstrap
 force_push_guard
@@ -29,6 +30,7 @@ grok_oauth
 herdr
 hook_creator
 hook_manager
+logfire_instrumentation
 logfire_oauth
 logfire_sessions
 mcp_binding_prompt
@@ -43,10 +45,12 @@ pop_command
 profiles
 prompt_newline
 prune
+pstack
 puppy_kennel
 puppy_spinner
 qa_kitten_skill
 quick_resume
+resume_hint
 review_pr
 session_namer
 shell_safety
@@ -63,3 +67,4 @@ web_retriever_skill
 wide_completion_menu
 wiggum
 yolo_cli
+setup_cli

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-puppy-core-plugins"
-version = "0.0.85"
+version = "0.0.107"
 description = "Official plugin bundle for Code Puppy"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -54,6 +54,8 @@ computer-use = [
     "windows-capture>=2.0.1,<3; sys_platform == 'win32'",
     "Pillow>=11",
 ]
+# Opt-in observability: the plugins stay dormant until enable_logfire is set.
+logfire = ["logfire>=4.0"]
 
 [project.urls]
 Repository = "https://github.com/mpfaffenberger/code_puppy_core_plugins"
@@ -83,6 +85,7 @@ destructive_command_guard = "code_puppy_core_plugins.destructive_command_guard.r
 emoji_filter = "code_puppy_core_plugins.emoji_filter.register_callbacks"
 empty_html_comment_filter = "code_puppy_core_plugins.empty_html_comment_filter.register_callbacks"
 example_custom_command = "code_puppy_core_plugins.example_custom_command.register_callbacks"
+execution_environment = "code_puppy_core_plugins.execution_environment.register_callbacks"
 file_permission_handler = "code_puppy_core_plugins.file_permission_handler.register_callbacks"
 flux_bootstrap = "code_puppy_core_plugins.flux_bootstrap.register_callbacks"
 force_push_guard = "code_puppy_core_plugins.force_push_guard.register_callbacks"
@@ -93,6 +96,7 @@ herdr = "code_puppy_core_plugins.herdr.register_callbacks"
 hook_creator = "code_puppy_core_plugins.hook_creator.register_callbacks"
 hook_manager = "code_puppy_core_plugins.hook_manager.register_callbacks"
 jev_grep = "code_puppy_core_plugins.jev_grep.register_callbacks"
+logfire_instrumentation = "code_puppy_core_plugins.logfire_instrumentation.register_callbacks"
 logfire_oauth = "code_puppy_core_plugins.logfire_oauth.register_callbacks"
 logfire_sessions = "code_puppy_core_plugins.logfire_sessions.register_callbacks"
 mcp_binding_prompt = "code_puppy_core_plugins.mcp_binding_prompt.register_callbacks"
@@ -109,11 +113,14 @@ profiles = "code_puppy_core_plugins.profiles.register_callbacks"
 prompt_newline = "code_puppy_core_plugins.prompt_newline.register_callbacks"
 prune = "code_puppy_core_plugins.prune.register_callbacks"
 puppy_kennel = "code_puppy_core_plugins.puppy_kennel.register_callbacks"
+pstack = "code_puppy_core_plugins.pstack.register_callbacks"
 puppy_spinner = "code_puppy_core_plugins.puppy_spinner.register_callbacks"
 qa_kitten_skill = "code_puppy_core_plugins.qa_kitten_skill.register_callbacks"
 quick_resume = "code_puppy_core_plugins.quick_resume.register_callbacks"
+resume_hint = "code_puppy_core_plugins.resume_hint.register_callbacks"
 review_pr = "code_puppy_core_plugins.review_pr.register_callbacks"
 session_namer = "code_puppy_core_plugins.session_namer.register_callbacks"
+setup_cli = "code_puppy_core_plugins.setup_cli.register_callbacks"
 spill = "code_puppy_core_plugins.spill.register_callbacks"
 stack_dump = "code_puppy_core_plugins.stack_dump.register_callbacks"
 statusline = "code_puppy_core_plugins.statusline.register_callbacks"
@@ -142,6 +149,8 @@ addopts = "--cov=code_puppy_core_plugins --cov-report=term-missing"
 dev = [
     # Offline wheel tests use the installed backend, not a warm uv build cache.
     "hatchling",
+    # Exercise the real import path of the optional [logfire] extra.
+    "logfire>=4.0",
     # Old-core compat paths (theme merge shim) are still unit-tested.
     "prompt-toolkit>=3.0.0,<4",
     "pytest>=8.3.4",

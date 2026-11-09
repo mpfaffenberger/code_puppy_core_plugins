@@ -18,6 +18,7 @@ from code_puppy.messaging import (
 from code_puppy_core_plugins.plugin_settings import register_settings
 
 from . import goal_runs, state
+from .cancellation import run_with_cancel_controls
 from .judge import GoalJudgement, judge_goal
 from .judge_config import JudgeConfig, get_enabled_judges_or_default, load_judges
 
@@ -470,11 +471,13 @@ async def _on_interactive_turn_end(
     loop_num = state.increment()
     if state.is_goal_mode():
         try:
-            complete, notes, _verdicts = await _run_goal_judges(
-                agent=agent,
-                goal=goal_prompt,
-                result=result,
-                error=error,
+            complete, notes, _verdicts = await run_with_cancel_controls(
+                _run_goal_judges(
+                    agent=agent,
+                    goal=goal_prompt,
+                    result=result,
+                    error=error,
+                )
             )
         except (asyncio.CancelledError, KeyboardInterrupt):
             # Keep enough durable state for an explicit UUID resume.

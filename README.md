@@ -63,6 +63,28 @@ player can play it. Linux uses `notify-send` for desktop notifications when it
 is installed; Windows uses a best-effort PowerShell toast. No external Python
 dependencies are required.
 
+## Logfire
+
+The `logfire_instrumentation`, `logfire_oauth` and `logfire_sessions` plugins
+do not import the SDK until you opt in. The SDK is an optional extra:
+
+```bash
+uv tool install code-puppy --with 'code-puppy-core-plugins[logfire]'
+```
+
+Opt in to pydantic-ai instrumentation with `/set enable_logfire=true` (or a
+truthy `CODE_PUPPY_ENABLE_LOGFIRE` for headless runs), then restart. Spans are
+sent only when a write token is available, either your own `LOGFIRE_TOKEN` or
+one minted by `/logfire onboard`. Opting in without the extra installed shows
+an install hint instead.
+
+## pstack
+
+The `pstack` plugin bundles poteto's [pstack](https://github.com/cursor/plugins/tree/main/pstack)
+skill pack (MIT, Lauren Tan), adapted from Cursor to Code Puppy. It is disabled
+by default. `/pstack` describes it and `/pstack on` enables it. Details are in
+[`code_puppy_core_plugins/pstack/README.md`](code_puppy_core_plugins/pstack/README.md).
+
 ## Releases
 
 Pushes to `main` run lint and tests, bump the patch version, build, publish to

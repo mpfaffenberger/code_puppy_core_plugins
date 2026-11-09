@@ -16,11 +16,18 @@ from code_puppy.config import (
     is_dangerous_command_allowlisted,
 )
 from code_puppy.messaging import emit_info, emit_warning
+from code_puppy.tools.subagent_context import is_subagent
 from code_puppy_core_plugins.force_push_guard.detector import detect_force_push
 
 
 def _is_interactive() -> bool:
-    """Check if we're in an interactive terminal that can show prompts."""
+    """Check if we're in an interactive terminal that can show prompts.
+
+    Sub-agents never are: nobody can answer their prompt, so it would block
+    the command forever.
+    """
+    if is_subagent():
+        return False
     try:
         return sys.stdin.isatty()
     except (AttributeError, OSError):

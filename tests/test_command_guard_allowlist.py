@@ -15,10 +15,13 @@ while ``rm -rf /`` stays fully guarded.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from code_puppy import config
+from code_puppy.tools.subagent_context import subagent_context
 from code_puppy_core_plugins.destructive_command_guard import (
     register_callbacks as dcg,
 )
@@ -147,3 +150,46 @@ class TestForcePushGuardAllowlist:
         )
         assert result is not None
         assert result["blocked"] is True
+
+
+# ---------------------------------------------------------------------------
+# Sub-agents can never answer an approval prompt
+# ---------------------------------------------------------------------------
+
+GUARDS = [
+    (dcg, "destructive_command_guard_callback", "cd tmp && rm -rf /"),
+    (fpg, "force_push_guard_callback", "git push --force origin develop"),
+]
+
+
+@pytest.fixture
+def tty_attached(monkeypatch):
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
+
+
+@pytest.mark.usefixtures("cfg", "tty_attached")
+class TestGuardsAndSubagents:
+    @pytest.mark.parametrize("guard, callback, command", GUARDS)
+    def test_subagent_is_blocked_without_a_prompt(
+        self, monkeypatch, guard, callback, command
+    ):
+        prompt = AsyncMock(return_value=None)
+        monkeypatch.setattr(guard, "_prompt_user_approval", prompt)
+
+        with subagent_context("tester"):
+            result = asyncio.run(getattr(guard, callback)(None, command))
+
+        assert result["blocked"] is True
+        prompt.assert_not_awaited()
+
+    @pytest.mark.parametrize("guard, callback, command", GUARDS)
+    def test_main_agent_on_a_tty_is_still_prompted(
+        self, monkeypatch, guard, callback, command
+    ):
+        prompt = AsyncMock(return_value=None)
+        monkeypatch.setattr(guard, "_prompt_user_approval", prompt)
+
+        result = asyncio.run(getattr(guard, callback)(None, command))
+
+        assert result is None
+        prompt.assert_awaited_once()

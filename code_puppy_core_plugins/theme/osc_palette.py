@@ -30,8 +30,10 @@ _atexit_registered = False
 
 # --- Emission ---------------------------------------------------------------
 def _emit(seq: str) -> None:
-    """Write an escape sequence to stdout, ignoring failures (closed tty etc.)."""
+    """Write an escape sequence to a TTY stdout only; ignore all failures."""
     try:
+        if not sys.stdout.isatty():
+            return
         sys.stdout.write(seq)
         sys.stdout.flush()
     except Exception:

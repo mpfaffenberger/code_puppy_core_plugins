@@ -103,7 +103,7 @@ def _create_grok_oauth_model(model_name: str, model_config: Dict, config: Dict) 
     from pydantic_ai.models.openai import OpenAIResponsesModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
-    from code_puppy.http_utils import create_async_client
+    from code_puppy.httpx2_utils import create_async_client
 
     access_token = get_valid_access_token()
     if not access_token:
