@@ -35,6 +35,71 @@ The package deliberately does not depend on `code-puppy` in its own metadata.
 `code-puppy` depends on this bundle; adding the reverse edge would create a
 packaging dependency cycle. Plugin CI installs the core runtime separately.
 
+## Headroom compression
+
+The `headroom_compression` plugin is disabled by default and requires a
+code-puppy version that includes the `resolve_custom_endpoint_url` core hook.
+It routes a custom Anthropic-shaped endpoint through a local
+[headroom](https://pypi.org/project/headroom-ai/) proxy for context
+compression:
+
+```text
+/headroom enable https://your-endpoint.example.com/anthropic
+```
+
+This requires the `headroom` binary to already be installed
+(`pip install headroom-ai`) -- the plugin detects it but does not install it
+for you, since it can't safely guess your Python toolchain (pip/uv/pipx/etc).
+The proxy runs on a fixed local port (8787); the plugin verifies the process
+answering there is actually its own -- via the upstream URL headroom's own
+`/health` reports back -- before trusting it, rather than adopting whatever
+happens to be listening (a stale orphan, or someone's standalone `headroom
+proxy`/`headroom wrap` using the same default port). `enable`/`disable`/
+`restart` take effect immediately by rebuilding the agent's cached model
+client; if the proxy dies mid-session instead, the *current* turn still
+fails once (the model client isn't rebuilt until the exception is caught),
+but compression is deactivated and every turn after that goes direct, with a
+warning shown.
+
+Other built-in subcommands: `/headroom disable`, `/headroom status`,
+`/headroom restart`.
+
+A small, explicit allowlist of headroom's own read-only diagnostic
+subcommands is also forwarded to the real `headroom` binary: `doctor`,
+`savings`, `output-savings`, `perf`, `dashboard` (e.g. `/headroom doctor` to
+verify routing). This is deliberately *not* a blanket passthrough, and the
+bar for inclusion is two-part: a command must be both safe (individually
+verified against its own `--help`) *and* something a user would actually
+want without leaving a coding session -- "is my routing/savings working
+right now." Safety is checked at the flag level too, not just the
+subcommand name -- `savings` is otherwise a read-only report, but its own
+`--reset` flag deletes the on-disk savings ledger, so only its non-mutating
+flags are allowed through; an unrecognized flag for any allowlisted command
+is rejected rather than forwarded. Safety alone isn't enough to earn a slot
+either: headroom ships other commands that are perfectly safe but purely
+one-off audit/debug actions (its telemetry disclosure, its internal
+feature-rollout inspector) -- those are left out on purpose and can just be
+run directly via `headroom <cmd>` in a terminal. Other excluded subcommands
+start their own untracked proxy/server, mutate other tools' configs, make
+real LLM calls, handle privacy-sensitive raw traffic, or mutate the
+`headroom` binary itself. Note that because this plugin always runs the
+proxy with `--stateless`, `savings`/`dashboard`'s on-disk history will show
+nothing even while compression is actively happening -- `/headroom
+doctor`'s own savings check reads the proxy's live in-memory stats instead
+and is the reliable source of truth.
+
+Only works cleanly for an upstream whose path is exactly what headroom
+itself expects at its root once the plugin strips the configured prefix --
+in practice this means any upstream base URL works (`https://gw/anthropic`,
+`https://gw/llm/claude`, `https://api.anthropic.com`), because the plugin
+rewrites each request to the bare suffix after that prefix and lets headroom
+reconstruct the full upstream URL from `--anthropic-api-url` itself.
+
+Requires a code-puppy build that includes the `resolve_custom_endpoint_url`
+hook; on an older build the plugin detects this at import time and loads
+inactive (no proxy, no `/headroom` command, nothing to clean up) rather than
+half-registering and leaking a subprocess.
+
 ## Completion notifications
 
 The `completion_notification` plugin is disabled by default. Enable a native,
