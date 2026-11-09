@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext, ToolOutput, UsageLimits
 
 from code_puppy.agents._history import stringify_part
+from code_puppy.agents._model_message_transform import build_model_message_transform
 from code_puppy.agents.agent_manager import load_agent
 from code_puppy.model_factory import ModelFactory, make_model_settings
 from code_puppy.model_utils import prepare_prompt_for_model
@@ -220,6 +221,14 @@ async def judge_goal(
     model = ModelFactory.get_model(model_name, models_config)
     judge_instructions = judge_config.prompt or DEFAULT_JUDGE_PROMPT
     user_prompt = _judge_user_prompt(goal, response, error)
+    try:
+        from code_puppy.agents._runtime import (
+            apply_attachment_free_user_prompt_submit,
+        )
+    except ImportError:  # Old cores have no shared follow-up submission helper.
+        pass
+    else:
+        user_prompt = await apply_attachment_free_user_prompt_submit(user_prompt, None)
     prepared = prepare_prompt_for_model(
         model_name,
         judge_instructions,
@@ -239,6 +248,7 @@ async def judge_goal(
             description="Verdict for the /goal implementor's latest iteration.",
         ),
         retries=3,
+        capabilities=[build_model_message_transform("goal-judge")],
         model_settings=model_settings,
     )
 

@@ -48,8 +48,13 @@ def resolve_model_name() -> str | None:
 
 async def _ask(model_name: str, question: str) -> str:
     """Single-turn query against a fresh Agent. Raises on failure."""
+    import uuid
+
     from pydantic_ai import Agent, UsageLimits
 
+    from code_puppy.agents._model_message_transform import (
+        build_model_message_transform,
+    )
     from code_puppy.model_factory import ModelFactory, make_model_settings
     from code_puppy.model_utils import prepare_prompt_for_model
 
@@ -58,22 +63,39 @@ async def _ask(model_name: str, question: str) -> str:
         raise ValueError(f"model {model_name!r} not present in the model config")
 
     model = ModelFactory.get_model(model_name, models_config)
-    prepared = prepare_prompt_for_model(
-        model_name,
-        _INSTRUCTIONS,
-        question,
-        prepend_system_to_user=True,
-    )
-    agent = Agent(
-        model=model,
-        instructions=prepared.instructions,
-        retries=1,
-        model_settings=make_model_settings(model_name),
-    )
-    result = await agent.run(
-        prepared.user_prompt,
-        usage_limits=UsageLimits(request_limit=3),
-    )
+
+    async def call(submitted_question: str):
+        prepared = prepare_prompt_for_model(
+            model_name,
+            _INSTRUCTIONS,
+            submitted_question,
+            prepend_system_to_user=True,
+        )
+        agent = Agent(
+            model=model,
+            instructions=prepared.instructions,
+            retries=1,
+            capabilities=[build_model_message_transform("btw")],
+            model_settings=make_model_settings(model_name),
+        )
+        return await agent.run(
+            prepared.user_prompt,
+            usage_limits=UsageLimits(request_limit=3),
+        )
+
+    try:
+        from code_puppy.agents._auxiliary_run import run_auxiliary_model_call
+    except ImportError:  # Old cores retain the guarded request but lack lifecycle.
+        result = await call(question)
+    else:
+        result = await run_auxiliary_model_call(
+            agent_name="btw",
+            model_name=model_name,
+            session_id=f"btw-{uuid.uuid4().hex}",
+            prompt=question,
+            call=call,
+            response_text=lambda value: str(value.output),
+        )
     return str(result.output)
 
 

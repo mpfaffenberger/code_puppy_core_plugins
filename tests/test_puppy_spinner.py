@@ -11,6 +11,7 @@ import asyncio
 
 import pytest
 
+from code_puppy import callbacks
 from code_puppy_core_plugins.puppy_spinner import register_callbacks as rc
 
 
@@ -61,6 +62,21 @@ def test_frames_bounce_there_and_back():
 # =========================================================================
 # Lifecycle: start / paint / end / clear
 # =========================================================================
+
+
+async def test_auxiliary_lifecycle_does_not_change_spinner_state(bar):
+    if not hasattr(callbacks, "auxiliary_agent_run_context"):
+        pytest.skip("core does not expose auxiliary lifecycle scope")
+
+    await rc._on_run_start(agent_name="main", model_name="m")
+
+    with callbacks.auxiliary_agent_run_context():
+        await rc._on_run_start(agent_name="aux", model_name="m")
+        await rc._on_run_end(agent_name="aux", model_name="m")
+
+    assert rc._active_runs == 1
+    assert rc._ticker_task is not None and not rc._ticker_task.done()
+    await rc._on_run_end(agent_name="main", model_name="m")
 
 
 async def test_run_start_spins_and_run_end_clears(bar):

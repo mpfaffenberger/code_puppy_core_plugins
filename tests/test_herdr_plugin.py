@@ -22,7 +22,8 @@ from __future__ import annotations
 import time
 from unittest.mock import patch
 
-
+from code_puppy import callbacks
+from code_puppy_core_plugins.herdr import register_callbacks as registration
 from code_puppy_core_plugins.herdr import sources
 from code_puppy_core_plugins.herdr.reporter import (
     AWAITING,
@@ -40,6 +41,27 @@ def _states(fake: FakeClient) -> list[str]:
 
 
 # --- reporter state machine ------------------------------------------------
+
+
+def test_auxiliary_prompt_and_lifecycle_do_not_change_pane_state(monkeypatch):
+    import pytest
+
+    if not hasattr(callbacks, "auxiliary_agent_run_context"):
+        pytest.skip("core does not expose auxiliary lifecycle scope")
+
+    fake = FakeClient()
+    reporter = HerdrReporter(fake)
+    monkeypatch.setattr(registration, "_reporter", reporter)
+
+    registration._on_run_start()
+    assert _states(fake) == [WORKING]
+    with callbacks.auxiliary_agent_run_context():
+        registration._on_user_prompt()
+        registration._on_run_start()
+        registration._on_run_end()
+    assert _states(fake) == [WORKING]
+    registration._on_run_end()
+    assert _states(fake) == [WORKING, IDLE]
 
 
 def test_reporter_working_from_run_depth():

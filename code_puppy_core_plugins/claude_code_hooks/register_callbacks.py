@@ -380,7 +380,9 @@ async def on_agent_run_end_hook(
     metadata: dict | None = None,
 ) -> None:
     """agent_run_end callback — fires Stop or SubagentStop hooks."""
-    if not _hook_engine:
+    from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+
+    if is_auxiliary_agent_run() or not _hook_engine:
         return
 
     agent_lower = (agent_name or "").lower()

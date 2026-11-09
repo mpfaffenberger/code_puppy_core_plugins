@@ -261,6 +261,69 @@ async def test_fork_publishes_completion_lifecycle_event():
     assert context == {"detached_fork": True}
 
 
+async def test_fork_prompt_and_lifecycle_share_final_identity(monkeypatch):
+    pytest.importorskip("code_puppy.agents._auxiliary_run")
+    from code_puppy.agents import _auxiliary_run, _runtime
+
+    calls = []
+    events = []
+
+    async def submit(prompt, session_id):
+        events.append(("submit", session_id))
+        return "policy notice"
+
+    async def started(**kwargs):
+        events.append(("start", kwargs["session_id"]))
+
+    async def ended(**kwargs):
+        events.append(("end", kwargs["session_id"]))
+
+    async def invoke(
+        *,
+        context,
+        agent_name,
+        prompt,
+        session_id,
+        model_name,
+        emit_response_message,
+        session_id_is_resolved=False,
+    ):
+        calls.append(
+            {
+                "prompt": prompt,
+                "session_id": session_id,
+                "resolved": session_id_is_resolved,
+            }
+        )
+        return SimpleNamespace(response="done", error=None, session_id=session_id)
+
+    monkeypatch.setattr(rc, "_new_fork_session_id", lambda _name: "qa-session-final")
+    monkeypatch.setattr(rc, "_resolve_fork_model_name", lambda *_args: "model")
+    monkeypatch.setattr(_runtime, "apply_attachment_free_user_prompt_submit", submit)
+    monkeypatch.setattr(_auxiliary_run, "on_agent_run_start", started)
+    monkeypatch.setattr(_auxiliary_run, "on_agent_run_end", ended)
+
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=invoke,
+        ),
+        patch("code_puppy.callbacks.on_post_tool_call") as post_tool,
+    ):
+        result = await rc._run_fork("qa-kitten", "raw prompt", session_id=None)
+
+    assert result.session_id == "qa-session-final"
+    assert events == [
+        ("submit", "qa-session-final"),
+        ("start", "qa-session-final"),
+        ("end", "qa-session-final"),
+    ]
+    assert calls == [
+        {"prompt": "policy notice", "session_id": "qa-session-final", "resolved": True}
+    ]
+    assert post_tool.await_args.args[1]["prompt"] == "policy notice"
+
+
 async def test_fork_defaults_to_current_agent():
     with (
         patch(
