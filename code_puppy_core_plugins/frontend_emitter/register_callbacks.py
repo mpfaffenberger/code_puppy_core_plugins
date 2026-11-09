@@ -24,6 +24,15 @@ import time
 from typing import Any, Dict, Optional
 
 from code_puppy.callbacks import register_callback
+
+try:
+    from code_puppy.callbacks import terminal_tool_observer
+except ImportError:  # Compatible with cores that predate terminal outcomes.
+
+    def terminal_tool_observer(callback):
+        return callback
+
+
 from code_puppy.command_line.set_menu_schema import Setting, SettingsCategory
 from code_puppy.config import (
     get_frontend_emitter_enabled,
@@ -49,7 +58,10 @@ _MAX_ARGS_TRUNCATED_STR = 4000
 async def on_pre_tool_call(
     tool_name: str, tool_args: Dict[str, Any], context: Any = None
 ) -> None:
-    """Emit an event when a tool call starts.
+    """Emit a tool start without exposing arguments before policy settles.
+
+    Arguments are published by ``on_post_tool_call`` only for calls that
+    reached execution. Blocked and cancelled calls stay redacted.
 
     Args:
         tool_name: Name of the tool being called.
@@ -61,7 +73,8 @@ async def on_pre_tool_call(
             "tool_call_start",
             {
                 "tool_name": tool_name,
-                "tool_args": _sanitize_args(tool_args),
+                "tool_args": {},
+                "arguments_redacted": True,
                 "start_time": time.time(),
             },
         )
@@ -70,6 +83,7 @@ async def on_pre_tool_call(
         logger.error(f"Failed to emit pre_tool_call event: {e}")
 
 
+@terminal_tool_observer
 async def on_post_tool_call(
     tool_name: str,
     tool_args: Dict[str, Any],
@@ -77,7 +91,7 @@ async def on_post_tool_call(
     duration_ms: float,
     context: Any = None,
 ) -> None:
-    """Emit an event when a tool call completes.
+    """Emit a terminal event, redacting calls that never executed.
 
     Args:
         tool_name: Name of the tool that was called.
@@ -87,14 +101,22 @@ async def on_post_tool_call(
         context: Optional context data for the tool call.
     """
     try:
+        outcome = context.get("outcome") if isinstance(context, dict) else None
+        arguments_redacted = outcome in {"blocked", "cancelled"}
+        success = _is_successful_result(result) and outcome in {None, "ok"}
+        result_summary = (
+            f"<{outcome}>" if arguments_redacted else _summarize_result(result)
+        )
         emit_event(
             "tool_call_complete",
             {
                 "tool_name": tool_name,
-                "tool_args": _sanitize_args(tool_args),
+                "tool_args": {} if arguments_redacted else _sanitize_args(tool_args),
+                "arguments_redacted": arguments_redacted,
                 "duration_ms": duration_ms,
-                "success": _is_successful_result(result),
-                "result_summary": _summarize_result(result),
+                "success": success,
+                "outcome": outcome,
+                "result_summary": result_summary,
             },
         )
         logger.debug(
@@ -237,9 +259,8 @@ def _sanitize_event_data(data: Any) -> Any:
     Special-cased for pydantic-ai delta-style objects:
       * Anything carrying a ``content_delta`` attribute (text streaming)
         is normalised to ``{"type": <class_name>, "content_delta": <str>}``.
-      * Anything carrying an ``args_delta`` attribute (tool-call streaming)
-        is normalised to ``{"type": <class_name>, "args_delta": <str>,
-        "tool_call_id": <id|None>, "tool_name": <name|None>}``.
+      * Tool-call argument fields (``args`` / ``args_delta`` / ``tool_args``)
+        are replaced with ``<redacted>`` before the final policy verdict.
       * Anything carrying a ``part`` attribute (part_start / part_end
         wrappers) is unwrapped recursively into its part.
       * Plain dicts / lists / scalars retain the previous behaviour
@@ -265,7 +286,14 @@ def _sanitize_event_data(data: Any) -> Any:
         return data
 
     if isinstance(data, dict):
-        return {k: _sanitize_event_data(v) for k, v in list(data.items())[:20]}
+        return {
+            key: (
+                "<redacted>"
+                if key in {"args", "args_delta", "tool_args"}
+                else _sanitize_event_data(value)
+            )
+            for key, value in list(data.items())[:20]
+        }
 
     if isinstance(data, (list, tuple)):
         return [_sanitize_event_data(item) for item in data[:20]]
@@ -285,10 +313,10 @@ def _sanitize_event_data(data: Any) -> Any:
 
     # 2. args_delta (ToolCallPartDelta)
     if hasattr(data, "args_delta"):
-        args_delta = getattr(data, "args_delta", "")
         return {
             "type": type_name,
-            "args_delta": _truncate_string(args_delta, max_length=1000),
+            "args_delta": "<redacted>",
+            "arguments_redacted": True,
             "tool_call_id": _safe_getattr_str(data, "tool_call_id"),
             "tool_name": _safe_getattr_str(data, "tool_name"),
             "tool_name_delta": _safe_getattr_str(data, "tool_name_delta"),
@@ -303,14 +331,14 @@ def _sanitize_event_data(data: Any) -> Any:
             inner = f"<{type_name}.part>"
         return {"type": type_name, "part": inner}
 
-    # 4. ToolCallPart payloads: preserve structured tool metadata for
-    #    downstream stream bridges (/ws/chat typed event parser).
+    # 4. ToolCallPart payloads: preserve correlation metadata, never args.
     if hasattr(data, "tool_name") and hasattr(data, "args"):
         return {
             "type": type_name,
             "tool_call_id": _safe_getattr_str(data, "tool_call_id"),
             "tool_name": _safe_getattr_str(data, "tool_name"),
-            "args": _sanitize_args(getattr(data, "args", {})),
+            "args": "<redacted>",
+            "arguments_redacted": True,
         }
 
     # 5. Anything with a usable content/text attribute on the top level

@@ -326,6 +326,19 @@ class TestSanitizeEventData:
         result = _sanitize_event_data({"a": 1})
         assert result == {"a": 1}
 
+    def test_tool_argument_fields_are_redacted_recursively(self):
+        from code_puppy_core_plugins.frontend_emitter.register_callbacks import (
+            _sanitize_event_data,
+        )
+
+        result = _sanitize_event_data(
+            {"event": {"tool_args": {"command": "sensitive"}}, "args_delta": "x"}
+        )
+        assert result == {
+            "event": {"tool_args": "<redacted>"},
+            "args_delta": "<redacted>",
+        }
+
     def test_list(self):
         from code_puppy_core_plugins.frontend_emitter.register_callbacks import (
             _sanitize_event_data,
@@ -364,7 +377,8 @@ class TestSanitizeEventData:
         assert isinstance(result, dict)
         assert result["tool_call_id"] == "tc_1"
         assert result["tool_name"] == "list_files"
-        assert result["args"] == {"directory": "."}
+        assert result["args"] == "<redacted>"
+        assert result["arguments_redacted"] is True
 
     def test_tool_call_part_delta_preserves_name_delta(self):
         from code_puppy_core_plugins.frontend_emitter.register_callbacks import (
@@ -381,7 +395,8 @@ class TestSanitizeEventData:
         assert isinstance(result, dict)
         assert result["tool_call_id"] == "tc_2"
         assert result["tool_name_delta"] == "run_shell_command"
-        assert result["args_delta"] == '{"command":"git status"}'
+        assert result["args_delta"] == "<redacted>"
+        assert result["arguments_redacted"] is True
 
 
 class TestIsSuccessfulResult:
@@ -512,6 +527,9 @@ class TestAsyncCallbacks:
             await on_pre_tool_call("my_tool", {"arg": "val"})
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][0] == "tool_call_start"
+            payload = mock_emit.call_args[0][1]
+            assert payload["tool_args"] == {}
+            assert payload["arguments_redacted"] is True
 
     @pytest.mark.asyncio
     async def test_on_pre_tool_call_exception(self):
@@ -534,9 +552,44 @@ class TestAsyncCallbacks:
         with patch(
             "code_puppy_core_plugins.frontend_emitter.register_callbacks.emit_event"
         ) as mock_emit:
-            await on_post_tool_call("t", {"a": 1}, "result", 100.0)
+            await on_post_tool_call(
+                "t",
+                {"a": 1},
+                "result",
+                100.0,
+                {"outcome": "ok", "execution_started": True},
+            )
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][0] == "tool_call_complete"
+            payload = mock_emit.call_args[0][1]
+            assert payload["tool_args"] == {"a": 1}
+            assert payload["arguments_redacted"] is False
+            assert payload["success"] is True
+            assert payload["outcome"] == "ok"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", ["blocked", "cancelled"])
+    async def test_nonexecuted_terminal_redacts_arguments_and_result(self, outcome):
+        from code_puppy_core_plugins.frontend_emitter.register_callbacks import (
+            on_post_tool_call,
+        )
+
+        with patch(
+            "code_puppy_core_plugins.frontend_emitter.register_callbacks.emit_event"
+        ) as mock_emit:
+            await on_post_tool_call(
+                "shell",
+                {"command": "sensitive command"},
+                {"error": "sensitive denial"},
+                0.0,
+                {"outcome": outcome},
+            )
+
+        payload = mock_emit.call_args[0][1]
+        assert payload["tool_args"] == {}
+        assert payload["arguments_redacted"] is True
+        assert payload["result_summary"] == f"<{outcome}>"
+        assert payload["success"] is False
 
     @pytest.mark.asyncio
     async def test_on_post_tool_call_exception(self):

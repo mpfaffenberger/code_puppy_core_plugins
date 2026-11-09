@@ -117,3 +117,24 @@ async def test_other_tools_are_unaffected_by_the_opt_in(run):
     [(_, update)] = run.updates
     assert update.status == "in_progress"
     state.pop_tool_call("read_file")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["blocked", "cancelled"])
+async def test_nonexecuted_terminal_closes_open_tool_as_failed(run, outcome):
+    bridge = EventBridge()
+    await bridge._on_pre_tool_call("read_file", {"file_path": "secret.txt"})
+
+    await bridge._on_post_tool_call(
+        "read_file",
+        {"file_path": "secret.txt"},
+        {"error": "policy detail"},
+        0.0,
+        {"outcome": outcome},
+    )
+
+    assert state.current_tool_call() is None
+    [(_, started), (_, terminal)] = run.updates
+    assert started.status == "in_progress"
+    assert terminal.status == "failed"
+    assert terminal.raw_output == f"Tool call {outcome} before completion"

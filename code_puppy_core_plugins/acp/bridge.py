@@ -38,6 +38,15 @@ from acp.helpers import (
 from acp.schema import ToolCallLocation
 
 from code_puppy.callbacks import register_callback, unregister_callback
+
+try:
+    from code_puppy.callbacks import terminal_tool_observer
+except ImportError:  # Compatible with cores that predate terminal outcomes.
+
+    def terminal_tool_observer(callback):
+        return callback
+
+
 from code_puppy_core_plugins.acp import state
 from code_puppy.tools.common import resolve_path
 
@@ -235,6 +244,7 @@ class EventBridge:
             "error_message": _CLIENT_QUESTION_RESULT,
         }
 
+    @terminal_tool_observer
     async def _on_post_tool_call(
         self,
         tool_name: str,
@@ -250,12 +260,23 @@ class EventBridge:
         tool_call_id = state.pop_tool_call(tool_name)
         if tool_call_id is None:
             return
-        status = "completed" if self._is_success(result) else "failed"
+        outcome = context.get("outcome") if isinstance(context, dict) else None
+        status = (
+            "completed"
+            if outcome not in {"blocked", "cancelled", "error"}
+            and self._is_success(result)
+            else "failed"
+        )
+        summary = (
+            f"Tool call {outcome} before completion"
+            if outcome in {"blocked", "cancelled"}
+            else self._summarize(result)
+        )
         update = update_tool_call(
             tool_call_id,
             status=status,
             content=self._content_for(result) or None,
-            raw_output=self._summarize(result),
+            raw_output=summary,
         )
         await self._send(session_id, update)
 
