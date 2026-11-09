@@ -22,6 +22,7 @@ from .config import (
     CLAUDE_CODE_OAUTH_CONFIG,
     get_claude_models_path,
     get_token_storage_path,
+    oauth_headers,
 )
 
 # Proactive refresh buffer default (seconds). Actual buffer is dynamic
@@ -331,11 +332,7 @@ def exchange_code_for_tokens(
         "redirect_uri": context.redirect_uri,
     }
 
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-    }
+    headers = oauth_headers()
 
     logger.info("Exchanging code for tokens: %s", CLAUDE_CODE_OAUTH_CONFIG["token_url"])
     logger.debug("Payload keys: %s", list(payload.keys()))
@@ -381,9 +378,8 @@ def fetch_claude_code_models(access_token: str) -> Optional[List[str]]:
     try:
         api_url = f"{CLAUDE_CODE_OAUTH_CONFIG['api_base_url']}/v1/models"
         headers = {
+            **oauth_headers(),
             "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-            "anthropic-beta": "oauth-2025-04-20",
             "anthropic-version": CLAUDE_CODE_OAUTH_CONFIG.get(
                 "anthropic_version", "2023-06-01"
             ),
@@ -455,9 +451,12 @@ def _build_model_entry(model_name: str, access_token: str, context_length: int) 
             "url": CLAUDE_CODE_OAUTH_CONFIG["api_base_url"],
             "api_key": access_token,
             "headers": {
-                "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+                "anthropic-beta": (
+                    f"{CLAUDE_CODE_OAUTH_CONFIG['oauth_beta']},"
+                    "interleaved-thinking-2025-05-14"
+                ),
                 "x-app": "cli",
-                "User-Agent": "claude-cli/2.1.280 (external, cli)",
+                "User-Agent": CLAUDE_CODE_OAUTH_CONFIG["user_agent"],
             },
         },
         "context_length": context_length,

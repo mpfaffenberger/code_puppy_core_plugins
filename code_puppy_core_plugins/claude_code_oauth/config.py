@@ -7,7 +7,8 @@ from code_puppy import config
 CLAUDE_CODE_OAUTH_CONFIG: Dict[str, Any] = {
     # OAuth endpoints inferred from official Claude Code OAuth flow
     "auth_url": "https://claude.ai/oauth/authorize",
-    "token_url": "https://console.anthropic.com/v1/oauth/token",
+    # console.anthropic.com moved here; the old host 404s token POSTs.
+    "token_url": "https://platform.claude.com/v1/oauth/token",
     "api_base_url": "https://api.anthropic.com",
     # OAuth client configuration observed in Claude Code CLI flow
     "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
@@ -17,8 +18,6 @@ CLAUDE_CODE_OAUTH_CONFIG: Dict[str, Any] = {
     "redirect_path": "callback",
     "callback_port_range": (8765, 8795),
     "callback_timeout": 180,
-    # Console redirect fallback (for manual flows, if needed)
-    "console_redirect_uri": "https://console.anthropic.com/oauth/code/callback",
     # Local configuration (uses XDG_DATA_HOME)
     "token_storage": None,  # Set dynamically in get_token_storage_path()
     # Model configuration
@@ -37,11 +36,25 @@ CLAUDE_CODE_OAUTH_CONFIG: Dict[str, Any] = {
     ],
     "api_key_env_var": "CLAUDE_CODE_ACCESS_TOKEN",
     "anthropic_version": "2023-06-01",
+    "oauth_beta": "oauth-2025-04-20",
+    # The token endpoint answers a misleading 429 "Rate limited" to any other
+    # User-Agent, so every direct request must send this (see oauth_headers).
+    "user_agent": "claude-cli/2.1.280 (external, cli)",
     # Per-family caps applied by filter_latest_claude_models. Shared by the
     # save path (add_models_to_extra_config) and the load path
     # (load_claude_models_filtered) so the two can never drift apart.
     "model_family_limits": {"default": 1, "opus": 3, "fable": 3},
 }
+
+
+def oauth_headers() -> Dict[str, str]:
+    """Base headers for every direct request to Anthropic's OAuth/API endpoints."""
+    return {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "anthropic-beta": CLAUDE_CODE_OAUTH_CONFIG["oauth_beta"],
+        "User-Agent": CLAUDE_CODE_OAUTH_CONFIG["user_agent"],
+    }
 
 
 def get_token_storage_path() -> Path:

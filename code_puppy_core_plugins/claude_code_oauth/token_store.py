@@ -16,7 +16,7 @@ from threading import RLock
 
 from code_puppy.atomic_io import path_lock
 
-from .config import CLAUDE_CODE_OAUTH_CONFIG
+from .config import CLAUDE_CODE_OAUTH_CONFIG, oauth_headers
 
 logger = logging.getLogger(__name__)
 _thread_lock = RLock()
@@ -124,11 +124,7 @@ def _exchange_access_token(tokens) -> str | None:
         "refresh_token": refresh_token,
     }
 
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-    }
+    headers = oauth_headers()
 
     try:
         response = utils.requests.post(
