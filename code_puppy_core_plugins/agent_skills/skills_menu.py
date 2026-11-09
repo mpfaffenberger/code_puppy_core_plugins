@@ -234,6 +234,12 @@ class SkillsMenu:
                     lines.append(("", "\n"))
                 lines.append(("", "\n"))
 
+            # Model invocation
+            if metadata.disable_model_invocation:
+                lines.append(("bold", "  Model invocation: "))
+                lines.append(("class:tui.error", "Disabled"))
+                lines.append(("", "\n\n"))
+
             # Tags
             if metadata.tags:
                 lines.append(("bold", "  Tags:"))
@@ -511,6 +517,8 @@ def list_skills() -> bool:
                 emit_info(f"  [{status}] {metadata.name}")
                 if metadata.description:
                     emit_info(f"    {metadata.description}")
+                if metadata.disable_model_invocation:
+                    emit_info("    Model invocation: disabled")
                 resources = get_skill_resources(metadata.path)
                 if resources:
                     emit_info(f"    Resources: {len(resources)}")

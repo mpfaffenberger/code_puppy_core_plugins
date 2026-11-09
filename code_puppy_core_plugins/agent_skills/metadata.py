@@ -35,7 +35,7 @@ class SkillMetadata:
     version: Optional[str] = None
     author: Optional[str] = None
     tags: List[str] = field(default_factory=list)
-
+    disable_model_invocation: bool = False
 
 def _unquote(value: str) -> str:
     """Remove quotes from a YAML string value if present."""
@@ -240,6 +240,15 @@ def parse_skill_metadata(skill_path: Path) -> Optional[SkillMetadata]:
     elif isinstance(raw_tags, str):
         tags = [tag.strip() for tag in raw_tags.split(",") if tag.strip()]
 
+    # Parse disable_model_invocation flag (boolean)
+    raw_dmi = frontmatter.get("disable_model_invocation", "")
+    disable_model_invocation = str(raw_dmi).strip().lower() in {
+        "true",
+        "yes",
+        "1",
+        "on",
+    }
+
     return SkillMetadata(
         name=name,
         description=description,
@@ -247,6 +256,7 @@ def parse_skill_metadata(skill_path: Path) -> Optional[SkillMetadata]:
         version=frontmatter.get("version"),
         author=frontmatter.get("author"),
         tags=tags,
+        disable_model_invocation=disable_model_invocation,
     )
 
 
