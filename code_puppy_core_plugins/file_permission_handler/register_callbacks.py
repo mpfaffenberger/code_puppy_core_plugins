@@ -21,6 +21,8 @@ from code_puppy.tools.common import (
     get_user_approval_async,
 )
 
+from .delete_preview import preview_delete_file
+
 try:
     # Preferred: the edit engine's own pure replacement function, so the
     # permission preview shows exactly what the engine will do (including
@@ -233,33 +235,9 @@ def _legacy_fuzzy_preview(
 
 
 def _preview_delete_file(file_path: str) -> str | None:
-    """Generate a preview diff for deleting a file without modifying it."""
+    """Generate a safe text diff or a binary/non-text summary."""
     try:
-        file_path = os.path.abspath(file_path)
-        if not os.path.exists(file_path) or not os.path.isfile(file_path):
-            return None
-
-        with open(file_path, "r", encoding="utf-8", errors="surrogateescape") as f:
-            original = f.read()
-
-        # Sanitize any surrogate characters
-        try:
-            original = original.encode("utf-8", errors="surrogatepass").decode(
-                "utf-8", errors="replace"
-            )
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            pass
-
-        diff_text = "".join(
-            difflib.unified_diff(
-                original.splitlines(keepends=True),
-                [],
-                fromfile=f"a/{os.path.basename(file_path)}",
-                tofile=f"b/{os.path.basename(file_path)}",
-                n=get_diff_context_lines(),
-            )
-        )
-        return diff_text
+        return preview_delete_file(file_path, context_lines=get_diff_context_lines())
     except Exception:
         return None
 
