@@ -182,31 +182,34 @@ async def test_default_judge_used_when_none_configured(isolated_judges):
 
 @pytest.mark.asyncio
 async def test_judges_run_in_parallel_not_serial(isolated_judges):
-    """Three slow judges should finish in ~one slow-judge interval, not three."""
+    """All judges must be in flight at once (asserted structurally, not by
+    wall-clock timing, which flakes on slow CI runners)."""
     for n in ("a", "b", "c"):
         judge_config.add_judge(JudgeConfig(name=n, model="m"))
 
+    in_flight = peak = 0
+
     async def fake_judge_goal(*, judge_config, **_kwargs):
-        await asyncio.sleep(0.2)
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
         return _verdict(judge_config.name, complete=True, notes="")
 
     with (
         patch.object(register_callbacks, "judge_goal", new=fake_judge_goal),
         patch.object(register_callbacks, "_display_llm_judge"),
     ):
-        loop = asyncio.get_running_loop()
-        t0 = loop.time()
         all_complete, _, _ = await register_callbacks._run_goal_judges(
             agent=_fake_agent(),
             goal="g",
             result=None,
             error=None,
         )
-        elapsed = loop.time() - t0
 
     assert all_complete is True
-    # Serial would be ~0.6s; parallel should be ~0.2s. Allow generous slack.
-    assert elapsed < 0.45, f"judges ran serially? elapsed={elapsed}"
+    assert peak == 3, f"judges ran serially? peak concurrency={peak}"
 
 
 @pytest.mark.asyncio
