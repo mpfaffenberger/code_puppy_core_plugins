@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from contextlib import nullcontext
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -537,8 +538,7 @@ async def test_judge_runs_inside_subagent_context(isolated_judges):
     from code_puppy_core_plugins.wiggum import judge as judge_module
     from code_puppy.tools.subagent_context import is_subagent
 
-    if not hasattr(_runtime, "apply_attachment_free_user_prompt_submit"):
-        pytest.skip("core does not expose the shared follow-up prompt boundary")
+    has_prompt_boundary = hasattr(_runtime, "apply_attachment_free_user_prompt_submit")
 
     judge_config.add_judge(JudgeConfig(name="checker", model="fake-model"))
 
@@ -548,6 +548,16 @@ async def test_judge_runs_inside_subagent_context(isolated_judges):
     async def submit_prompt(_prompt, _session_id):
         saw_auxiliary_scope.append(callbacks.is_auxiliary_agent_run())
         return "policy-checked judge prompt"
+
+    submit_prompt_mock = AsyncMock(side_effect=submit_prompt)
+    prompt_patch = (
+        patch(
+            "code_puppy.agents._runtime.apply_attachment_free_user_prompt_submit",
+            new=submit_prompt_mock,
+        )
+        if has_prompt_boundary
+        else nullcontext(submit_prompt_mock)
+    )
 
     async def fake_run(_user_prompt, **_kwargs):
         # Stub: when real judge_agent.run() executes, is_subagent() is True; accept
@@ -577,10 +587,7 @@ async def test_judge_runs_inside_subagent_context(isolated_judges):
             return_value=MagicMock(get_available_tools=lambda: []),
         ),
         patch("code_puppy.tools.register_tools_for_agent"),
-        patch(
-            "code_puppy.agents._runtime.apply_attachment_free_user_prompt_submit",
-            new=AsyncMock(side_effect=submit_prompt),
-        ) as submit_prompt_mock,
+        prompt_patch,
         patch.object(judge_module, "Agent") as mock_agent_cls,
     ):
         mock_agent = MagicMock()
@@ -599,8 +606,12 @@ async def test_judge_runs_inside_subagent_context(isolated_judges):
     assert saw_subagent_flag == [True], (
         "judge_agent.run() must execute inside subagent_context"
     )
-    submit_prompt_mock.assert_awaited_once()
-    assert saw_auxiliary_scope == [True]
+    if has_prompt_boundary:
+        submit_prompt_mock.assert_awaited_once()
+        assert saw_auxiliary_scope == [True]
+    else:
+        submit_prompt_mock.assert_not_awaited()
+        assert saw_auxiliary_scope == []
     assert mock_agent_cls.call_args.kwargs["capabilities"]
     # After the context exits, we're back in main-agent context.
     assert is_subagent() is False

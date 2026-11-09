@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -226,13 +225,10 @@ async def judge_goal(
         from code_puppy.agents._runtime import (
             apply_attachment_free_user_prompt_submit,
         )
-    except ImportError:  # Old cores have no shared follow-up submission helper.
+        from code_puppy.callbacks import auxiliary_agent_run_context
+    except ImportError:  # Old cores retain the guarded request without this seam.
         pass
     else:
-        try:
-            from code_puppy.callbacks import auxiliary_agent_run_context
-        except ImportError:  # Older shared-helper cores predate scope markers.
-            auxiliary_agent_run_context = nullcontext  # type: ignore[assignment]
         with auxiliary_agent_run_context():
             user_prompt = await apply_attachment_free_user_prompt_submit(
                 user_prompt, None

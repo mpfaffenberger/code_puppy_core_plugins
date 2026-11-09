@@ -783,3 +783,33 @@ async def test_forks_lists_records_in_a_table():
 
     tables = [m for m in emitted if isinstance(m, Table)]
     assert len(tables) == 1
+
+
+def test_fork_model_resolution_prefers_override_and_fails_open():
+    assert rc._resolve_fork_model_name("qa-kitten", "override") == "override"
+    with patch(
+        "code_puppy.agents.agent_manager.load_agent",
+        return_value=SimpleNamespace(get_model_name=lambda: "configured"),
+    ):
+        assert rc._resolve_fork_model_name("qa-kitten", None) == "configured"
+    with patch(
+        "code_puppy.agents.agent_manager.load_agent",
+        side_effect=RuntimeError("unavailable"),
+    ):
+        assert rc._resolve_fork_model_name("qa-kitten", None) == ""
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "prefix"),
+    [
+        ("qa-kitten", "qa-kitten-fork-"),
+        ("LPZ_Main_Coder", "lpz-main-coder-fork-"),
+        ("!!!", "agent-fork-"),
+    ],
+)
+def test_new_fork_session_id_is_final_valid_identity(agent_name, prefix):
+    session_id = rc._new_fork_session_id(agent_name)
+
+    assert session_id.startswith(prefix)
+    assert session_id == session_id.lower()
+    assert session_id.replace("-", "").isalnum()

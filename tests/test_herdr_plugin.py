@@ -52,6 +52,8 @@ def test_auxiliary_prompt_and_lifecycle_do_not_change_pane_state(monkeypatch):
     fake = FakeClient()
     reporter = HerdrReporter(fake)
     monkeypatch.setattr(registration, "_reporter", reporter)
+    monkeypatch.setattr(sources, "current_session_ref", lambda: ("fg-session", "/p"))
+    monkeypatch.setattr(sources, "current_session_title", lambda: "foreground")
 
     registration._on_run_start()
     assert _states(fake) == [WORKING]
@@ -60,6 +62,9 @@ def test_auxiliary_prompt_and_lifecycle_do_not_change_pane_state(monkeypatch):
         registration._on_run_start()
         registration._on_run_end()
     assert _states(fake) == [WORKING]
+    assert fake.sessions == []
+    assert fake.metadata == []
+    assert fake.tab_labels == []
     registration._on_run_end()
     assert _states(fake) == [WORKING, IDLE]
 

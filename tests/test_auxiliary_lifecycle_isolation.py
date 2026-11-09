@@ -49,3 +49,21 @@ async def test_auxiliary_end_preserves_live_subagent_panel(monkeypatch):
         stop_ticker.assert_not_called()
     finally:
         panel_state.clear()
+
+
+async def test_auxiliary_prompt_preserves_session_start_context(monkeypatch):
+    monkeypatch.setattr(hooks, "_hook_engine", None)
+    monkeypatch.setattr(hooks, "_pending_session_context", ["foreground rules"])
+
+    with callbacks.auxiliary_agent_run_context():
+        auxiliary_result = await hooks.on_user_prompt_submit_hook(
+            "side question", "aux-session"
+        )
+
+    foreground_result = await hooks.on_user_prompt_submit_hook(
+        "main question", "main-session"
+    )
+
+    assert auxiliary_result is None
+    assert foreground_result == "[hook context]\nforeground rules\n\nmain question"
+    assert hooks._pending_session_context == []

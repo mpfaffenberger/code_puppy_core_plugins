@@ -208,3 +208,40 @@ def test_resolve_model_falls_back_to_global():
         ),
     ):
         assert side_query.resolve_model_name() == "global-model"
+
+
+async def test_query_falls_back_when_auxiliary_lifecycle_is_unavailable(
+    monkeypatch,
+):
+    import sys
+
+    sent = []
+
+    class FakeAgent:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run(self, prompt, **_kwargs):
+            sent.append(prompt)
+            return SimpleNamespace(output="answer")
+
+    monkeypatch.setitem(sys.modules, "code_puppy.agents._auxiliary_run", None)
+    monkeypatch.setattr(
+        "code_puppy.model_factory.ModelFactory.load_config", lambda: {"m": {}}
+    )
+    monkeypatch.setattr(
+        "code_puppy.model_factory.ModelFactory.get_model", lambda *_args: object()
+    )
+    monkeypatch.setattr("pydantic_ai.Agent", FakeAgent)
+    monkeypatch.setattr(
+        "code_puppy.model_utils.prepare_prompt_for_model",
+        lambda _model, _instructions, prompt, **_kwargs: SimpleNamespace(
+            instructions="instructions", user_prompt=prompt
+        ),
+    )
+    monkeypatch.setattr(
+        "code_puppy.model_factory.make_model_settings", lambda _model: None
+    )
+
+    assert await side_query._ask("m", "raw question") == "answer"
+    assert sent == ["raw question"]
