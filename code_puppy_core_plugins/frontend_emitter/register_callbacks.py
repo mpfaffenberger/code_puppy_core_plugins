@@ -260,7 +260,7 @@ def _sanitize_event_data(data: Any) -> Any:
       * Anything carrying a ``content_delta`` attribute (text streaming)
         is normalised to ``{"type": <class_name>, "content_delta": <str>}``.
       * Tool-call argument fields (``args`` / ``args_delta`` / ``tool_args``)
-        are replaced with ``<redacted>`` before the final policy verdict.
+        are replaced with ``<redacted>`` before emission.
       * Anything carrying a ``part`` attribute (part_start / part_end
         wrappers) is unwrapped recursively into its part.
       * Plain dicts / lists / scalars retain the previous behaviour

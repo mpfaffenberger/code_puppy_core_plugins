@@ -164,3 +164,39 @@ async def test_same_name_parallel_terminals_match_argument_identity(run):
     assert blocked_end.status == "failed"
     assert allowed_end.tool_call_id == allowed_start.tool_call_id
     assert allowed_end.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_terminal_without_own_row_does_not_close_same_name_sibling(run):
+    bridge = EventBridge()
+    sibling_args = {"command": "ls"}
+    missing_args = {"command": "blocked before ACP observed it"}
+    await bridge._on_pre_tool_call("shell", sibling_args)
+
+    await bridge._on_post_tool_call(
+        "shell",
+        missing_args,
+        {"blocked": True},
+        0.0,
+        {"outcome": "blocked"},
+    )
+
+    [(_, sibling_start)] = run.updates
+    assert sibling_start.status == "in_progress"
+    assert state.current_tool_call() == ("shell", sibling_start.tool_call_id)
+
+
+@pytest.mark.asyncio
+async def test_error_outcome_overrides_success_shaped_result(run):
+    bridge = EventBridge()
+    tool_args = {"command": "exit without a message"}
+    await bridge._on_pre_tool_call("shell", tool_args)
+
+    await bridge._on_post_tool_call(
+        "shell", tool_args, {"error": ""}, 0.0, {"outcome": "error"}
+    )
+
+    [(_, started), (_, terminal)] = run.updates
+    assert started.status == "in_progress"
+    assert terminal.tool_call_id == started.tool_call_id
+    assert terminal.status == "failed"
