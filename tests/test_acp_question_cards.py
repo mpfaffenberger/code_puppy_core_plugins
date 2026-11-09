@@ -111,24 +111,26 @@ async def test_other_tools_are_unaffected_by_the_opt_in(run):
     bridge = EventBridge()
     bridge.question_cards_enabled = True
 
-    result = await bridge._on_pre_tool_call("read_file", {"file_path": "a.py"})
+    tool_args = {"file_path": "a.py"}
+    result = await bridge._on_pre_tool_call("read_file", tool_args)
 
     assert result is None
     [(_, update)] = run.updates
     assert update.status == "in_progress"
-    state.pop_tool_call("read_file")
+    state.pop_tool_call("read_file", tool_args)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["blocked", "cancelled"])
 async def test_nonexecuted_terminal_closes_open_tool_as_failed(run, outcome):
     bridge = EventBridge()
-    await bridge._on_pre_tool_call("read_file", {"file_path": "secret.txt"})
+    tool_args = {"file_path": "secret.txt"}
+    await bridge._on_pre_tool_call("read_file", tool_args)
 
     await bridge._on_post_tool_call(
         "read_file",
-        {"file_path": "secret.txt"},
-        {"error": "policy detail"},
+        tool_args,
+        "success-shaped policy detail",
         0.0,
         {"outcome": outcome},
     )
@@ -138,3 +140,27 @@ async def test_nonexecuted_terminal_closes_open_tool_as_failed(run, outcome):
     assert started.status == "in_progress"
     assert terminal.status == "failed"
     assert terminal.raw_output == f"Tool call {outcome} before completion"
+
+
+@pytest.mark.asyncio
+async def test_same_name_parallel_terminals_match_argument_identity(run):
+    bridge = EventBridge()
+    blocked_args = {"command": "rm -rf /important"}
+    allowed_args = {"command": "ls"}
+    await bridge._on_pre_tool_call("shell", blocked_args)
+    await bridge._on_pre_tool_call("shell", allowed_args)
+
+    await bridge._on_post_tool_call(
+        "shell", blocked_args, {"blocked": True}, 0.0, {"outcome": "blocked"}
+    )
+    await bridge._on_post_tool_call(
+        "shell", allowed_args, "ran ls", 1.0, {"outcome": "ok"}
+    )
+
+    [(_, blocked_start), (_, allowed_start), (_, blocked_end), (_, allowed_end)] = (
+        run.updates
+    )
+    assert blocked_end.tool_call_id == blocked_start.tool_call_id
+    assert blocked_end.status == "failed"
+    assert allowed_end.tool_call_id == allowed_start.tool_call_id
+    assert allowed_end.status == "completed"

@@ -206,7 +206,7 @@ class EventBridge:
             return await self._present_question(session_id, tool_args)
         if tool_name in _INTERACTIVE_TOOLS:
             return dict(_INTERACTIVE_BLOCK)
-        tool_call_id = state.push_tool_call(tool_name)
+        tool_call_id = state.push_tool_call(tool_name, tool_args)
         update = start_tool_call(
             tool_call_id,
             self._title_for(tool_name, tool_args),
@@ -257,7 +257,7 @@ class EventBridge:
         session_id = state.get_active_session_id()
         if session_id is None:
             return
-        tool_call_id = state.pop_tool_call(tool_name)
+        tool_call_id = state.pop_tool_call(tool_name, tool_args)
         if tool_call_id is None:
             return
         outcome = context.get("outcome") if isinstance(context, dict) else None

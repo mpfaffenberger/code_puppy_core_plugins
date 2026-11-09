@@ -106,24 +106,26 @@ def streamed_text() -> bool:
 
 
 # ---- Tool-call correlation ------------------------------------------------
-def push_tool_call(tool_name: str) -> str:
-    """Open a tool call, returning a fresh id to report to the client."""
+def push_tool_call(tool_name: str, args_ref: object | None = None) -> str:
+    """Open a tool call, retaining argument identity for exact correlation."""
     tool_call_id = f"tc_{uuid.uuid4().hex[:12]}"
     run = _RUN.get()
     if run is not None:
-        run["tool_stack"].append((tool_name, tool_call_id))
+        run["tool_stack"].append((tool_name, tool_call_id, args_ref))
     return tool_call_id
 
 
-def pop_tool_call(tool_name: str) -> Optional[str]:
-    """Close the most recent open call for ``tool_name`` and return its id."""
+def pop_tool_call(tool_name: str, args_ref: object | None = None) -> Optional[str]:
+    """Close the call matching ``tool_name`` and the exact argument object."""
     run = _RUN.get()
     if run is None:
         return None
-    stack: List[Tuple[str, str]] = run["tool_stack"]
+    stack: List[Tuple[str, str, object | None]] = run["tool_stack"]
     for i in range(len(stack) - 1, -1, -1):
-        if stack[i][0] == tool_name:
-            return stack.pop(i)[1]
+        name, tool_call_id, stored_args = stack[i]
+        if name == tool_name and stored_args is args_ref:
+            stack.pop(i)
+            return tool_call_id
     return None
 
 
@@ -132,4 +134,5 @@ def current_tool_call() -> Optional[Tuple[str, str]]:
     run = _RUN.get()
     if not run or not run["tool_stack"]:
         return None
-    return run["tool_stack"][-1]
+    tool_name, tool_call_id, _args_ref = run["tool_stack"][-1]
+    return tool_name, tool_call_id

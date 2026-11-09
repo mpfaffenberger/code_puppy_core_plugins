@@ -580,7 +580,7 @@ class TestAsyncCallbacks:
             await on_post_tool_call(
                 "shell",
                 {"command": "sensitive command"},
-                {"error": "sensitive denial"},
+                "success-shaped sensitive denial",
                 0.0,
                 {"outcome": outcome},
             )
