@@ -19,6 +19,7 @@ def test_model_resolution_failure_logs_debug_and_override_bypasses_lookup(
         records = [record for record in caplog.records if record.name == fork.__name__]
         assert len(records) == 1
         assert records[0].levelno == logging.DEBUG
+        assert records[0].getMessage() == "fork: agent model lookup failed"
         assert records[0].exc_info[1] is failure
         assert fork._resolve_fork_model_name("missing", "override") == "override"
         assert (
