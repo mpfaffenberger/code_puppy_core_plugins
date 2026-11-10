@@ -87,7 +87,7 @@ def test_retry_preserves_original_notification_prompt_through_completion(
     notifications._on_agent_run_start()
     with retry_context():
         assert (
-            notifications._on_user_prompt_submit("Stop retry", "main-session") is None
+            notifications._on_user_prompt_submit("Result retry", "main-session") is None
         )
         assert notifications._on_user_prompt_submit("retry", "other-session") is None
 

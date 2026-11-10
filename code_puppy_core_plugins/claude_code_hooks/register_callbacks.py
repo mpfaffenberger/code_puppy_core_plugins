@@ -276,7 +276,7 @@ async def on_user_prompt_submit_hook(
     Returns the (possibly augmented) prompt, or ``None`` if there's nothing
     to add. See issue #298.
     """
-    # Stop-hook retries continue the current turn, not a new user submission.
+    # agent_run_result retries continue this turn, not a new user submission.
     if is_hook_retry_prompt_submit():
         return None
 
