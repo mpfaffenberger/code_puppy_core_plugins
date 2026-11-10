@@ -234,3 +234,154 @@ def test_help_entries_advertised() -> None:
 
     entries = commands.help_entries()
     assert any(name == "kennel" for name, _desc in entries)
+
+
+def test_autosave_rooms_group_by_conversation_not_run_id(
+    kennel_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same conversation → one short session-<8hex> room; run UUID stays on drawer."""
+    import json
+
+    import code_puppy.config as cp_config
+    from code_puppy_core_plugins.puppy_kennel import kennel, recorder, wings
+
+    room_a = wings.room_name("auto_session_window_a")
+    room_b = wings.room_name("auto_session_window_b")
+    assert room_a.startswith("session-") and len(room_a) == len("session-") + 8
+    assert room_a != room_b
+
+    monkeypatch.setattr(
+        cp_config, "get_current_session_name", lambda: "auto_session_window_a"
+    )
+    recorder.record_run_end(
+        agent_name="code-puppy",
+        model_name="m",
+        session_id="aaaaaaaa-1111-1111-1111-111111111111",
+        success=True,
+        response_text="Turn one in window A.",
+    )
+    recorder.record_run_end(
+        agent_name="code-puppy",
+        model_name="m",
+        session_id="bbbbbbbb-2222-2222-2222-222222222222",
+        success=True,
+        response_text="Turn two in window A.",
+    )
+
+    monkeypatch.setattr(
+        cp_config, "get_current_session_name", lambda: "auto_session_window_b"
+    )
+    recorder.record_run_end(
+        agent_name="code-puppy",
+        model_name="m",
+        session_id="cccccccc-3333-3333-3333-333333333333",
+        success=True,
+        response_text="Turn one in window B.",
+    )
+
+    with kennel._connect() as conn:
+        rooms = conn.execute(
+            "SELECT r.name, COUNT(d.id) AS n FROM rooms r "
+            "LEFT JOIN drawers d ON d.room_id = r.id "
+            "GROUP BY r.id, r.name ORDER BY r.name"
+        ).fetchall()
+        drawers = conn.execute(
+            "SELECT content, session_id, metadata FROM drawers ORDER BY id"
+        ).fetchall()
+
+    room_counts = {r["name"]: int(r["n"]) for r in rooms}
+    assert room_counts == {room_a: 2, room_b: 1}
+
+    # drawers.session_id keeps per-run UUID semantics.
+    assert drawers[0]["session_id"] == "aaaaaaaa-1111-1111-1111-111111111111"
+    assert drawers[1]["session_id"] == "bbbbbbbb-2222-2222-2222-222222222222"
+    assert drawers[2]["session_id"] == "cccccccc-3333-3333-3333-333333333333"
+
+    meta0 = json.loads(drawers[0]["metadata"])
+    assert meta0["conversation_id"] == "auto_session_window_a"
+
+
+def test_room_name_legacy_short_hex_shape() -> None:
+    import hashlib
+
+    from code_puppy_core_plugins.puppy_kennel.wings import UNKNOWN_ROOM, room_name
+
+    conv = "auto_session_20260101_120000_123456_99"
+    expected = "session-" + hashlib.sha256(conv.encode()).hexdigest()[:8]
+    assert room_name(conv) == expected
+    assert room_name("same") == room_name("same")
+    assert room_name("a") != room_name("b")
+    assert room_name("") == UNKNOWN_ROOM
+    assert room_name("   ") == UNKNOWN_ROOM
+
+
+def test_conversation_session_name_failure_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import code_puppy.config as cp_config
+
+    from code_puppy_core_plugins.puppy_kennel import wings
+
+    def _boom() -> str:
+        raise RuntimeError("no session")
+
+    monkeypatch.setattr(cp_config, "get_current_session_name", _boom)
+    assert wings.conversation_session_name() == ""
+    assert wings.room_name(wings.conversation_session_name()) == wings.UNKNOWN_ROOM
+
+
+def test_recent_drawers_exclude_room_name(kennel_root: Path) -> None:
+    from code_puppy_core_plugins.puppy_kennel import kennel, wings
+
+    repo_w = wings.repo_wing()
+    wing_id = kennel.ensure_wing(repo_w)
+    room_cur = kennel.ensure_room(wing_id, "session-current")
+    room_other = kennel.ensure_room(wing_id, "session-other")
+    long = "x" * 100
+    kennel.add_drawer(room_cur, content=f"CURRENT_ROOM_MARKER {long}", role="assistant")
+    kennel.add_drawer(room_other, content=f"OTHER_ROOM_MARKER {long}", role="assistant")
+
+    hits = kennel.recent_drawers(
+        repo_w,
+        limit=10,
+        role="assistant",
+        exclude_room_name="session-current",
+    )
+    texts = [d.content for d in hits]
+    assert any("OTHER_ROOM_MARKER" in t for t in texts)
+    assert not any("CURRENT_ROOM_MARKER" in t for t in texts)
+
+
+def test_packer_p2_excludes_current_conversation_room(
+    kennel_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2 must not re-inject assistants from the live conversation room."""
+    import code_puppy.config as cp_config
+    from code_puppy_core_plugins.puppy_kennel import kennel, packer, wings
+
+    monkeypatch.setattr(
+        cp_config, "get_current_session_name", lambda: "auto_session_live"
+    )
+
+    repo_w = wings.repo_wing()
+    wing_id = kennel.ensure_wing(repo_w)
+    live_room = wings.room_name("auto_session_live")
+    other_room = wings.room_name("auto_session_other")
+    live_id = kennel.ensure_room(wing_id, live_room)
+    other_id = kennel.ensure_room(wing_id, other_room)
+    pad = " " + ("detail " * 20)
+    kennel.add_drawer(
+        live_id,
+        content=f"LIVE_SESSION_ASSISTANT_UNIQUE{pad}",
+        role="assistant",
+    )
+    kennel.add_drawer(
+        other_id,
+        content=f"OTHER_SESSION_ASSISTANT_UNIQUE{pad}",
+        role="assistant",
+    )
+
+    block = packer.pack()
+    assert block is not None
+    assert "OTHER_SESSION_ASSISTANT_UNIQUE" in block
+    assert "LIVE_SESSION_ASSISTANT_UNIQUE" not in block
