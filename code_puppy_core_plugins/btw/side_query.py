@@ -91,7 +91,7 @@ async def _ask(model_name: str, question: str) -> str:
         result = await run_auxiliary_model_call(
             agent_name="btw",
             model_name=model_name,
-            session_id=f"btw-{uuid.uuid4().hex}",
+            agent_run_id=f"btw-{uuid.uuid4().hex}",
             prompt=question,
             call=call,
             response_text=lambda value: str(value.output),

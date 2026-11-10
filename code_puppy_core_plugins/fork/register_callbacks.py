@@ -317,7 +317,7 @@ async def _run_fork(
             result = await run_auxiliary_model_call(
                 agent_name=agent_name,
                 model_name=_resolve_fork_model_name(agent_name, model_name),
-                session_id=session_id,
+                agent_run_id=session_id,
                 prompt=prompt,
                 call=invoke,
                 response_text=lambda value: getattr(value, "response", None),
