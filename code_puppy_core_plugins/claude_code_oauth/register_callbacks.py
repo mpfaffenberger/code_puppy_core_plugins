@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # Model switched to after a successful /claude-code-auth run. Only applied
 # when authentication succeeded AND discovery actually minted this entry.
-POST_AUTH_MODEL = f"{CLAUDE_CODE_OAUTH_CONFIG['prefix']}claude-fable-5-1-long"
+POST_AUTH_MODEL = f"{CLAUDE_CODE_OAUTH_CONFIG['prefix']}claude-fable-5-2-long"
 
 
 class _OAuthResult:

@@ -652,5 +652,26 @@ class TestBuildModelEntry:
             assert setting in entry["supported_settings"]
 
 
+def test_post_auth_default_is_a_minted_long_variant():
+    """The post-auth default must be a ``-long`` entry discovery actually mints.
+
+    Otherwise ``/claude-code-auth`` silently skips the model switch: bumping
+    POST_AUTH_MODEL without adding its base to ``long_context_models`` is an
+    easy miss.
+    """
+    from code_puppy_core_plugins.claude_code_oauth.config import (
+        CLAUDE_CODE_OAUTH_CONFIG,
+    )
+    from code_puppy_core_plugins.claude_code_oauth.register_callbacks import (
+        POST_AUTH_MODEL,
+    )
+
+    prefix = CLAUDE_CODE_OAUTH_CONFIG["prefix"]
+    assert POST_AUTH_MODEL.startswith(prefix)
+    assert POST_AUTH_MODEL.endswith("-long")
+    base = POST_AUTH_MODEL.removeprefix(prefix).removesuffix("-long")
+    assert base in CLAUDE_CODE_OAUTH_CONFIG["long_context_models"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

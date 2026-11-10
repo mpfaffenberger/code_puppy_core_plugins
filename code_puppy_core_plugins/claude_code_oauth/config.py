@@ -33,13 +33,16 @@ CLAUDE_CODE_OAUTH_CONFIG: Dict[str, Any] = {
         "claude-sonnet-5",
         "claude-fable-5",
         "claude-fable-5-1",
+        "claude-fable-5-2",
     ],
     "api_key_env_var": "CLAUDE_CODE_ACCESS_TOKEN",
     "anthropic_version": "2023-06-01",
     "oauth_beta": "oauth-2025-04-20",
     # The token endpoint answers a misleading 429 "Rate limited" to any other
     # User-Agent, so every direct request must send this (see oauth_headers).
-    "user_agent": "claude-cli/2.1.280 (external, cli)",
+    # Newer models also enforce a minimum CLI version from this string
+    # (claude-fable-5-2 400s anything below 2.1.290).
+    "user_agent": "claude-cli/2.1.290 (external, cli)",
     # Per-family caps applied by filter_latest_claude_models. Shared by the
     # save path (add_models_to_extra_config) and the load path
     # (load_claude_models_filtered) so the two can never drift apart.

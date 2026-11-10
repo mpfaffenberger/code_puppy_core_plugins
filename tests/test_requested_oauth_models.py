@@ -32,7 +32,7 @@ def test_opus_5_5_survives_family_filter():
     assert entry["name"] == "claude-opus-5-5"
     assert "effort" in entry["supported_settings"]
     assert entry["custom_endpoint"]["headers"]["User-Agent"].startswith(
-        "claude-cli/2.1.280 "
+        "claude-cli/2.1.290 "
     )
 
 
