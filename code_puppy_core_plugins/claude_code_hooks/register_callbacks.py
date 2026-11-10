@@ -26,24 +26,10 @@ from typing import Any, Dict, List, Optional
 
 from code_puppy.callbacks import register_callback
 from code_puppy.hook_engine import EventData, HookEngine
+from code_puppy.tools.subagent_context import is_subagent
 
 from . import trust as _trust
 from .config import load_hooks_config
-
-_SUBAGENT_NAMES = frozenset(
-    {
-        "pack_leader",
-        "bloodhound",
-        "code-puppy",
-        "code_puppy",
-        "retriever",
-        "shepherd",
-        "terrier",
-        "watchdog",
-        "subagent",
-        "sub_agent",
-    }
-)
 
 logger = logging.getLogger(__name__)
 
@@ -383,9 +369,7 @@ async def on_agent_run_end_hook(
     if not _hook_engine:
         return
 
-    agent_lower = (agent_name or "").lower()
-    is_subagent = any(name in agent_lower for name in _SUBAGENT_NAMES)
-    event_type = "SubagentStop" if is_subagent else "Stop"
+    event_type = "SubagentStop" if is_subagent() else "Stop"
 
     event_data = EventData(
         event_type=event_type,
