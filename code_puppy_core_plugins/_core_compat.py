@@ -12,4 +12,13 @@ def is_auxiliary_agent_run() -> bool:
     return core_marker()
 
 
-__all__ = ["is_auxiliary_agent_run"]
+def is_hook_retry_prompt_submit() -> bool:
+    """Return the core in-turn retry marker, or false on older cores."""
+    try:
+        from code_puppy.callbacks import is_hook_retry_prompt_submit as core_marker
+    except ImportError:
+        return False
+    return core_marker()
+
+
+__all__ = ["is_auxiliary_agent_run", "is_hook_retry_prompt_submit"]

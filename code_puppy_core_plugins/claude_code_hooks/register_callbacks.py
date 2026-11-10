@@ -27,7 +27,10 @@ from typing import Any, Dict, List, Optional
 from code_puppy.callbacks import register_callback
 from code_puppy.hook_engine import EventData, HookEngine
 
-from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+from code_puppy_core_plugins._core_compat import (
+    is_auxiliary_agent_run,
+    is_hook_retry_prompt_submit,
+)
 
 from . import trust as _trust
 from .config import load_hooks_config
@@ -273,6 +276,10 @@ async def on_user_prompt_submit_hook(
     Returns the (possibly augmented) prompt, or ``None`` if there's nothing
     to add. See issue #298.
     """
+    # Stop-hook retries continue the current turn, not a new user submission.
+    if is_hook_retry_prompt_submit():
+        return None
+
     chunks: List[str] = []
 
     # SessionStart output belongs to the next foreground user prompt. Auxiliary
