@@ -170,6 +170,17 @@ stack) lives in `state`, so `bridge`, `permissions`, and `io_delegation` share
 one source of truth. `set_session_context(session_id)` is also set around each
 run so streamed events carry the right session id.
 
+### Tool-card identity
+
+When core supplies `context.tool_call_id`, start/completion correlation uses
+that runtime ID within the active run. Argument copies or shared argument
+objects do not change identity. Unknown IDs (or missing IDs for identified
+calls) never fall back to a same-named sibling. ACP card IDs remain generated
+client-facing IDs, and permission backends still use `current_tool_call()`.
+Older cores without runtime identity retain exact argument-object matching;
+legacy direct `push_tool_call(name)`/`pop_tool_call(name)` pairs still work.
+Blocked/cancelled completion content is redacted and its card closes failed.
+
 ### stdout is sacred
 
 ACP speaks JSON-RPC on **stdout**, so nothing else may write there. At boot we

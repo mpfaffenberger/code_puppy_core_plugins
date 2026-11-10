@@ -206,7 +206,9 @@ class EventBridge:
             return await self._present_question(session_id, tool_args)
         if tool_name in _INTERACTIVE_TOOLS:
             return dict(_INTERACTIVE_BLOCK)
-        tool_call_id = state.push_tool_call(tool_name, tool_args)
+        tool_call_id = state.push_tool_call(
+            tool_name, tool_args, runtime_id=self._runtime_id(context)
+        )
         update = start_tool_call(
             tool_call_id,
             self._title_for(tool_name, tool_args),
@@ -257,7 +259,9 @@ class EventBridge:
         session_id = state.get_active_session_id()
         if session_id is None:
             return
-        tool_call_id = state.pop_tool_call(tool_name, tool_args)
+        tool_call_id = state.pop_tool_call(
+            tool_name, tool_args, runtime_id=self._runtime_id(context)
+        )
         if tool_call_id is None:
             return
         outcome = context.get("outcome") if isinstance(context, dict) else None
@@ -275,12 +279,21 @@ class EventBridge:
         update = update_tool_call(
             tool_call_id,
             status=status,
-            content=self._content_for(result) or None,
+            content=(
+                None
+                if outcome in {"blocked", "cancelled"}
+                else self._content_for(result) or None
+            ),
             raw_output=summary,
         )
         await self._send(session_id, update)
 
     # ---- Helpers ----------------------------------------------------------
+    @staticmethod
+    def _runtime_id(context: Any) -> str | None:
+        value = context.get("tool_call_id") if isinstance(context, dict) else None
+        return value if isinstance(value, str) and value else None
+
     @staticmethod
     def _title_for(tool_name: str, tool_args: Any) -> str:
         """Build a human-friendly tool-call title (e.g. ``Edit foo.py``)."""
