@@ -8,6 +8,7 @@ the 'claude_code' model type handler.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -106,6 +107,20 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(body.encode("utf-8"))
 
 
+class _CallbackServer(HTTPServer):
+    """Callback server that refuses a port another app is already using.
+
+    ``HTTPServer`` turns on ``SO_REUSEADDR``. On Windows that lets a second
+    socket bind a port that is already LISTENING, so the port probe below
+    never fails and the OAuth redirect lands on whichever app got there
+    first (an unrelated dev server answering 404) while login times out.
+    Elsewhere ``SO_REUSEADDR`` only allows rebinding a TIME_WAIT port, which
+    is harmless and worth keeping.
+    """
+
+    allow_reuse_address = sys.platform != "win32"
+
+
 def _start_callback_server(
     context: OAuthContext,
 ) -> Optional[Tuple[HTTPServer, _OAuthResult, threading.Event]]:
@@ -113,7 +128,7 @@ def _start_callback_server(
 
     for port in range(port_range[0], port_range[1] + 1):
         try:
-            server = HTTPServer(("localhost", port), _CallbackHandler)
+            server = _CallbackServer(("localhost", port), _CallbackHandler)
             assign_redirect_uri(context, port)
             result = _OAuthResult()
             event = threading.Event()

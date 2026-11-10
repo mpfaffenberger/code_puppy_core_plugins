@@ -92,17 +92,33 @@ class TestStartCallbackServer:
         server.shutdown()
         mock_assign.assert_called_once()
 
-    @patch(f"{MOD}.CLAUDE_CODE_OAUTH_CONFIG", {"callback_port_range": [19876, 19876]})
     @patch(f"{MOD}.assign_redirect_uri")
-    @patch(f"{MOD}.HTTPServer", side_effect=OSError("port in use"))
     @patch(f"{MOD}.emit_error")
-    def test_all_ports_fail(self, mock_err, mock_http, mock_assign):
+    def test_occupied_port_is_never_shared(self, mock_err, mock_assign):
+        """A port another app is LISTENING on must fail to bind, not be shared.
+
+        Windows SO_REUSEADDR used to let the callback server co-bind a port
+        held by another dev server, so the OAuth redirect hit that server and
+        login timed out. The squatter is a real stdlib HTTPServer because
+        Windows only shares a port when BOTH sockets set SO_REUSEADDR, which
+        is exactly what a typical local Python dev server does.
+        """
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
         from code_puppy_core_plugins.claude_code_oauth.register_callbacks import (
             _start_callback_server,
         )
 
-        result = _start_callback_server(MagicMock())
+        with HTTPServer(("localhost", 0), BaseHTTPRequestHandler) as squatter:
+            port = squatter.server_address[1]
+            with patch(
+                f"{MOD}.CLAUDE_CODE_OAUTH_CONFIG",
+                {"callback_port_range": [port, port]},
+            ):
+                result = _start_callback_server(MagicMock())
+
         assert result is None
+        mock_assign.assert_not_called()
         mock_err.assert_called_once()
 
 
