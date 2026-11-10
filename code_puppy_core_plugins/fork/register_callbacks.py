@@ -259,6 +259,7 @@ def _resolve_fork_model_name(agent_name: str, override: str | None) -> str:
 
         return load_agent(agent_name).get_model_name() or ""
     except Exception:
+        logger.debug("Could not resolve fork model for %s", agent_name, exc_info=True)
         return ""
 
 
