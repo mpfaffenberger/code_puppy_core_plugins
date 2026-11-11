@@ -211,11 +211,10 @@ class EventBridge:
         )
         update = start_tool_call(
             tool_call_id,
-            self._title_for(tool_name, tool_args),
+            tool_name,
             kind=_TOOL_KINDS.get(tool_name, "other"),
             status="in_progress",
-            locations=self._locations_for(tool_args) or None,
-            raw_input=tool_args if isinstance(tool_args, dict) else {},
+            raw_input={},
         )
         await self._send(session_id, update)
 
@@ -271,6 +270,7 @@ class EventBridge:
             and self._is_success(result)
             else "failed"
         )
+        publish_arguments = outcome in {"ok", "error"}
         summary = (
             f"Tool call {outcome} before completion"
             if outcome in {"blocked", "cancelled"}
@@ -284,6 +284,13 @@ class EventBridge:
                 if outcome in {"blocked", "cancelled"}
                 else self._content_for(result) or None
             ),
+            title=None
+            if not publish_arguments
+            else self._title_for(tool_name, tool_args),
+            locations=None
+            if not publish_arguments
+            else self._locations_for(tool_args) or None,
+            raw_input=tool_args if publish_arguments else None,
             raw_output=summary,
         )
         await self._send(session_id, update)
@@ -291,6 +298,14 @@ class EventBridge:
     # ---- Helpers ----------------------------------------------------------
     @staticmethod
     def _runtime_id(context: Any) -> str | None:
+        # Older cores lack the isolated identity seam; preserve direct/legacy calls.
+        try:
+            from code_puppy.tool_identity import current_tool_identity
+        except ImportError:
+            pass
+        else:
+            if (identity := current_tool_identity()) is not None:
+                return identity.tool_call_id
         value = context.get("tool_call_id") if isinstance(context, dict) else None
         return value if isinstance(value, str) and value else None
 

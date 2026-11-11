@@ -48,12 +48,13 @@ async def main():
             for identifier in ("first", "second"):
                 await callbacks.on_pre_tool_call("operation", {"command": identifier}, {"tool_call_id": identifier})
             for identifier in ("first", "second"):
-                await callbacks.on_post_tool_call("operation", {"command": identifier}, "output-" + identifier, 1.0, {"tool_call_id": identifier})
+                await callbacks.on_post_tool_call("operation", {"command": identifier}, "output-" + identifier, 1.0, {"tool_call_id": identifier, "outcome": "ok"})
             starts = {item.tool_call_id: item for item in updates if item.status == "in_progress"}
             ends = {item.tool_call_id: item for item in updates if item.status != "in_progress"}
             assert len(starts) == len(ends) == 2
             for identifier, card in starts.items():
-                assert ends[identifier].raw_output == "output-" + card.raw_input["command"]
+                assert card.raw_input == {} and not card.locations
+                assert ends[identifier].raw_output == "output-" + ends[identifier].raw_input["command"]
             assert state.current_tool_call() is None
             # Current legacy core: real Agent/ToolManager dispatch without IDs.
             updates.clear()

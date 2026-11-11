@@ -179,7 +179,19 @@ calls) never fall back to a same-named sibling. ACP card IDs remain generated
 client-facing IDs, and permission backends still use `current_tool_call()`.
 Older cores without runtime identity retain exact argument-object matching;
 legacy direct `push_tool_call(name)`/`pop_tool_call(name)` pairs still work.
-Blocked/cancelled completion content is redacted and its card closes failed.
+Starts contain only the tool name/kind and generated card ID: no argument-derived
+title, locations or raw input. Only explicit `ok`/`error` terminals publish argument
+details. Blocked/cancelled calls (including execution cancellation) never publish
+them; completion content is redacted and the card closes failed. Legacy cores
+without terminal outcomes keep argument details private. Capability-gated handled
+question cards deliberately retain their question payload.
+
+With core's `tool_identity` seam, the bridge reads immutable task-local identity
+captured before hook dispatch; earlier metadata mutations cannot strand a card.
+Mutable context/argument hook signatures stay unchanged. Older cores without this
+seam retain context-ID/object-identity compatibility, not mutation-resistant IDs.
+Permission dialogs still use run-global `current_tool_call()` LIFO state; concurrent
+permission requests are a separate baseline limitation, not fixed by card matching.
 
 ### stdout is sacred
 

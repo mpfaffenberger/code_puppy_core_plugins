@@ -123,17 +123,38 @@ async def test_legacy_serial_calls_remain_supported(cards):
 @pytest.mark.parametrize("outcome", ["blocked", "cancelled"])
 async def test_nonexecuted_content_never_repeats_private_arguments(cards, outcome):
     bridge, updates = cards
-    await bridge._on_pre_tool_call("shell", {}, {"tool_call_id": "private-call"})
+    private_args = {
+        "command": "private denied argument",
+        "file_path": "private denied argument",
+    }
+    await bridge._on_pre_tool_call(
+        "shell", private_args, {"tool_call_id": "private-call"}
+    )
     await bridge._on_post_tool_call(
         "shell",
-        {},
+        private_args,
         {"diff": "private denied argument", "error": "private denied argument"},
         1.0,
         {"tool_call_id": "private-call", "outcome": outcome},
     )
     terminal = updates[-1][1]
-    assert "private denied argument" not in repr(terminal)
+    assert "private denied argument" not in repr(
+        [item.model_dump() for _, item in updates]
+    )
     assert terminal.status == "failed"
+
+
+async def test_captured_missing_identity_ignores_later_metadata_forgery(cards):
+    try:
+        from code_puppy.tool_identity import tool_call_identity
+    except ImportError:
+        pytest.skip("core does not support isolated hook identity")
+    bridge, updates = cards
+    arguments = {"command": "legacy"}
+    with tool_call_identity({}):
+        await bridge._on_pre_tool_call("shell", arguments, {"tool_call_id": "forged"})
+        await bridge._on_post_tool_call("shell", arguments, "own result", 0, {})
+    assert len(updates) == 2 and state.current_tool_call() is None
 
 
 async def test_parallel_runs_do_not_share_card_identity(cards):
