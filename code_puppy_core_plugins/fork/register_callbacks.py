@@ -224,6 +224,14 @@ def _seed_fork_session(agent_name: str, prompt: str) -> Optional[str]:
         return None
 
 
+def _invoke_impl_supports(impl: Callable[..., Any], parameter: str) -> bool:
+    """Feature-detect an optional core-private invocation parameter."""
+    try:
+        return parameter in inspect.signature(impl).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _invoke_impl_supports_is_fork(impl: Callable[..., Any]) -> bool:
     """Feature-detect the optional ``is_fork`` kwarg on ``_invoke_agent_impl``.
 
@@ -239,10 +247,31 @@ def _invoke_impl_supports_is_fork(impl: Callable[..., Any]) -> bool:
     ``_invoke_agent_impl`` is always a plain ``async def`` so this never fires
     in practice, but fail closed (assume unsupported) rather than crash.
     """
+    return _invoke_impl_supports(impl, "is_fork")
+
+
+def _resolve_fork_model_name(agent_name: str, override: str | None) -> str:
+    """Resolve the model reported to lifecycle hooks without changing the run."""
+    if override:
+        return override
     try:
-        return "is_fork" in inspect.signature(impl).parameters
-    except (TypeError, ValueError):
-        return False
+        from code_puppy.agents.agent_manager import load_agent
+
+        return load_agent(agent_name).get_model_name() or ""
+    except Exception:
+        logger.debug("fork: agent model lookup failed", exc_info=True)
+        return ""
+
+
+def _new_fork_session_id(agent_name: str) -> str:
+    """Generate the final identity before prompt and lifecycle hooks run."""
+    from code_puppy.tools.agent_tools import (
+        _generate_session_hash_suffix,
+        _sanitize_for_session_id,
+    )
+
+    safe_agent = _sanitize_for_session_id(agent_name) or "agent"
+    return f"{safe_agent}-fork-{_generate_session_hash_suffix()}"
 
 
 async def _run_fork(
@@ -257,19 +286,46 @@ async def _run_fork(
 
     started_at = time.monotonic()
     result = None
-    invoke_kwargs = dict(
-        # ``context`` is unused by the implementation; forks have no RunContext.
-        context=None,
-        agent_name=agent_name,
-        prompt=prompt,
-        session_id=session_id,
-        model_name=model_name,
-        emit_response_message=False,
+    effective_prompt = prompt
+    supports_resolved_session = _invoke_impl_supports(
+        _invoke_agent_impl, "session_id_is_resolved"
     )
-    if _invoke_impl_supports_is_fork(_invoke_agent_impl):
-        invoke_kwargs["is_fork"] = True
+    if supports_resolved_session:
+        session_id = session_id or _new_fork_session_id(agent_name)
+
+    async def invoke(submitted_prompt: str):
+        nonlocal effective_prompt
+        effective_prompt = submitted_prompt
+        invoke_kwargs = dict(
+            # ``context`` is unused by the implementation; forks have no RunContext.
+            context=None,
+            agent_name=agent_name,
+            prompt=submitted_prompt,
+            session_id=session_id,
+            model_name=model_name,
+            emit_response_message=False,
+        )
+        if _invoke_impl_supports_is_fork(_invoke_agent_impl):
+            invoke_kwargs["is_fork"] = True
+        if supports_resolved_session:
+            invoke_kwargs["session_id_is_resolved"] = True
+        return await _invoke_agent_impl(**invoke_kwargs)
+
     try:
-        result = await _invoke_agent_impl(**invoke_kwargs)
+        if supports_resolved_session:
+            from code_puppy.agents._auxiliary_run import run_auxiliary_model_call
+
+            result = await run_auxiliary_model_call(
+                agent_name=agent_name,
+                model_name=_resolve_fork_model_name(agent_name, model_name),
+                agent_run_id=session_id,
+                prompt=prompt,
+                call=invoke,
+                response_text=lambda value: getattr(value, "response", None),
+                result_error=lambda value: getattr(value, "error", None),
+            )
+        else:
+            result = await invoke(prompt)
         return result
     finally:
         # /fork calls the shared implementation directly (not via pydantic-ai's tool
@@ -278,7 +334,7 @@ async def _run_fork(
         if result is not None:
             await on_post_tool_call(
                 "invoke_agent",
-                {"agent_name": agent_name, "prompt": prompt},
+                {"agent_name": agent_name, "prompt": effective_prompt},
                 result,
                 (time.monotonic() - started_at) * 1000,
                 {"detached_fork": True},

@@ -468,6 +468,10 @@ async def _on_agent_run_end(
     """
     if not _runtime_enabled():
         return
+    from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+
+    if is_auxiliary_agent_run():
+        return
     try:
         from code_puppy.tools.subagent_context import is_subagent
 

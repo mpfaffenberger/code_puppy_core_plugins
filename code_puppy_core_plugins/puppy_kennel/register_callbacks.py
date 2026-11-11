@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from code_puppy.callbacks import register_callback
 from code_puppy.messaging.bus import emit_debug
+from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
 
 from . import commands, kennel, tools
 from .recorder import record_run_end
@@ -49,6 +50,8 @@ def _on_agent_run_end(
     metadata: dict | None = None,
 ) -> None:
     """Async-compatible hook (sync body, runner accepts either)."""
+    if is_auxiliary_agent_run():
+        return
     record_run_end(
         agent_name=agent_name,
         model_name=model_name,

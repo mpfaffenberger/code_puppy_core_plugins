@@ -261,6 +261,69 @@ async def test_fork_publishes_completion_lifecycle_event():
     assert context == {"detached_fork": True}
 
 
+async def test_fork_prompt_and_lifecycle_share_final_identity(monkeypatch):
+    pytest.importorskip("code_puppy.agents._auxiliary_run")
+    from code_puppy.agents import _auxiliary_run, _runtime
+
+    calls = []
+    events = []
+
+    async def submit(prompt, session_id):
+        events.append(("submit", session_id))
+        return "policy notice"
+
+    async def started(**kwargs):
+        events.append(("start", kwargs["session_id"]))
+
+    async def ended(**kwargs):
+        events.append(("end", kwargs["session_id"]))
+
+    async def invoke(
+        *,
+        context,
+        agent_name,
+        prompt,
+        session_id,
+        model_name,
+        emit_response_message,
+        session_id_is_resolved=False,
+    ):
+        calls.append(
+            {
+                "prompt": prompt,
+                "session_id": session_id,
+                "resolved": session_id_is_resolved,
+            }
+        )
+        return SimpleNamespace(response="done", error=None, session_id=session_id)
+
+    monkeypatch.setattr(rc, "_new_fork_session_id", lambda _name: "qa-session-final")
+    monkeypatch.setattr(rc, "_resolve_fork_model_name", lambda *_args: "model")
+    monkeypatch.setattr(_runtime, "apply_attachment_free_user_prompt_submit", submit)
+    monkeypatch.setattr(_auxiliary_run, "on_agent_run_start", started)
+    monkeypatch.setattr(_auxiliary_run, "on_agent_run_end", ended)
+
+    with (
+        patch(
+            "code_puppy.tools.subagent_invocation._invoke_agent_impl",
+            new=invoke,
+        ),
+        patch("code_puppy.callbacks.on_post_tool_call") as post_tool,
+    ):
+        result = await rc._run_fork("qa-kitten", "raw prompt", session_id=None)
+
+    assert result.session_id == "qa-session-final"
+    assert events == [
+        ("submit", "qa-session-final"),
+        ("start", "qa-session-final"),
+        ("end", "qa-session-final"),
+    ]
+    assert calls == [
+        {"prompt": "policy notice", "session_id": "qa-session-final", "resolved": True}
+    ]
+    assert post_tool.await_args.args[1]["prompt"] == "policy notice"
+
+
 async def test_fork_defaults_to_current_agent():
     with (
         patch(
@@ -720,3 +783,33 @@ async def test_forks_lists_records_in_a_table():
 
     tables = [m for m in emitted if isinstance(m, Table)]
     assert len(tables) == 1
+
+
+def test_fork_model_resolution_prefers_override_and_fails_open():
+    assert rc._resolve_fork_model_name("qa-kitten", "override") == "override"
+    with patch(
+        "code_puppy.agents.agent_manager.load_agent",
+        return_value=SimpleNamespace(get_model_name=lambda: "configured"),
+    ):
+        assert rc._resolve_fork_model_name("qa-kitten", None) == "configured"
+    with patch(
+        "code_puppy.agents.agent_manager.load_agent",
+        side_effect=RuntimeError("unavailable"),
+    ):
+        assert rc._resolve_fork_model_name("qa-kitten", None) == ""
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "prefix"),
+    [
+        ("qa-kitten", "qa-kitten-fork-"),
+        ("LPZ_Main_Coder", "lpz-main-coder-fork-"),
+        ("!!!", "agent-fork-"),
+    ],
+)
+def test_new_fork_session_id_is_final_valid_identity(agent_name, prefix):
+    session_id = rc._new_fork_session_id(agent_name)
+
+    assert session_id.startswith(prefix)
+    assert session_id == session_id.lower()
+    assert session_id.replace("-", "").isalnum()

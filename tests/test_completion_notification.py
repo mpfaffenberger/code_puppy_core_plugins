@@ -339,6 +339,33 @@ def test_prompt_is_captured_only_when_notifications_are_enabled(monkeypatch):
     assert callbacks._prompts == {"run-1": "Which run?"}
 
 
+def test_auxiliary_prompt_and_lifecycle_do_not_change_notification_state(
+    monkeypatch,
+):
+    from code_puppy import callbacks as core_callbacks
+
+    if not hasattr(core_callbacks, "auxiliary_agent_run_context"):
+        pytest.skip("core does not expose auxiliary lifecycle scope")
+
+    monkeypatch.setattr(callbacks, "_prompts", {})
+    monkeypatch.setattr(callbacks, "_run_depth", 1)
+    monkeypatch.setattr(callbacks, "is_enabled", lambda: True)
+    monkeypatch.setattr(callbacks, "_is_subagent", lambda: False)
+    worker = Mock()
+    monkeypatch.setattr(callbacks, "_start_notification_worker", worker)
+
+    with core_callbacks.auxiliary_agent_run_context():
+        callbacks._on_user_prompt_submit("side question", "aux-session")
+        callbacks._on_agent_run_start()
+        callbacks._on_agent_run_end(
+            session_id="aux-session", success=True, response_text="side answer"
+        )
+
+    assert callbacks._prompts == {}
+    assert callbacks._run_depth == 1
+    worker.assert_not_called()
+
+
 def test_callback_passes_context_to_worker_and_discards_prompt(monkeypatch):
     worker_calls: list[tuple[str, str, str]] = []
     monkeypatch.setattr(callbacks, "_prompts", {"run-1": "Which run?"})

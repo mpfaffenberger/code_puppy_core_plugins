@@ -144,15 +144,24 @@ def _on_startup(*_args, **_kw) -> None:
 def _on_user_prompt(*_args, **_kw) -> None:
     # The callback's per-run group_id is ignored; the reporter resolves the
     # durable session reference itself.
-    _reporter.on_user_prompt()
+    from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+
+    if not is_auxiliary_agent_run():
+        _reporter.on_user_prompt()
 
 
 def _on_run_start(*_args, **_kw) -> None:
-    _reporter.on_run_start()
+    from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+
+    if not is_auxiliary_agent_run():
+        _reporter.on_run_start()
 
 
 def _on_run_end(*_args, **_kw) -> None:
-    _reporter.on_run_end()
+    from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+
+    if not is_auxiliary_agent_run():
+        _reporter.on_run_end()
 
 
 def _on_run_cancel(*_args, **_kw) -> None:
