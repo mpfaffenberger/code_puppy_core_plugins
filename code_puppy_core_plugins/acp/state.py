@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 _CONNECTION: Any = None
 _LOOP: Optional[asyncio.AbstractEventLoop] = None
@@ -106,24 +106,35 @@ def streamed_text() -> bool:
 
 
 # ---- Tool-call correlation ------------------------------------------------
-def push_tool_call(tool_name: str) -> str:
-    """Open a tool call, returning a fresh id to report to the client."""
+def push_tool_call(
+    tool_name: str, args_ref: object | None = None, *, runtime_id: str | None = None
+) -> str:
+    """Open a card correlated by runtime ID, or argument identity on old cores."""
     tool_call_id = f"tc_{uuid.uuid4().hex[:12]}"
     run = _RUN.get()
     if run is not None:
-        run["tool_stack"].append((tool_name, tool_call_id))
+        run["tool_stack"].append((tool_name, tool_call_id, args_ref, runtime_id))
     return tool_call_id
 
 
-def pop_tool_call(tool_name: str) -> Optional[str]:
-    """Close the most recent open call for ``tool_name`` and return its id."""
+def pop_tool_call(
+    tool_name: str, args_ref: object | None = None, *, runtime_id: str | None = None
+) -> Optional[str]:
+    """Close only the matching identity; never fall back from an unknown ID."""
     run = _RUN.get()
     if run is None:
         return None
-    stack: List[Tuple[str, str]] = run["tool_stack"]
+    stack = run["tool_stack"]
     for i in range(len(stack) - 1, -1, -1):
-        if stack[i][0] == tool_name:
-            return stack.pop(i)[1]
+        name, tool_call_id, stored_args, stored_id = stack[i]
+        matches = (
+            stored_id == runtime_id
+            if runtime_id is not None
+            else stored_id is None and stored_args is args_ref
+        )
+        if name == tool_name and matches:
+            stack.pop(i)
+            return tool_call_id
     return None
 
 
@@ -132,4 +143,5 @@ def current_tool_call() -> Optional[Tuple[str, str]]:
     run = _RUN.get()
     if not run or not run["tool_stack"]:
         return None
-    return run["tool_stack"][-1]
+    tool_name, tool_call_id, _args_ref, _runtime_id = run["tool_stack"][-1]
+    return tool_name, tool_call_id

@@ -9,13 +9,23 @@ from code_puppy_core_plugins.auto_continue.classifier import (
 )
 from code_puppy_core_plugins.auto_continue.register_callbacks import (
     _custom_help,
+    _continuation_count,
     _handle_custom_command,
+    _on_interactive_turn_cancel,
     _on_interactive_turn_end,
+    _reset_count,
 )
 
 
 class _Result:
     output = "Want me to implement that next?"
+
+
+@pytest.fixture(autouse=True)
+def reset_continuation_count():
+    _reset_count()
+    yield
+    _reset_count()
 
 
 @pytest.mark.asyncio
@@ -141,8 +151,72 @@ def test_status_command_reports_model_and_state():
 
     assert handled is True
     emit_info.assert_called_once_with(
-        "Auto-continue is enabled; classifier model: tiny-model."
+        "Auto-continue is enabled; classifier model: tiny-model; "
+        "maximum automatic continuations: 5."
     )
+
+
+@pytest.mark.asyncio
+async def test_stops_after_five_consecutive_continuations():
+    classifier = AsyncMock(return_value="continue")
+    with (
+        patch(
+            "code_puppy_core_plugins.auto_continue.register_callbacks.classify",
+            classifier,
+        ),
+        patch("code_puppy.messaging.emit_info") as emit_info,
+    ):
+        results = [
+            await _on_interactive_turn_end(object(), "do it", _Result())
+            for _ in range(6)
+        ]
+
+    assert results[:5] == [{"prompt": "continue"}] * 5
+    assert results[5] is None
+    assert classifier.await_count == 5
+    assert _continuation_count.get() == 0
+    emit_info.assert_any_call("Auto-continue stopped after 5 automatic continuations.")
+
+
+@pytest.mark.asyncio
+async def test_rejection_resets_the_continuation_chain():
+    classifier = AsyncMock(side_effect=["continue", None, "okay"])
+    with patch(
+        "code_puppy_core_plugins.auto_continue.register_callbacks.classify",
+        classifier,
+    ):
+        assert await _on_interactive_turn_end(object(), "one", _Result())
+        assert _continuation_count.get() == 1
+        assert await _on_interactive_turn_end(object(), "two", _Result()) is None
+        assert _continuation_count.get() == 0
+        assert await _on_interactive_turn_end(object(), "three", _Result())
+        assert _continuation_count.get() == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_resets_the_continuation_chain():
+    _continuation_count.set(3)
+
+    assert (
+        await _on_interactive_turn_end(object(), "failed", _Result(), success=False)
+        is None
+    )
+    assert _continuation_count.get() == 0
+
+
+def test_cancel_and_toggle_reset_the_continuation_chain():
+    _continuation_count.set(4)
+    _on_interactive_turn_cancel("prompt")
+    assert _continuation_count.get() == 0
+
+    for action in ("enable", "disable"):
+        _continuation_count.set(4)
+        with (
+            patch("code_puppy.config.set_value"),
+            patch("code_puppy.messaging.emit_success"),
+        ):
+            _handle_custom_command(f"auto-continue {action}", "auto-continue")
+        assert _continuation_count.get() == 0
 
 
 def test_command_help_and_unrelated_command():
