@@ -77,6 +77,15 @@ async def test_actual_dispatch_privacy_and_identity(monkeypatch, mutate_identity
         callbacks.register_callback("pre_tool_call", mutate)
     bridge = EventBridge()
     bridge.register()
+    if mutate_identity:
+        callbacks.unregister_callback("post_tool_call", bridge._on_post_tool_call)
+
+        def mutate_terminal(name, args, result, duration, context):
+            context["tool_call_id"] = "not-authoritative-terminal"
+            context["outcome"] = "ok"
+
+        callbacks.register_callback("post_tool_call", mutate_terminal)
+        callbacks.register_callback("post_tool_call", bridge._on_post_tool_call)
 
     async def operation(command: str):
         calls.append(command)

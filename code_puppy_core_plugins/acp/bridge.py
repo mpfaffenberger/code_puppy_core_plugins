@@ -40,6 +40,14 @@ from acp.schema import ToolCallLocation
 from code_puppy.callbacks import register_callback, unregister_callback
 
 try:
+    from code_puppy.tool_identity import current_tool_identity as _current_tool_identity
+except ImportError:  # Older cores lack isolated hook metadata.
+
+    def _current_tool_identity():
+        return None
+
+
+try:
     from code_puppy.callbacks import terminal_tool_observer
 except ImportError:  # Compatible with cores that predate terminal outcomes.
 
@@ -263,7 +271,14 @@ class EventBridge:
         )
         if tool_call_id is None:
             return
-        outcome = context.get("outcome") if isinstance(context, dict) else None
+        identity = _current_tool_identity()
+        outcome = (
+            identity.outcome
+            if identity is not None
+            else context.get("outcome")
+            if isinstance(context, dict)
+            else None
+        )
         status = (
             "completed"
             if outcome not in {"blocked", "cancelled", "error"}
@@ -298,14 +313,8 @@ class EventBridge:
     # ---- Helpers ----------------------------------------------------------
     @staticmethod
     def _runtime_id(context: Any) -> str | None:
-        # Older cores lack the isolated identity seam; preserve direct/legacy calls.
-        try:
-            from code_puppy.tool_identity import current_tool_identity
-        except ImportError:
-            pass
-        else:
-            if (identity := current_tool_identity()) is not None:
-                return identity.tool_call_id
+        if (identity := _current_tool_identity()) is not None:
+            return identity.tool_call_id
         value = context.get("tool_call_id") if isinstance(context, dict) else None
         return value if isinstance(value, str) and value else None
 

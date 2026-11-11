@@ -187,7 +187,8 @@ without terminal outcomes keep argument details private. Capability-gated handle
 question cards deliberately retain their question payload.
 
 With core's `tool_identity` seam, the bridge reads immutable task-local identity
-captured before hook dispatch; earlier metadata mutations cannot strand a card.
+and terminal outcome captured before hook dispatch; earlier metadata mutations
+cannot strand a card or relabel a denial as permission to publish arguments.
 Mutable context/argument hook signatures stay unchanged. Older cores without this
 seam retain context-ID/object-identity compatibility, not mutation-resistant IDs.
 Permission dialogs still use run-global `current_tool_call()` LIFO state; concurrent
