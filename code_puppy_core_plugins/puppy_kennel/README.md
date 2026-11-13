@@ -76,9 +76,10 @@ budget. Three priority classes, no LLM, no embeddings:
 | **P1** Project Decisions | `repo:<cwd>` wing, `role='note'` | ~30% | Sticky writes from `kennel_remember` — highest signal-to-token ratio |
 | **P2** Recent Context | `repo:<cwd>` wing, `role='assistant'` | remainder | Orientation, freshness |
 
-Drawers below `PUPPY_KENNEL_MIN_DRAWER_CHARS` (default 80) are skipped
-as noise. Token estimation uses the well-known 1-token ≈ 4-chars
-heuristic — accurate to ±20%, zero deps.
+P2 drawers below `PUPPY_KENNEL_MIN_DRAWER_CHARS` (default 80) are skipped
+as noise. P0/P1 are explicit writes and are never length-filtered. Token
+estimation uses the well-known 1-token ≈ 4-chars heuristic — accurate to
+±20%, zero deps.
 
 **Config knobs:**
 
@@ -87,7 +88,7 @@ heuristic — accurate to ±20%, zero deps.
 | `PUPPY_KENNEL_PROMPT_BUDGET` | `1500` | Total token budget for the block |
 | `PUPPY_KENNEL_USER_PREFS_QUOTA` | `0.30` | P0 fraction |
 | `PUPPY_KENNEL_STICKY_QUOTA` | `0.30` | P1 fraction |
-| `PUPPY_KENNEL_MIN_DRAWER_CHARS` | `80` | Noise filter |
+| `PUPPY_KENNEL_MIN_DRAWER_CHARS` | `80` | Noise filter (P2 only) |
 
 **Phase 2 — active tooling:**
 
