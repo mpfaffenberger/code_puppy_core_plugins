@@ -28,7 +28,7 @@ PROMPT_BUDGET_CHARS = PROMPT_BUDGET_TOKENS * CHARS_PER_TOKEN
 USER_PREFS_QUOTA = float(os.environ.get("PUPPY_KENNEL_USER_PREFS_QUOTA", "0.30"))
 STICKY_QUOTA = float(os.environ.get("PUPPY_KENNEL_STICKY_QUOTA", "0.30"))
 
-# Drawers shorter than this are noise — skip them in the recall block.
+# Autosaved (P2) drawers shorter than this are noise — skip them in the recall block.
 MIN_DRAWER_CHARS = int(os.environ.get("PUPPY_KENNEL_MIN_DRAWER_CHARS", "80"))
 
 # Cap on stored drawer text length (chars). Keeps SQLite happy and FTS indexes
