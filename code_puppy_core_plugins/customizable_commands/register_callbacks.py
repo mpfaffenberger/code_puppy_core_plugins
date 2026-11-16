@@ -20,6 +20,7 @@ from code_puppy_core_plugins.agent_skills.metadata import (
 # Global cache for loaded commands
 _custom_commands: Dict[str, str] = {}
 _command_descriptions: Dict[str, str] = {}
+_command_sources: Dict[str, Path] = {}
 # Commands whose frontmatter declares `exec: <shell command>` run directly instead of
 # being agent-forwarded; value is the raw shell string (shell=True => ~/pipes/env work).
 _command_exec_directives: Dict[str, str] = {}
@@ -156,6 +157,7 @@ def _load_markdown_commands() -> None:
 
     _custom_commands.clear()
     _command_descriptions.clear()
+    _command_sources.clear()
     _command_exec_directives.clear()
     _commands_loaded = True  # Mark as loaded even if directories are empty
 
@@ -214,6 +216,7 @@ def _load_markdown_commands() -> None:
                 # Later directories override earlier ones (project > global)
                 _custom_commands[base_name] = body
                 _command_descriptions[base_name] = description
+                _command_sources[base_name] = md_file.absolute()
 
                 # Optional `exec:` runs a script instead of forwarding the body (e.g.
                 # /flux/status renders its own colored output). Only honored from trusted
@@ -451,6 +454,9 @@ def _handle_custom_command(command: str, name: str) -> Optional[Any]:
     emit_info(f"📝 Executing markdown command: {name}")
     return MarkdownCommandResult(prompt)
 
+
+# Register the management command without adding another execution path.
+from . import management  # noqa: E402, F401
 
 # Register callbacks
 register_callback("custom_command_help", _custom_help)
