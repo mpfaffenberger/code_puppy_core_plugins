@@ -35,6 +35,20 @@ The package deliberately does not depend on `code-puppy` in its own metadata.
 `code-puppy` depends on this bundle; adding the reverse edge would create a
 packaging dependency cycle. Plugin CI installs the core runtime separately.
 
+## Custom slash commands
+
+Create a reusable Markdown prompt without writing a plugin:
+
+```text
+/commands create explain Explain the code and its edge cases.
+/explain src/example.py
+```
+
+Use `/commands` to list commands and their source files, or add `--project`
+after `create` to save in `.agents/commands`. Existing files are never overwritten.
+See [custom command documentation](code_puppy_core_plugins/customizable_commands/README.md)
+for scope, editing, arguments, and the distinction from skills.
+
 ## Completion notifications
 
 The `completion_notification` plugin is disabled by default. Enable a native,
