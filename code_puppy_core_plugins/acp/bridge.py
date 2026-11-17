@@ -38,6 +38,23 @@ from acp.helpers import (
 from acp.schema import ToolCallLocation
 
 from code_puppy.callbacks import register_callback, unregister_callback
+
+try:
+    from code_puppy.tool_identity import current_tool_identity as _current_tool_identity
+except ImportError:  # Older cores lack isolated hook metadata.
+
+    def _current_tool_identity():
+        return None
+
+
+try:
+    from code_puppy.callbacks import terminal_tool_observer
+except ImportError:  # Compatible with cores that predate terminal outcomes.
+
+    def terminal_tool_observer(callback):
+        return callback
+
+
 from code_puppy_core_plugins.acp import state
 from code_puppy.tools.common import resolve_path
 
@@ -197,14 +214,15 @@ class EventBridge:
             return await self._present_question(session_id, tool_args)
         if tool_name in _INTERACTIVE_TOOLS:
             return dict(_INTERACTIVE_BLOCK)
-        tool_call_id = state.push_tool_call(tool_name)
+        tool_call_id = state.push_tool_call(
+            tool_name, tool_args, runtime_id=self._runtime_id(context)
+        )
         update = start_tool_call(
             tool_call_id,
-            self._title_for(tool_name, tool_args),
+            tool_name,
             kind=_TOOL_KINDS.get(tool_name, "other"),
             status="in_progress",
-            locations=self._locations_for(tool_args) or None,
-            raw_input=tool_args if isinstance(tool_args, dict) else {},
+            raw_input={},
         )
         await self._send(session_id, update)
 
@@ -235,6 +253,7 @@ class EventBridge:
             "error_message": _CLIENT_QUESTION_RESULT,
         }
 
+    @terminal_tool_observer
     async def _on_post_tool_call(
         self,
         tool_name: str,
@@ -247,19 +266,58 @@ class EventBridge:
         session_id = state.get_active_session_id()
         if session_id is None:
             return
-        tool_call_id = state.pop_tool_call(tool_name)
+        tool_call_id = state.pop_tool_call(
+            tool_name, tool_args, runtime_id=self._runtime_id(context)
+        )
         if tool_call_id is None:
             return
-        status = "completed" if self._is_success(result) else "failed"
+        identity = _current_tool_identity()
+        outcome = (
+            identity.outcome
+            if identity is not None
+            else context.get("outcome")
+            if isinstance(context, dict)
+            else None
+        )
+        status = (
+            "completed"
+            if outcome not in {"blocked", "cancelled", "error"}
+            and self._is_success(result)
+            else "failed"
+        )
+        publish_arguments = outcome in {"ok", "error"}
+        summary = (
+            f"Tool call {outcome} before completion"
+            if outcome in {"blocked", "cancelled"}
+            else self._summarize(result)
+        )
         update = update_tool_call(
             tool_call_id,
             status=status,
-            content=self._content_for(result) or None,
-            raw_output=self._summarize(result),
+            content=(
+                None
+                if outcome in {"blocked", "cancelled"}
+                else self._content_for(result) or None
+            ),
+            title=None
+            if not publish_arguments
+            else self._title_for(tool_name, tool_args),
+            locations=None
+            if not publish_arguments
+            else self._locations_for(tool_args) or None,
+            raw_input=tool_args if publish_arguments else None,
+            raw_output=summary,
         )
         await self._send(session_id, update)
 
     # ---- Helpers ----------------------------------------------------------
+    @staticmethod
+    def _runtime_id(context: Any) -> str | None:
+        if (identity := _current_tool_identity()) is not None:
+            return identity.tool_call_id
+        value = context.get("tool_call_id") if isinstance(context, dict) else None
+        return value if isinstance(value, str) and value else None
+
     @staticmethod
     def _title_for(tool_name: str, tool_args: Any) -> str:
         """Build a human-friendly tool-call title (e.g. ``Edit foo.py``)."""
