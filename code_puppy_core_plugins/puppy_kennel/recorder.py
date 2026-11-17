@@ -5,6 +5,16 @@ Fires on ``agent_run_end``. The recorder writes the agent's response to
 response as "a conversation that happened in this project" — that's the
 honest framing.
 
+Two different ids, two different homes:
+
+* **Room name** — stable conversation fingerprint. Same shape as the
+  legacy label (``session-<8 hex>``), but derived from
+  ``get_current_session_name()`` so multi-turn dialogue in one window
+  (and ``-r`` resume of that session) shares one room. Separate windows
+  / ``/clear`` get distinct rooms.
+* **``drawers.session_id``** — the per-run ``group_id`` UUID from the
+  runtime hook (unchanged column semantics).
+
 Cross-project agent reflections belong in ``agent:<name>`` and are an
 opt-in concern handled by the ``kennel_remember`` tool, not autosave.
 User preferences likewise live in ``user:default`` and only land there
@@ -22,15 +32,7 @@ from code_puppy.messaging.bus import emit_debug
 
 from . import kennel
 from .state import is_enabled
-from .wings import detect_cwd, repo_wing
-
-
-def _room_name(session_id: str | None) -> str:
-    """Rooms partition a wing by session. Keep the name human-scannable."""
-    if not session_id:
-        return "session-unknown"
-    short = session_id.split("-")[0][:12] if "-" in session_id else session_id[:12]
-    return f"session-{short}"
+from .wings import conversation_session_name, detect_cwd, repo_wing, room_name
 
 
 def record_run_end(
@@ -45,8 +47,11 @@ def record_run_end(
     """Persist the agent's final response into the kennel.
 
     Writes a single drawer to the repo wing (shared project memory).
-    Failures here must never crash the host app — the kennel is best-
-    effort memory, not a transactional system of record.
+    Room membership uses the stable conversation session name (short
+    ``session-<8 hex>`` label). ``drawers.session_id`` stores the
+    per-run group_id UUID from the hook. Failures here must never crash
+    the host app — the kennel is best-effort memory, not a transactional
+    system of record.
     """
     if not response_text or not response_text.strip():
         return
@@ -59,11 +64,13 @@ def record_run_end(
 
     try:
         cwd = detect_cwd()
-        room = _room_name(session_id)
+        conversation_id = conversation_session_name()
+        room = room_name(conversation_id)
         drawer_meta: dict[str, Any] = {
             "agent": agent_name,
             "model": model_name,
             "cwd": str(cwd),
+            "conversation_id": conversation_id,
         }
         if metadata:
             drawer_meta["run_metadata"] = metadata
@@ -76,6 +83,7 @@ def record_run_end(
             repo_room_id,
             content=response_text,
             role="assistant",
+            # Column keeps historical semantics: per-run group_id UUID.
             session_id=session_id,
             metadata=drawer_meta,
         )

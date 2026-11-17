@@ -9,7 +9,9 @@ token budget without ever calling an LLM or shipping a tokenizer:
   i.e. content written via the ``kennel_remember`` tool. Highest signal-to-
   token ratio in the kennel. Capped at ~30% of budget.
 * **P2 - recent assistant responses**: drawers in ``repo:<cwd>`` with
-  ``role='assistant'``. Fills whatever budget remains after P0 + P1.
+  ``role='assistant'``, **excluding the current conversation room** so
+  the recall block does not re-inject answers already in the live agent
+  context. Fills whatever budget remains after P0 + P1.
 
 Token budget is enforced via the well-known 1-token approximate-4-chars
 heuristic. Cheap, zero-dep, accurate to plus-or-minus 20% which is fine
@@ -30,7 +32,13 @@ from .config import (
     USER_PREFS_QUOTA,
 )
 from .kennel import Drawer
-from .wings import USER_WING, detect_cwd, repo_wing
+from .wings import (
+    USER_WING,
+    conversation_session_name,
+    detect_cwd,
+    repo_wing,
+    room_name,
+)
 
 # Reserve ~50 tokens for rendered headers and section dividers.
 _HEADER_SLACK_CHARS = 50 * CHARS_PER_TOKEN
@@ -122,9 +130,16 @@ def pack(cwd_override: str | None = None) -> str | None:
     p1 = _pack_class(sticky, p1_budget)
     p1.title = "Project Decisions"
 
-    # P2: recent assistant responses fill the remainder.
+    # P2: recent assistant responses from *other* conversations fill the
+    # remainder. The current room's assistants already live in the agent
+    # message history — re-injecting them wastes budget and confuses the model.
     p2_budget = total_budget - p0.used_chars - p1.used_chars
-    assistant = kennel.recent_drawers(repo_w, limit=_FETCH_LIMIT, role="assistant")
+    assistant = kennel.recent_drawers(
+        repo_w,
+        limit=_FETCH_LIMIT,
+        role="assistant",
+        exclude_room_name=room_name(conversation_session_name()),
+    )
     p2 = _pack_class(assistant, max(0, p2_budget))
     p2.title = "Recent Context"
 

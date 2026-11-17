@@ -43,7 +43,11 @@ isolation for a sensitive-data agent, run that agent with
 - **`load_prompt`** — injects a tiered, budget-aware recall block (see
   [the packer](#the-packer) below) into the system prompt.
 - **`agent_run_end`** — writes the agent's response to a single drawer
-  in the current ``repo:<cwd>`` wing.
+  in the current ``repo:<cwd>`` wing. Room names keep the legacy
+  ``session-<8 hex>`` shape, keyed by a stable hash of
+  ``get_current_session_name()`` so multi-turn turns (and ``-r`` resume
+  of the same session) share one room; ``drawers.session_id`` still
+  stores the per-run ``group_id`` UUID.
 
 ## Wing semantics (Phase 5)
 
@@ -74,7 +78,7 @@ budget. Three priority classes, no LLM, no embeddings:
 |---|---|---|---|
 | **P0** User Preferences | `user:default` wing, any role | ~30% | Short, durable, pervasive ('Mike hates emojis') |
 | **P1** Project Decisions | `repo:<cwd>` wing, `role='note'` | ~30% | Sticky writes from `kennel_remember` — highest signal-to-token ratio |
-| **P2** Recent Context | `repo:<cwd>` wing, `role='assistant'` | remainder | Orientation, freshness |
+| **P2** Recent Context | `repo:<cwd>` wing, `role='assistant'`, excluding the current conversation room | remainder | Cross-session orientation; skips assistants already in live context |
 
 Drawers below `PUPPY_KENNEL_MIN_DRAWER_CHARS` (default 80) are skipped
 as noise. Token estimation uses the well-known 1-token ≈ 4-chars

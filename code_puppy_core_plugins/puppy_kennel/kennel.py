@@ -148,13 +148,21 @@ def _row_to_drawer(row: sqlite3.Row) -> Drawer:
 
 
 def recent_drawers(
-    wing_name: str, limit: int = 5, role: str | None = None
+    wing_name: str,
+    limit: int = 5,
+    role: str | None = None,
+    exclude_room_name: str | None = None,
 ) -> list[Drawer]:
     """Return the most recent drawers in a wing, optionally role-filtered.
 
     ``role=None`` returns every role (assistant + note + ...). Pass a
     specific value like ``"note"`` to get just sticky writes from
     ``kennel_remember``.
+
+    ``exclude_room_name`` drops drawers whose room label matches (P2
+    packing skips the current conversation so recall does not echo live
+    agent context). Applied in the same query as the wing join — no
+    separate room lookup round-trip.
     """
     sql_parts = [
         "SELECT d.* FROM drawers d",
@@ -166,6 +174,9 @@ def recent_drawers(
     if role is not None:
         sql_parts.append("AND d.role = ?")
         params.append(role)
+    if exclude_room_name is not None:
+        sql_parts.append("AND r.name != ?")
+        params.append(exclude_room_name)
     sql_parts.append("ORDER BY d.ts DESC LIMIT ?")
     params.append(limit)
     with _connect() as conn:
