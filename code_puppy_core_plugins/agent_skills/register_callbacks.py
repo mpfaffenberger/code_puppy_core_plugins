@@ -184,7 +184,8 @@ def _handle_skills_command(command: str, name: str) -> Optional[Any]:
                     )
                     version_str = f" v{metadata.version}" if metadata.version else ""
                     author_str = f" by {metadata.author}" if metadata.author else ""
-                    emit_info(f"  {status} {metadata.name}{version_str}{author_str}")
+                    manual_str = " (manual only)" if metadata.disable_model_invocation else ""
+                    emit_info(f"  {status} {metadata.name}{version_str}{author_str}{manual_str}")
                     emit_info(f"      {metadata.description}")
                     if metadata.tags:
                         emit_info(f"      tags: {', '.join(metadata.tags)}")

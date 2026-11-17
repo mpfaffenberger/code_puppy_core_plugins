@@ -31,8 +31,14 @@ def build_available_skills_block(skills: List["SkillMetadata"]) -> str:
     if not skills:
         return ""
 
+    # Skills with disable_model_invocation are hidden from the system prompt.
+    # Users can still invoke them via /skill-name slash commands.
+    visible = [s for s in skills if not s.disable_model_invocation]
+    if not visible:
+        return ""
+
     lines = ["## Available Skills"]
-    for skill in skills:
+    for skill in visible:
         desc = _one_line(skill.description) if skill.description else ""
         lines.append(f"- {skill.name}: {desc}" if desc else f"- {skill.name}")
     return "\n".join(lines)

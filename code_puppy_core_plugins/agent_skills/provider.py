@@ -28,6 +28,7 @@ class AgentSkillsProvider:
                 "tags": metadata.tags,
                 "version": metadata.version,
                 "author": metadata.author,
+                "disable_model_invocation": metadata.disable_model_invocation,
             }
             for metadata in list_enabled_skill_metadata()
         ]
