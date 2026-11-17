@@ -5,6 +5,7 @@ aws_bedrock
 background_agents
 azure_foundry
 auto_continue
+browser_harness
 btw
 chatgpt_oauth
 claude_code_hooks
