@@ -314,7 +314,7 @@ def test_auth_command_refreshes_skill_cache():
         )
 
     oauth_flow.assert_called_once_with()
-    set_model.assert_called_once_with("codex-gpt-6-astra")
+    set_model.assert_called_once_with("codex-gpt-6.2-astra")
     refresh_skills.assert_called_once_with()
 
 

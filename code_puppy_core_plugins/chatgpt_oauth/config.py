@@ -34,7 +34,7 @@ CHATGPT_OAUTH_CONFIG: Dict[str, Any] = {
     # here silently hides newer models. Bump when a new generation lands.
     "client_version": "0.153.3",
     # Model selected right after a successful OAuth login.
-    "default_model": "codex-gpt-6-astra",
+    "default_model": "codex-gpt-6.2-astra",
     "originator": "codex_cli_rs",
 }
 
