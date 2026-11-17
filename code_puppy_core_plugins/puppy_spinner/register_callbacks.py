@@ -62,6 +62,10 @@ def _bar():
 # Dispatcher passes hook args positionally (up to seven for agent_run_end); this
 # plugin ignores them, so swallow all args to stay signature-proof.
 async def _on_run_start(*_args, **_kw):
+    from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+
+    if is_auxiliary_agent_run():
+        return
     global _active_runs
     with _lock:
         _active_runs += 1
@@ -69,6 +73,10 @@ async def _on_run_start(*_args, **_kw):
 
 
 async def _on_run_end(*_args, **_kw):
+    from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+
+    if is_auxiliary_agent_run():
+        return
     global _active_runs
     with _lock:
         _active_runs = max(0, _active_runs - 1)

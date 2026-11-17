@@ -35,6 +35,36 @@ def kennel_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 # --------------------------------------------------------------------------- #
+# Lifecycle recording
+# --------------------------------------------------------------------------- #
+
+
+def test_auxiliary_run_output_is_not_memorialized(monkeypatch) -> None:
+    from code_puppy import callbacks
+    from code_puppy_core_plugins.puppy_kennel import (
+        register_callbacks as registration,
+    )
+
+    if not hasattr(callbacks, "auxiliary_agent_run_context"):
+        pytest.skip("core does not expose auxiliary lifecycle scope")
+
+    recorded = []
+    monkeypatch.setattr(
+        registration, "record_run_end", lambda **kwargs: recorded.append(kwargs)
+    )
+
+    with callbacks.auxiliary_agent_run_context():
+        registration._on_agent_run_end(
+            "btw", "side-model", response_text="throwaway answer"
+        )
+    registration._on_agent_run_end(
+        "code-puppy", "main-model", response_text="main answer"
+    )
+
+    assert [entry["response_text"] for entry in recorded] == ["main answer"]
+
+
+# --------------------------------------------------------------------------- #
 # Multi-wing search + dedup
 # --------------------------------------------------------------------------- #
 

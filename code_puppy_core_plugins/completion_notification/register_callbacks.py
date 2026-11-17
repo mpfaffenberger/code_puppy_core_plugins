@@ -8,6 +8,11 @@ import time
 
 from code_puppy.callbacks import register_callback
 
+from code_puppy_core_plugins._core_compat import (
+    is_auxiliary_agent_run,
+    is_hook_retry_prompt_submit,
+)
+
 from .config import get_sound, is_enabled
 from .notifier import notify_completion, prompt_preview
 
@@ -21,7 +26,10 @@ _prompts: dict[str, str] = {}
 
 def _on_user_prompt_submit(prompt: str, session_id: str | None = None) -> None:
     """Keep an opted-in prompt only until its run finishes."""
-    if not session_id or not is_enabled() or _is_subagent():
+    # An in-turn retry must not replace the original user's notification preview.
+    if is_hook_retry_prompt_submit():
+        return
+    if not session_id or not is_enabled() or _is_subagent() or is_auxiliary_agent_run():
         return
     with _lock:
         _prompts[session_id] = prompt_preview(prompt)
@@ -42,6 +50,8 @@ def _is_subagent() -> bool:
 
 def _on_agent_run_start(*_args, **_kwargs) -> None:
     """Track public lifecycle depth so internal nested runs never notify."""
+    if is_auxiliary_agent_run():
+        return
     global _run_depth
     with _lock:
         _run_depth += 1
@@ -58,6 +68,8 @@ def _on_agent_run_end(
 ) -> None:
     """Notify only when the outermost successful textual run completes."""
     del agent_name, model_name, error, metadata
+    if is_auxiliary_agent_run():
+        return
     global _run_depth
     with _lock:
         _run_depth = max(0, _run_depth - 1)

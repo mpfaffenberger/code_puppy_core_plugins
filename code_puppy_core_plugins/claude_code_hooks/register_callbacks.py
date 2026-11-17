@@ -27,6 +27,11 @@ from typing import Any, Dict, List, Optional
 from code_puppy.callbacks import register_callback
 from code_puppy.hook_engine import EventData, HookEngine
 
+from code_puppy_core_plugins._core_compat import (
+    is_auxiliary_agent_run,
+    is_hook_retry_prompt_submit,
+)
+
 from . import trust as _trust
 from .config import load_hooks_config
 
@@ -271,10 +276,15 @@ async def on_user_prompt_submit_hook(
     Returns the (possibly augmented) prompt, or ``None`` if there's nothing
     to add. See issue #298.
     """
+    # agent_run_result retries continue this turn, not a new user submission.
+    if is_hook_retry_prompt_submit():
+        return None
+
     chunks: List[str] = []
 
-    # Drain any pending SessionStart context first.
-    if _pending_session_context:
+    # SessionStart output belongs to the next foreground user prompt. Auxiliary
+    # generated prompts still run their own hooks, but cannot consume it.
+    if _pending_session_context and not is_auxiliary_agent_run():
         chunks.extend(_pending_session_context)
         _pending_session_context.clear()
 
@@ -380,7 +390,9 @@ async def on_agent_run_end_hook(
     metadata: dict | None = None,
 ) -> None:
     """agent_run_end callback — fires Stop or SubagentStop hooks."""
-    if not _hook_engine:
+    from code_puppy_core_plugins._core_compat import is_auxiliary_agent_run
+
+    if is_auxiliary_agent_run() or not _hook_engine:
         return
 
     agent_lower = (agent_name or "").lower()

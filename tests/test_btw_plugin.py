@@ -1,5 +1,6 @@
 """Tests for the /btw quick-side-question plugin."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from code_puppy_core_plugins.btw import inline_view, side_query
@@ -133,6 +134,64 @@ def test_resolve_model_prefers_agent_pin():
         assert side_query.resolve_model_name() == "pinned-model"
 
 
+async def test_query_uses_prompt_boundary_and_balanced_lifecycle(monkeypatch):
+    import pytest
+
+    pytest.importorskip("code_puppy.agents._auxiliary_run")
+    from code_puppy.agents import _auxiliary_run, _runtime
+
+    events = []
+    agent_options = {}
+    sent = []
+
+    async def submit(prompt, session_id):
+        events.append(("submit", prompt, session_id))
+        return "policy checked"
+
+    async def started(**kwargs):
+        events.append(("start", kwargs))
+
+    async def ended(**kwargs):
+        events.append(("end", kwargs))
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            agent_options.update(kwargs)
+
+        async def run(self, prompt, **_kwargs):
+            sent.append(prompt)
+            return SimpleNamespace(output="answer")
+
+    monkeypatch.setattr(_runtime, "apply_attachment_free_user_prompt_submit", submit)
+    monkeypatch.setattr(_auxiliary_run, "on_agent_run_start", started)
+    monkeypatch.setattr(_auxiliary_run, "on_agent_run_end", ended)
+    monkeypatch.setattr(
+        "code_puppy.model_factory.ModelFactory.load_config", lambda: {"m": {}}
+    )
+    monkeypatch.setattr(
+        "code_puppy.model_factory.ModelFactory.get_model", lambda *_args: object()
+    )
+    monkeypatch.setattr("pydantic_ai.Agent", FakeAgent)
+    monkeypatch.setattr(
+        "code_puppy.model_utils.prepare_prompt_for_model",
+        lambda _model, _instructions, prompt, **_kwargs: SimpleNamespace(
+            instructions="instructions", user_prompt=prompt
+        ),
+    )
+    monkeypatch.setattr(
+        "code_puppy.model_factory.make_model_settings", lambda _model: None
+    )
+
+    assert await side_query._ask("m", "raw question") == "answer"
+
+    assert sent == ["policy checked"]
+    assert agent_options["capabilities"]
+    assert [event[0] for event in events] == ["submit", "start", "end"]
+    assert events[2][1]["success"] is True
+    assert events[2][1]["response_text"] == "answer"
+    assert events[0][2] == events[1][1]["session_id"] == events[2][1]["session_id"]
+
+
 def test_resolve_model_falls_back_to_global():
     class FakeAgent:
         def get_model_name(self):
@@ -149,3 +208,40 @@ def test_resolve_model_falls_back_to_global():
         ),
     ):
         assert side_query.resolve_model_name() == "global-model"
+
+
+async def test_query_falls_back_when_auxiliary_lifecycle_is_unavailable(
+    monkeypatch,
+):
+    import sys
+
+    sent = []
+
+    class FakeAgent:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run(self, prompt, **_kwargs):
+            sent.append(prompt)
+            return SimpleNamespace(output="answer")
+
+    monkeypatch.setitem(sys.modules, "code_puppy.agents._auxiliary_run", None)
+    monkeypatch.setattr(
+        "code_puppy.model_factory.ModelFactory.load_config", lambda: {"m": {}}
+    )
+    monkeypatch.setattr(
+        "code_puppy.model_factory.ModelFactory.get_model", lambda *_args: object()
+    )
+    monkeypatch.setattr("pydantic_ai.Agent", FakeAgent)
+    monkeypatch.setattr(
+        "code_puppy.model_utils.prepare_prompt_for_model",
+        lambda _model, _instructions, prompt, **_kwargs: SimpleNamespace(
+            instructions="instructions", user_prompt=prompt
+        ),
+    )
+    monkeypatch.setattr(
+        "code_puppy.model_factory.make_model_settings", lambda _model: None
+    )
+
+    assert await side_query._ask("m", "raw question") == "answer"
+    assert sent == ["raw question"]
