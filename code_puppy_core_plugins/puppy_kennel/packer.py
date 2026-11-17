@@ -112,14 +112,14 @@ def pack(cwd_override: str | None = None) -> str | None:
     p0_budget = int(total_budget * USER_PREFS_QUOTA)
     p1_budget = int(total_budget * STICKY_QUOTA)
 
-    # P0: user preferences; include every role because user notes may be assistant-authored.
+    # P0: user preferences, every role. P0/P1 are explicit writes, so no length filter.
     user_drawers = kennel.recent_drawers(USER_WING, limit=_FETCH_LIMIT)
-    p0 = _pack_class(user_drawers, p0_budget)
+    p0 = _pack_class(user_drawers, p0_budget, min_chars=0)
     p0.title = "User Preferences"
 
     # P1: repo sticky notes (role='note' only).
     sticky = kennel.recent_drawers(repo_w, limit=_FETCH_LIMIT, role="note")
-    p1 = _pack_class(sticky, p1_budget)
+    p1 = _pack_class(sticky, p1_budget, min_chars=0)
     p1.title = "Project Decisions"
 
     # P2: recent assistant responses fill the remainder.
