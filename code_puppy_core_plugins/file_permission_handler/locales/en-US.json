@@ -1,0 +1,4 @@
+{
+  "plugin.file-permission-handler.delete_preview.omitted": "Binary or non-text file. Text preview omitted.",
+  "plugin.file-permission-handler.delete_preview.omitted_size": "Binary or non-text file ({size} bytes). Text preview omitted."
+}
